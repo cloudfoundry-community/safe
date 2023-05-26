@@ -28,7 +28,7 @@ meta:
     force_static_binary: false
 
   image:
-    name: genesis-community/concourse-go
+    name: genesiscommunity/concourse-go
     tag:  latest
 
   aws:

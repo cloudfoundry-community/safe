@@ -2,8 +2,8 @@
 meta:
   name:    safe
   release: Safe
-  target:  buffalo-lab
-  url:     https://pipes.starkandwayne.com
+  target:  pipes/cloudfoundry-community
+  url:     https://pipes.scalecf.com
 
   initial_version: 0.0.5
 
@@ -11,18 +11,19 @@ meta:
     force_static_binary: true
 
   git:
-    email: ci@starkandwayne.com
-    name:  CI Bot
+    email: ci@cloudfoundry-community.com
+    name:  Cloudfoundry Community CI Bot
 
   aws:
-    access_key: ((cfcommunity.access))
-    secret_key: ((cfcommunity.secret))
+    access_key: ((aws.access_key_id))
+    secret_key: ((aws.secret_access_key))
 
   github:
-    owner:  starkandwayne
+    owner:  cloudfoundry-community
     repo:   safe
-    private_key:  ((github.private-key))
-    access_token: ((github.access-token))
+    private_key:  ((github.private_key))
+    access_token: ((github.access_token))
+    branch: develop
 
   slack:
     webhook: ((slack.webhook))

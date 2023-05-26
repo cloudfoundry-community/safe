@@ -22,15 +22,14 @@ meta:
     name:   (( param "Please provide the git name for automated commits" ))
 
   go:
-    version: 1.16
     module:  (( concat "github.com/" meta.github.owner "/" meta.github.repo ))
     cmd_module: (( grab meta.go.module ))
     binary:  (( grab meta.github.repo ))
     force_static_binary: false
 
   image:
-    name: starkandwayne/concourse-go
-    tag: (( grab meta.go.version ))
+    name: genesis-community/concourse-go
+    tag:  latest
 
   aws:
     bucket:     (( concat meta.pipeline "-pipeline" ))
@@ -42,7 +41,7 @@ meta:
     uri:          (( concat "git@github.com:" meta.github.owner "/" meta.github.repo ))
     owner:        (( param "Please specify the name of the user / organization that owns the Github repository" ))
     repo:         (( param "Please specify the name of the Github repository" ))
-    branch:       master
+    branch:       develop
     private_key:  (( param "Please generate an SSH Deployment Key for this repo and specify it here" ))
     access_token: (( param "Please generate a Personal Access Token and specify it here" ))
 
@@ -66,6 +65,8 @@ groups:
       - test-pr
       - rc
       - shipit
+  - name: versioning
+    jobs:
       - major
       - minor
       - bump-patch
@@ -80,7 +81,7 @@ jobs:
       config:
         platform: linux
         image_resource:
-          type: docker-image
+          type: registry-image
           source:
             repository: (( grab meta.image.name ))
             tag:        (( grab meta.image.tag ))
@@ -113,7 +114,7 @@ jobs:
       config:
         platform: linux
         image_resource:
-          type: docker-image
+          type: registry-image
           source:
             repository: (( grab meta.image.name ))
             tag:        (( grab meta.image.tag ))
@@ -139,7 +140,7 @@ jobs:
       config:
         platform: linux
         image_resource:
-          type: docker-image
+          type: registry-image
           source:
             repository: (( grab meta.image.name ))
             tag:        (( grab meta.image.tag ))
@@ -230,7 +231,7 @@ jobs:
     - task: release
       config:
         image_resource:
-          type: docker-image
+          type: registry-image
           source:
             repository: (( grab meta.image.name ))
             tag:        (( grab meta.image.tag ))
@@ -289,12 +290,12 @@ jobs:
 
 resource_types:
   - name: slack-notification
-    type: docker-image
+    type: registry-image
     source:
       repository: cfcommunity/slack-notification-resource
 
   - name: pull-request
-    type: docker-image
+    type: registry-image
     source:
       repository: jtarchie/pr
 

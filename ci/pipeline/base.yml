@@ -21,7 +21,7 @@ groups:
   - name: (( concat "test-" meta.pipeline "-pull-requests" ))
     jobs:
       - test-pr
-  - name: versioning
+  - name: version
     jobs:
       - major
       - minor

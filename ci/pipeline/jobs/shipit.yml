@@ -1,0 +1,68 @@
+jobs:
+  - name: shipit
+    public: true
+    serial: true
+    plan:
+    - in_parallel:
+        - { get: version, resource: shipit-version, passed: [rc], params: {bump: final} }
+        - { get: git,     passed: [rc] }
+    - task: release
+      config:
+        image_resource:
+          type: registry-image
+          source:
+            repository: (( grab meta.image.name ))
+            tag:        (( grab meta.image.tag ))
+        platform: linux
+        inputs:
+          - name: version
+          - name: git
+            path: (( concat "gopath/src/" meta.go.module ))
+        outputs:
+          - name: gh
+          - name: pushme
+        run:
+          path: (( concat "./gopath/src/" meta.go.module "/ci/scripts/shipit" ))
+          args: []
+        params:
+          BINARY:       (( grab meta.go.binary ))
+          REPO_ROOT:    (( concat "gopath/src/" meta.go.module ))
+          VERSION_FROM: version/number
+          RELEASE_NAME: (( grab meta.release ))
+          RELEASE_ROOT: gh
+          REPO_OUT:     pushme
+          BRANCH:       (( grab meta.github.branch ))
+          CMD_PKG:      (( grab meta.go.cmd_module ))
+          STATIC_BINARY:  (( grab meta.go.force_static_binary ))
+          GIT_EMAIL:      (( grab meta.git.email ))
+          GIT_NAME:       (( grab meta.git.name ))
+    - in_parallel:
+      - put: version
+        params: { bump: final }
+      - put: git
+        params:
+          rebase: true
+          repository: pushme/git
+      - put: github
+        params:
+          name:   gh/name
+          tag:    gh/tag
+          body:   gh/notes.md
+          globs: [gh/artifacts/*]
+    on_success:
+      put: notify
+      params:
+        channel:  (( grab meta.slack.channel ))
+        username: (( grab meta.slack.username ))
+        icon_url: (( grab meta.slack.icon ))
+        #I want this to actually print out the safe version, but for now.... may as well print _something_
+        #text_file: notifications/message
+        text: A new version of safe was released!
+    on_failure:
+      put: notify
+      params:
+        channel:  (( grab meta.slack.channel ))
+        username: (( grab meta.slack.username ))
+        icon_url: (( grab meta.slack.icon ))
+        text:    '(( concat meta.slack.fail_url " " meta.pipeline ": shipit job failed" ))'
+

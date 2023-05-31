@@ -23,7 +23,6 @@ meta:
     repo:   safe
     private_key:  ((github.private_key))
     access_token: ((github.access_token))
-    branch: develop
 
   slack:
     webhook: ((slack.webhook))

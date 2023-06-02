@@ -11,12 +11,24 @@ vault_pid=
 root_token=
 unseal_key=
 
-declare -a versions=(
-  "1.9.10"
-  "1.10.10"
-  "1.11.7"
-  "1.12.3"
-)
+safe_cmd=$1 ; shift
+declare -a versions;
+if [[ $# > 0 ]] ; then
+  versions=$@
+else
+  versions=(
+    "1.9.10"
+    "1.10.11"
+    "1.11.10"
+    "1.12.6"
+    "1.13.2"
+  )
+fi 
+
+echo "Will be testing against Vault version(s):"
+for x in ${versions[@]}; do
+  echo "- $x"
+done
 
 case $OSTYPE in
 (darwin*)

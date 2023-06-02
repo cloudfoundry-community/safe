@@ -4,19 +4,19 @@ jobs:
     serial: false
     plan:
     - in_parallel: 
-      steps: 
-      - { get: github-vault-13, trigger: true }
-      - { get: build, trigger: true }
-      - { get: git }
-      - { get: git-ci}
+        steps: 
+        - { get: github-vault-13, trigger: true }
+        - { get: build, trigger: true }
+        - { get: git }
+        - { get: git-ci}
     - load_var: vault_version
-      file_path: github-vault-13/tag
+      file: github-vault-13/version
       format: trim
       reveal: true
     - task: test
       file: git-ci/ci/tasks/test.yml
       params:
-        PROJECT: (( grab meta.go.project ))
+        PROJECT: (( grab meta.name ))
         VAULT_VERSIONS: ((.:vault_version))
     on_failure:
       put: notify

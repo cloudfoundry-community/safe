@@ -1,0 +1,9 @@
+resources:
+- name: github-vault-13
+  type: github-release
+  check_every: 1h
+  source:
+    user:         hashicorp
+    repository:   vault
+    access_token: (( grab meta.github.access_token ))
+    tag_filter: v?(1.13.[^v].*)

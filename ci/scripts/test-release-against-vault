@@ -30,12 +30,15 @@ test -n "${VERSION}"          || bail "Version file (${VERSION_FROM}) was empty.
 OS=$(uname -s | tr A-Z a-z)
 ARCH=$(uname -m | sed -e 's/^x86_/amd/')
 
+[[ -e "$BUILD_ROOT/$PROJECT-$VERSION-$OS-$ARCH" ]] || \
+  bail "Cannot find safe executable for v$VERSION on $OS/$ARCH"
+
 header "Testing $PROJECT v$VERSION ($OS/$ARCH) against Vault $VAULT_VERSION"
 
 cd "$REPO_ROOT"
 make test \
   TEST_PATH="../$CI_ROOT/ci/scripts/tests" \
-  SAFE_PATH="../build/$PROJECT-$VERSION-$OS-$ARCH" \
+  SAFE_PATH="../$BUILD_ROOT/$PROJECT-$VERSION-$OS-$ARCH" \
   VAULT_VERSIONS="$VAULT_VERSIONS"
 
 echo

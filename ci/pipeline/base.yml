@@ -16,6 +16,10 @@ groups:
   - name: (( concat "build-" meta.pipeline "-releases" ))
     jobs:
       - build
+      - test-vault-1.9
+      - test-vault-1.10
+      - test-vault-1.11
+      - test-vault-1.12
       - test-vault-1.13
       - rc
       - shipit

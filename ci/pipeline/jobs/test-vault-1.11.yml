@@ -1,0 +1,29 @@
+jobs:
+  - name: test-vault-1.11
+    public: true
+    serial: false
+    plan:
+    - in_parallel: 
+        steps: 
+        - { get: github-vault-1.11,        trigger: true}
+        - { get: build,   passed: [build], trigger: true, params: {unpack: true}}
+        - { get: version, passed: [build]}
+        - { get: git,     passed: [build]}
+        - { get: git-ci}
+    - load_var: vault_version
+      file: github-vault-1.11/version
+      format: trim
+      reveal: true
+    - task: test
+      file: git-ci/ci/tasks/test.yml
+      params:
+        PROJECT: (( grab meta.name ))
+        VAULT_VERSIONS: ((.:vault_version))
+    on_failure:
+      put: notify
+      params:
+        channel:  (( grab meta.slack.channel ))
+        username: (( grab meta.slack.username ))
+        icon_url: (( grab meta.slack.icon ))
+        text:    '(( concat meta.slack.fail_url " " meta.pipeline ": test job failed" ))'
+

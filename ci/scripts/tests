@@ -11,7 +11,7 @@ vault_pid=
 root_token=
 unseal_key=
 
-safe_cmd=$1 ; shift
+SAFE_CMD=$1 ; shift
 declare -a versions;
 if [[ $# > 0 ]] ; then
   versions=$@
@@ -93,7 +93,7 @@ testing() {
   test="$*"
 }
 clearvault() {
-  (./safe rm -rdaf secret) &>/dev/null
+  (${SAFE_CMD} rm -rdaf secret) &>/dev/null
 }
 now() {
   if [[ -n "${1:-}" ]]; then
@@ -207,11 +207,11 @@ eq_key() {
   key1=$1
   key2=$2
   now retrieving "$key1" from vault
-  (run; ./safe get "$key1" >t/home/got) ; exitok $? 0
+  (run; ${SAFE_CMD} get "$key1" >t/home/got) ; exitok $? 0
   cp t/home/got t/home/want
 
   now retrieving "$key2" from vault
-  (run; ./safe get "$key2" >t/home/got) ; exitok $? 0
+  (run; ${SAFE_CMD} get "$key2" >t/home/got) ; exitok $? 0
 
   now checking that "$key1" == "$key2"
   diffok
@@ -224,7 +224,7 @@ is_key() {
     alt="'$2'"
   fi
   now retrieving "$key" from vault
-  (run; ./safe get "$key" >t/home/got) ; exitok $? 0
+  (run; ${SAFE_CMD} get "$key" >t/home/got) ; exitok $? 0
 
   now checking that "$key" == "$alt"
   cat >t/home/want <<EOF ; diffok
@@ -234,18 +234,18 @@ EOF
 ok_key() {
   for key in "$@"; do
     now checking that "$key" exists in vault
-    (run; ./safe exists "$key"); exitok $? 0
+    (run; ${SAFE_CMD} exists "$key"); exitok $? 0
   done
 }
 no_key() {
   for key in "$@"; do
     now checking that "$key" does not exist in vault
-    (run; ./safe exists "$key"); exitok $? 1
+    (run; ${SAFE_CMD} exists "$key"); exitok $? 1
   done
 }
 generate() {
   now generating secret "'$1'" to test with
-  (run; ./safe set $*); exitok $? 0
+  (run; ${SAFE_CMD} set $*); exitok $? 0
 }
 
 dump_log() {
@@ -307,9 +307,9 @@ restart_vault_server() {
   unseal_key=$(awk '/^Unseal Key:/ { print $3 }' < t/home/log | head -n1)
 
   now targeting test vault server
-  (run; ./safe target unit-tests http://127.0.0.1:8198) ; exitok $? 0
+  (run; ${SAFE_CMD} target unit-tests http://127.0.0.1:8198) ; exitok $? 0
   now authenticating with ${root_token} root token
-  (run; echo "$root_token" | ./safe auth token)         ; exitok $? 0
+  (run; echo "$root_token" | ${SAFE_CMD} auth token)         ; exitok $? 0
   
   local engine="kv"
   local versionflag="-version $kvversion"
@@ -317,22 +317,22 @@ restart_vault_server() {
   local unmountcmd="secrets disable"
   if [[ $version =~ ^0\.[6-9].* ]]; then versionflag=""; fi
   now unmounting the existing secret/ mount
-  (run; PATH="${PWD}/vaults/bin:${PATH}" ./safe vault $unmountcmd "secret/"); exitok $? 0
+  (run; PATH="${PWD}/vaults/bin:${PATH}" ${SAFE_CMD} vault $unmountcmd "secret/"); exitok $? 0
   now mounting a kv v$kvversion engine
-  (run; PATH="${PWD}/vaults/bin:${PATH}" ./safe vault $mountcmd -path="secret/" $versionflag "$engine"); exitok $? 0
+  (run; PATH="${PWD}/vaults/bin:${PATH}" ${SAFE_CMD} vault $mountcmd -path="secret/" $versionflag "$engine"); exitok $? 0
 }
 
 create_test_policy() {
-  ./safe curl POST /sys/policy/test-policy '{"policy": "path \"secret/*\" { capabilities = [\"create\", \"read\", \"update\", \"delete\", \"list\"]}"}' >/dev/null
+  ${SAFE_CMD} curl POST /sys/policy/test-policy '{"policy": "path \"secret/*\" { capabilities = [\"create\", \"read\", \"update\", \"delete\", \"list\"]}"}' >/dev/null
 }
 
 setup_approle() {
   create_test_policy
   role_name="test-role"
-  ./safe vault auth enable approle >/dev/null #Mount the approle backend
-  ./safe curl POST "auth/approle/role/${role_name}" '{"policies": "test-policy"}' >/dev/null #Create a role
-  role_id="$(./safe curl --data-only GET "auth/approle/role/${role_name}/role-id" | jq -Mr '.data.role_id')"
-  secret_id="$(./safe curl --data-only POST "auth/approle/role/${role_name}/secret-id" | jq -Mr '.data.secret_id')"
+  ${SAFE_CMD} vault auth enable approle >/dev/null #Mount the approle backend
+  ${SAFE_CMD} curl POST "auth/approle/role/${role_name}" '{"policies": "test-policy"}' >/dev/null #Create a role
+  role_id="$(${SAFE_CMD} curl --data-only GET "auth/approle/role/${role_name}/role-id" | jq -Mr '.data.role_id')"
+  secret_id="$(${SAFE_CMD} curl --data-only POST "auth/approle/role/${role_name}/secret-id" | jq -Mr '.data.secret_id')"
   echo "$role_id" "$secret_id"
 }
 
@@ -394,22 +394,22 @@ for kvversion in 1 2; do
 
   #######
   testing targeting by ip
-  (run; ./safe target http://127.0.0.1:8198) ; exitok $? 0
-  (run; ./safe -T http://127.0.0.1:8198 env) ; exitok $? 0
+  (run; ${SAFE_CMD} target http://127.0.0.1:8198) ; exitok $? 0
+  (run; ${SAFE_CMD} -T http://127.0.0.1:8198 env) ; exitok $? 0
 
   testing targeting by alias
-  (run; ./safe target unit-tests)            ; exitok $? 0
-  (run; ./safe -T unit-tests env)            ; exitok $? 0
+  (run; ${SAFE_CMD} target unit-tests)            ; exitok $? 0
+  (run; ${SAFE_CMD} -T unit-tests env)            ; exitok $? 0
 
   testing targeting a bad ip
-  (run; ./safe target http://127.0.0.1:8200) ; exitok $? 1
-  (run; ./safe -T http://127.0.0.1:8200 env) ; exitok $? 1
+  (run; ${SAFE_CMD} target http://127.0.0.1:8200) ; exitok $? 1
+  (run; ${SAFE_CMD} -T http://127.0.0.1:8200 env) ; exitok $? 1
 
   testing ambiguous targets
-  (run; ./safe target alternate \
+  (run; ${SAFE_CMD} target alternate \
                       http://127.0.0.1:8198) ; exitok $? 0
-  (run; ./safe target http://127.0.0.1:8198) ; exitok $? 1
-  (run; ./safe -T http://127.0.0.1:8198 env) ; exitok $? 1
+  (run; ${SAFE_CMD} target http://127.0.0.1:8198) ; exitok $? 1
+  (run; ${SAFE_CMD} -T http://127.0.0.1:8198 env) ; exitok $? 1
   restart_vault_server
 
 
@@ -425,11 +425,11 @@ for kvversion in 1 2; do
   clearvault
   testing safe curl plumbing
   now trying to curl without a leading slash
-  (run; ./safe curl sys/seal-status)    ; exitok $? 0
+  (run; ${SAFE_CMD} curl sys/seal-status)    ; exitok $? 0
   now trying to curl with a leading slash
-  (run; ./safe curl /sys/seal-status)   ; exitok $? 0
+  (run; ${SAFE_CMD} curl /sys/seal-status)   ; exitok $? 0
   now trying to curl with embedded duplicate slashes
-  (run; ./safe curl /sys///seal-status) ; exitok $? 0
+  (run; ${SAFE_CMD} curl /sys///seal-status) ; exitok $? 0
 
 
      ##     ##     ## ######## ##    ##
@@ -450,12 +450,12 @@ for kvversion in 1 2; do
   secret_id="$(awk '{print $2}' <<<"$approle_output")"
 
   now trying to login with approle
-  (run; ./safe auth approle <<<"$role_id
+  (run; ${SAFE_CMD} auth approle <<<"$role_id
 $secret_id
 ") ; exitok $? 0;
   now checking that we can do stuff with the Vault
-  (run; ./safe set secret/beep/boop foo=bar) ; exitok $? 0
-  (run; ./safe get secret/beep/boop) ; exitok $? 0
+  (run; ${SAFE_CMD} set secret/beep/boop foo=bar) ; exitok $? 0
+  (run; ${SAFE_CMD} get secret/beep/boop) ; exitok $? 0
   restart_vault_server
 
    ######   ######## ########       ##  ######  ######## ########
@@ -470,13 +470,13 @@ $secret_id
   clearvault
   testing basic set/get operation
   now setting a key=value on a new path
-  (run; ./safe set secret/handshake knock=knock) ; exitok $? 0
+  (run; ${SAFE_CMD} set secret/handshake knock=knock) ; exitok $? 0
 
   now asking for a key, but providing the value anyway
-  (run; ./safe ask secret/handshake whos=there)  ; exitok $? 0
+  (run; ${SAFE_CMD} ask secret/handshake whos=there)  ; exitok $? 0
 
   now retrieving the test path
-  (run; ./safe get secret/handshake >t/home/got) ; exitok $? 0
+  (run; ${SAFE_CMD} get secret/handshake >t/home/got) ; exitok $? 0
 
   now checking that we got the expected secrets in the output
   cat >t/home/want <<EOF ; yamlok
@@ -489,7 +489,7 @@ EOF
             secret///handshake  \
        /////secret//////handshake; do
     now retrieving non-canonical $p path
-    (run; ./safe get $p >t/home/got) ; exitok $? 0
+    (run; ${SAFE_CMD} get $p >t/home/got) ; exitok $? 0
 
     now checking that we got the expected secrets in the output
     cat >t/home/want <<EOF ; yamlok
@@ -500,13 +500,13 @@ EOF
   done
 
   now checking that we cannot set sub-keys on keyed path
-  (run; ./safe set secret/inner:secret key=value) ; exitok $? 1
+  (run; ${SAFE_CMD} set secret/inner:secret key=value) ; exitok $? 1
 
   now checking that we can set non-canonical paths
-  (run; ./safe set /secret///non/canonical key=value)  ; exitok $? 0
+  (run; ${SAFE_CMD} set /secret///non/canonical key=value)  ; exitok $? 0
 
   now retrieving the secret from its canonical path
-  (run; ./safe get secret/non/canonical >t/home/got) ; exitok $? 0
+  (run; ${SAFE_CMD} get secret/non/canonical >t/home/got) ; exitok $? 0
 
   now checking that the response is what we wrote
   cat >t/home/want <<EOF ; yamlok
@@ -519,7 +519,7 @@ EOF
   #clearvault
   testing get operation with --yaml on single path
   now retrieving secret/handshake as --yaml
-  (run; ./safe get --yaml secret/handshake >t/home/got) ; exitok $? 0
+  (run; ${SAFE_CMD} get --yaml secret/handshake >t/home/got) ; exitok $? 0
 
   now checking that the response is properly formatted
   cat >t/home/want <<EOF ; yamlok
@@ -534,10 +534,10 @@ EOF
   #clearvault
   testing get operation: multiple requests, some missing
   now setting secret/other/thing to a valid value
-  (run; ./safe set secret/other/thing get=this); exitok $? 0
+  (run; ${SAFE_CMD} set secret/other/thing get=this); exitok $? 0
 
   now checking that a get where some of the paths are missing fails
-  (run; ./safe get secret/handshake \
+  (run; ${SAFE_CMD} get secret/handshake \
                    secret/other/thing \
                    secret/non-existent \
                    secret/handshake:passcode >t/home/got 2>&1) ; exitok $? 1
@@ -554,7 +554,7 @@ EOF
   #clearvault
   testing get operation: multiple requests
   now checking that a get of multiple existing paths succeeds
-  (run; ./safe get secret/handshake secret/other/thing >t/home/got) ; exitok $? 0
+  (run; ${SAFE_CMD} get secret/handshake secret/other/thing >t/home/got) ; exitok $? 0
 
   now checking that we get back the paths we want
   cat >t/home/want <<'EOF' ; yamlok
@@ -571,7 +571,7 @@ EOF
   #clearvault
   testing get --keys operation: multiple requests, some missing
   now checking that a get where some of the keys are missing still works
-  (run; ./safe get --keys secret/handshake secret/other/thing secret/code:pssst >t/home/got 2>t/home/warn); exitok $? 0
+  (run; ${SAFE_CMD} get --keys secret/handshake secret/other/thing secret/code:pssst >t/home/got 2>t/home/warn); exitok $? 0
 
   now checking that we get back the paths we want
   cat >t/home/want <<'EOF' ; yamlok
@@ -595,7 +595,7 @@ EOF
   #clearvault
   testing get --keys operation: single key
   now retrieving a single path and all of its --keys
-  (run;./safe get --keys secret/handshake >t/home/got) ; exitok $? 0
+  (run;${SAFE_CMD} get --keys secret/handshake >t/home/got) ; exitok $? 0
 
   now checking that we got the values of the keys
   cat >t/home/want <<'EOF' ; diffok
@@ -607,7 +607,7 @@ EOF
   #clearvault
   testing get --keys operation: single key with --yaml
   now retrieving a single path and all of its --keys in --yaml format
-  (run; ./safe get --keys --yaml secret/handshake >t/home/got) ; exitok $? 0
+  (run; ${SAFE_CMD} get --keys --yaml secret/handshake >t/home/got) ; exitok $? 0
 
   now checking that we got the yaml output we wanted
   cat >t/home/want <<'EOF' ; yamlok
@@ -622,10 +622,10 @@ EOF
   clearvault
   testing multiple-attribute set operation
   now setting multiple keys on the same path
-  (run; ./safe set secret/account username=admin password=sekrit) ; exitok $? 0
+  (run; ${SAFE_CMD} set secret/account username=admin password=sekrit) ; exitok $? 0
 
   now retrieving secret/account to check for our keys
-  (run; ./safe get secret/account >t/home/got)                    ; exitok $? 0
+  (run; ${SAFE_CMD} get secret/account >t/home/got)                    ; exitok $? 0
 
   now checking that our keys are found in the output
   cat >t/home/want <<EOF ; yamlok
@@ -639,13 +639,13 @@ EOF
   testing versions - simple
   now checking versions errs when the secret does not exist
 
-  (run; ./safe versions secret/notasecret); exitok $? 1
+  (run; ${SAFE_CMD} versions secret/notasecret); exitok $? 1
 
   now putting a single version into the vault
-  (run; ./safe set secret/versions beep=boop); exitok $? 0
+  (run; ${SAFE_CMD} set secret/versions beep=boop); exitok $? 0
   
   now checking that one versions does not err on an existing secret
-  (run; ./safe versions secret/versions >t/home/got); exitok $? 0
+  (run; ${SAFE_CMD} versions secret/versions >t/home/got); exitok $? 0
 
   now checking that the output of versions was version 1
   eq "$(tail -n +2 < t/home/got | awk '{print $1}')" 1
@@ -665,19 +665,19 @@ EOF
   clearvault
   testing basic check/exists operation
   now setting secret/handshake
-  (run; ./safe set secret/handshake knock=knock) ; exitok $? 0
+  (run; ${SAFE_CMD} set secret/handshake knock=knock) ; exitok $? 0
 
   now checking that secret/handshake:knock exists
-  (run; ./safe exists secret/handshake:knock)    ; exitok $? 0
+  (run; ${SAFE_CMD} exists secret/handshake:knock)    ; exitok $? 0
 
   now checking that secret/handshake:enoent does not exist
-  (run; ./safe exists secret/handshake:enoent)   ; exitok $? 1
+  (run; ${SAFE_CMD} exists secret/handshake:enoent)   ; exitok $? 1
 
   now checking that secret/enoent does not exist
-  (run; ./safe exists secret/enoent)             ; exitok $? 1
+  (run; ${SAFE_CMD} exists secret/enoent)             ; exitok $? 1
 
   now checking that secret/enoent:sub does not exist
-  (run; ./safe exists secret/enoent:sub)         ; exitok $? 1
+  (run; ${SAFE_CMD} exists secret/enoent:sub)         ; exitok $? 1
 
 
 
@@ -693,11 +693,11 @@ EOF
   clearvault
   testing password randomization
   now generating some random secrets
-  (run; ./safe gen secret/random one    ) ; exitok $? 0
-  (run; ./safe gen secret/random another) ; exitok $? 0
+  (run; ${SAFE_CMD} gen secret/random one    ) ; exitok $? 0
+  (run; ${SAFE_CMD} gen secret/random another) ; exitok $? 0
 
   now retrieving generated credentials
-  (run; ./safe get secret/random | spruce json >t/home/got) ; exitok $? 0
+  (run; ${SAFE_CMD} get secret/random | spruce json >t/home/got) ; exitok $? 0
   one=$(jq -r .one < t/home/got)
   another=$(jq -r .another < t/home/got)
   step "checking that the two generated passwords are different"
@@ -724,12 +724,12 @@ EOF
   clearvault
   testing command chaining
   now generating three credentials via a command chain
-  (run; ./safe gen secret/chained a -- \
+  (run; ${SAFE_CMD} gen secret/chained a -- \
                gen secret/chained b -- \
                gen secret/chained c)                          ; exitok $? 0
 
   now retrieving our generated credentials
-  (run; ./safe get secret/chained | spruce json > t/home/got) ; exitok $? 0
+  (run; ${SAFE_CMD} get secret/chained | spruce json > t/home/got) ; exitok $? 0
 
   for k in a b c; do
     step "checking that each credential exists"
@@ -748,10 +748,10 @@ EOF
   clearvault
   testing custom password runes randomization
   now generating credentials consisting of only the digits 1 - 9
-  (run; ./safe gen --policy "1-9" 64 secret/random one)       ; exitok $? 0
+  (run; ${SAFE_CMD} gen --policy "1-9" 64 secret/random one)       ; exitok $? 0
 
   now retrieving our generated credentials
-  (run; ./safe get secret/random | spruce json >t/home/runed) ; exitok $? 0
+  (run; ${SAFE_CMD} get secret/random | spruce json >t/home/runed) ; exitok $? 0
 
   step "checking that the generated credential only consists of the digits 1-9"
   one=$(jq -r .one < t/home/runed)
@@ -769,17 +769,17 @@ EOF
   clearvault
   testing password with secret:key syntax
   now generating a random secret at secret/random:two
-  (run; ./safe gen 64 secret/random:two) ; exitok $? 0
+  (run; ${SAFE_CMD} gen 64 secret/random:two) ; exitok $? 0
 
   now retrieving our generated credentials
-  (run; ./safe get secret/random:two)    ; exitok $? 0
+  (run; ${SAFE_CMD} get secret/random:two)    ; exitok $? 0
 
 
   #######
   clearvault
   testing gen with multiple passwords to make
   now generating passwords
-  (run; ./safe gen 64 secret/random:three secret/random four secret/random:five) ; exitok $? 0
+  (run; ${SAFE_CMD} gen 64 secret/random:three secret/random four secret/random:five) ; exitok $? 0
   ok_key secret/random:{three,four,five}
 
 
@@ -787,10 +787,10 @@ EOF
   clearvault
   testing gen with length flag
   now generating a 10-character password
-  (run; ./safe gen secret/random:six -l 10) ; exitok $? 0
+  (run; ${SAFE_CMD} gen secret/random:six -l 10) ; exitok $? 0
 
   now retrieving our 10-character password
-  (run; ./safe get secret/random:six | tr -d '\n' >t/home/got) ; exitok $? 0
+  (run; ${SAFE_CMD} get secret/random:six | tr -d '\n' >t/home/got) ; exitok $? 0
 
   step "testing that the password is only 10 characters long"
   if [[ $(cat t/home/got | wc -m) -eq 10 ]]; then
@@ -805,22 +805,22 @@ EOF
   #######
   clearvault
   testing gen with incorrectly mixed path:key should fail
-  (run; ./safe gen secret/random secret/random:seven) ; exitok $? 1
+  (run; ${SAFE_CMD} gen secret/random secret/random:seven) ; exitok $? 1
   no_key secret/random
 
 
   #######
   clearvault
   testing gen with missing key should fail
-  (run; ./safe gen secret/random) ; exitok $? 1
+  (run; ${SAFE_CMD} gen secret/random) ; exitok $? 1
   no_key secret/random
 
 
   #######
   clearvault
   testing single-value retrieval
-  (run; ./safe set secret/single/value foo=bar baz=quux) ; exitok $? 0
-  foo=$(./safe get secret/single/value:foo)
+  (run; ${SAFE_CMD} set secret/single/value foo=bar baz=quux) ; exitok $? 0
+  foo=$(${SAFE_CMD} get secret/single/value:foo)
   step "retrieving our single value"
   if [[ ${foo} = "bar" ]]; then
     ok
@@ -845,13 +845,13 @@ multiline
 value
 EOF
   now setting values from files
-  (run; ./safe set secret/from-files/content \
+  (run; ${SAFE_CMD} set secret/from-files/content \
                      value@t/home/value-file \
                      blank@t/home/empty-file \
                      long@t/home/long-file) ; exitok $? 0
 
   now retrieving set values
-  (run; ./safe get secret/from-files/content --yaml >t/home/got) ; exitok $? 0
+  (run; ${SAFE_CMD} get secret/from-files/content --yaml >t/home/got) ; exitok $? 0
 
   now checking that we got back the correct multiline and single-line values
   cat >t/home/want <<EOF ; yamlok
@@ -872,7 +872,7 @@ EOF
   clearvault
   testing set key to empty value
   now setting values
-  (run; ./safe set secret/setec/astronomy too= many="") ; exitok $? 0
+  (run; ${SAFE_CMD} set secret/setec/astronomy too= many="") ; exitok $? 0
   is_key secret/setec/astronomy:too  ""
   is_key secret/setec/astronomy:many ""
 
@@ -881,17 +881,17 @@ EOF
   clearvault
   testing set key from file - error conditions
   now setting values from a non-existent file - should fail
-  (run; ./safe set secret/from-file/content nothing@non-existent-file 2>t/home/got) ; exitok $? 1
+  (run; ${SAFE_CMD} set secret/from-file/content nothing@non-existent-file 2>t/home/got) ; exitok $? 1
   now checking the output error
   cat > t/home/want<<EOF ; diffok
 !! Failed to read contents of non-existent-file: open non-existent-file: no such file or directory
 EOF
 
   now checking that we did not set a secret in vault
-  (run; ./safe get secret/from-file/content:nothing)               ; exitok $? 1
+  (run; ${SAFE_CMD} get secret/from-file/content:nothing)               ; exitok $? 1
 
   now setting values using file syntax, but missing the file argument
-  (run; ./safe set secret/from-file/content no-file@ 2>t/home/got) ; exitok $? 1
+  (run; ${SAFE_CMD} set secret/from-file/content no-file@ 2>t/home/got) ; exitok $? 1
 
   now checking the output error
   cat > t/home/want<<EOF ; diffok
@@ -899,7 +899,7 @@ EOF
 EOF
 
   now checking that we did not set a secret in vault
-  (run; ./safe get secret/from-file/content:no-file)               ; exitok $? 1
+  (run; ${SAFE_CMD} get secret/from-file/content:no-file)               ; exitok $? 1
 
 
 
@@ -915,36 +915,36 @@ EOF
   clearvault
   testing fmt - all formats
   now generating a test secret to format
-  (run; ./safe gen secret/fmt/formats original) ; exitok $? 0
+  (run; ${SAFE_CMD} gen secret/fmt/formats original) ; exitok $? 0
 
   now verifying that our secret got created
-  (run; ./safe get secret/fmt/formats:original) ; exitok $? 0
+  (run; ${SAFE_CMD} get secret/fmt/formats:original) ; exitok $? 0
 
   for f in base64 bcrypt crypt-{md5,sha256,sha512}; do
     now formatting $f
-    (run; ./safe fmt $f secret/fmt/formats original $f) ; exitok $? 0
+    (run; ${SAFE_CMD} fmt $f secret/fmt/formats original $f) ; exitok $? 0
 
     now verifying that we generated a secret for $f
-    (run; ./safe get secret/fmt/formats:$f)             ; exitok $? 0
+    (run; ${SAFE_CMD} get secret/fmt/formats:$f)             ; exitok $? 0
 
   done
 
   # note that the tests do not support the optional parameters in crypt format
   # (i.e. `$<id>[$<param>=<value>(,<param>=<value>)*][$<salt>[$<hash>]]`)
   now checking bcrypt format
-  (run; ./safe get secret/fmt/formats:bcrypt \
+  (run; ${SAFE_CMD} get secret/fmt/formats:bcrypt \
         | grep -qE '^\$2[axy]?\$[a-zA-Z0-9+/=]+\$.+') ; exitok $? 0
 
   now checking crypt-md5 format
-  (run; ./safe get secret/fmt/formats:crypt-md5 \
+  (run; ${SAFE_CMD} get secret/fmt/formats:crypt-md5 \
         | grep -qE '^\$1\$[a-zA-Z0-9+/=]+\$.+')       ; exitok $? 0
 
   now checking crypt-sha256 format
-  (run; ./safe get secret/fmt/formats:crypt-sha256 \
+  (run; ${SAFE_CMD} get secret/fmt/formats:crypt-sha256 \
         | grep -qE '^\$5\$[a-zA-Z0-9+/=]+\$.+')       ; exitok $? 0
 
   now checking crypt-sha512 format
-  (run; ./safe get secret/fmt/formats:crypt-sha512 \
+  (run; ${SAFE_CMD} get secret/fmt/formats:crypt-sha512 \
         | grep -qE '^\$6\$[a-zA-Z0-9+/=]+\$.+')       ; exitok $? 0
 
 
@@ -965,7 +965,7 @@ EOF
   is_key secret/delete:hello world
 
   now removing the secret
-  (run; ./safe delete secret/delete) ; exitok $? 0
+  (run; ${SAFE_CMD} delete secret/delete) ; exitok $? 0
   no_key secret/delete
 
   #######
@@ -980,7 +980,7 @@ EOF
   is_key secret/a/a/a/a/a/a/a/h:real monsters
 
   now removing the secret
-  (run; ./safe delete -Rf secret/a/b) ; exitok $? 0
+  (run; ${SAFE_CMD} delete -Rf secret/a/b) ; exitok $? 0
   no_key secret/a/b/c/d/e/f/delete
   no_key secret/a/b/c/1/2/3/delete
   is_key secret/a/a/a/a/a/a/a/h:real monsters # still got it!
@@ -994,7 +994,7 @@ EOF
   generate secret/delete/three wom=bat
 
   now deleting both secrets
-  (run; ./safe delete secret/delete/two secret/delete/three) ; exitok $? 0
+  (run; ${SAFE_CMD} delete secret/delete/two secret/delete/three) ; exitok $? 0
   no_key secret/delete/two
   no_key secret/delete/three
 
@@ -1005,7 +1005,7 @@ EOF
   generate secret/delete foo=bar wom=bat
 
   now deleting a single key in the multi-key path
-  (run; ./safe delete secret/delete:wom) ; exitok $? 0
+  (run; ${SAFE_CMD} delete secret/delete:wom) ; exitok $? 0
   no_key secret/delete:wom
   is_key secret/delete:foo "bar"
 
@@ -1016,7 +1016,7 @@ EOF
   generate secret/delete foo=bar
 
   now deleting the last key in a single path
-  (run; ./safe delete secret/delete:foo)  ; exitok $? 0
+  (run; ${SAFE_CMD} delete secret/delete:foo)  ; exitok $? 0
   no_key secret/delete
 
 
@@ -1026,7 +1026,7 @@ EOF
   generate secret/delete foo=bar wom=bat beep=boop
 
   now deleting the a subset of the keys
-  (run; ./safe delete secret/delete:foo secret/delete:wom) ; exitok $? 0
+  (run; ${SAFE_CMD} delete secret/delete:foo secret/delete:wom) ; exitok $? 0
   no_key secret/delete:{foo,wom}
   is_key secret/delete:beep "boop"
 
@@ -1035,7 +1035,7 @@ EOF
   clearvault
   testing attempt to delete non-existent key should fail
   no_key secret/delete
-  (run; ./safe delete secret/delete) ; exitok $? 1
+  (run; ${SAFE_CMD} delete secret/delete) ; exitok $? 1
   no_key secret/delete
 
 
@@ -1046,7 +1046,7 @@ EOF
   generate secret/delete foo=bar
 
   now deleting the a non-existent key under an existing path
-  (run; ./safe delete secret/delete:gobbledegook) ; exitok $? 1
+  (run; ${SAFE_CMD} delete secret/delete:gobbledegook) ; exitok $? 1
   is_key secret/delete:foo "bar"
 
 
@@ -1054,7 +1054,7 @@ EOF
   clearvault
   testing delete non-existent key should not fail if -f is given
   no_key secret/delete
-  (run; ./safe delete secret/delete -f) ; exitok $? 0
+  (run; ${SAFE_CMD} delete secret/delete -f) ; exitok $? 0
   no_key secret/delete
 
 
@@ -1065,7 +1065,7 @@ EOF
   generate secret/delete foo=bar
 
   now deleting a non-existent key with -f
-  (run; ./safe delete secret/delete:gobbledegook -f) ; exitok $? 0
+  (run; ${SAFE_CMD} delete secret/delete:gobbledegook -f) ; exitok $? 0
   no_key secret/delete:gobbledegook
   is_key secret/delete:foo "bar"
 
@@ -1077,7 +1077,7 @@ EOF
   generate secret/delete/subtree/one foo=bar
   generate secret/delete/subtree/two beep=boop
 
-  (run; ./safe delete -Rf secret/delete/subtree) ; exitok $? 0
+  (run; ${SAFE_CMD} delete -Rf secret/delete/subtree) ; exitok $? 0
   no_key secret/delete/subtree/{one,two}
 
 
@@ -1089,7 +1089,7 @@ EOF
   generate secret/delete/subtree/two foo=bar
 
   now attempting to delete the subtree without -R
-  (run; ./safe delete -f secret/delete/subtree) ; exitok $? 1
+  (run; ${SAFE_CMD} delete -f secret/delete/subtree) ; exitok $? 1
 
   is_key secret/delete/subtree/one:foo "bar"
   is_key secret/delete/subtree/two:foo "bar"
@@ -1102,7 +1102,7 @@ EOF
   generate secret/delete foo=bar
 
   now deleting the single secret
-  (run; ./safe delete -Rf secret/delete)  ; exitok $? 0
+  (run; ${SAFE_CMD} delete -Rf secret/delete)  ; exitok $? 0
   no_key secret/delete
 
 
@@ -1112,7 +1112,7 @@ EOF
   generate secret/delete foo=bar beep=boop
 
   now deleting a key recursively
-  (run; ./safe delete -Rf secret/delete:foo) ; exitok $? 0
+  (run; ${SAFE_CMD} delete -Rf secret/delete:foo) ; exitok $? 0
   no_key secret/delete:foo
   is_key secret/delete:beep "boop"
 
@@ -1123,7 +1123,7 @@ EOF
   no_key secret/delete
 
   now deleting a non-existent secret
-  (run; ./safe delete -Rf secret/delete) ; exitok $? 0
+  (run; ${SAFE_CMD} delete -Rf secret/delete) ; exitok $? 0
   no_key secret/delete
 
 
@@ -1133,7 +1133,7 @@ EOF
   generate secret/delete beep=boop
 
   now deleting a non-existent key with -Rf
-  (run; ./safe delete -Rf secret/delete:foo) ; exitok $? 0
+  (run; ${SAFE_CMD} delete -Rf secret/delete:foo) ; exitok $? 0
   is_key secret/delete:beep "boop"
 
 
@@ -1153,7 +1153,7 @@ EOF
   generate secret/copy/from beep=boop
 
   now copying a single secret
-  (run; ./safe copy secret/copy/from secret/copy/to) ; exitok $? 0
+  (run; ${SAFE_CMD} copy secret/copy/from secret/copy/to) ; exitok $? 0
   eq_key secret/copy/{from,to}:beep
 
 
@@ -1164,7 +1164,7 @@ EOF
   generate secret/copy/from beep=boop foo=bar
 
   now copying secrets
-  (run; ./safe copy secret/copy/from:beep secret/copy/to) ; exitok $? 0
+  (run; ${SAFE_CMD} copy secret/copy/from:beep secret/copy/to) ; exitok $? 0
   eq_key secret/copy/{from,to}:beep
   no_key secret/copy/to:foo
 
@@ -1177,7 +1177,7 @@ EOF
   generate secret/copy/to wom=bat
 
   now copying
-  (run; ./safe copy secret/copy/from:beep secret/copy/to:another) ; exitok $? 0
+  (run; ${SAFE_CMD} copy secret/copy/from:beep secret/copy/to:another) ; exitok $? 0
 
   is_key secret/copy/from:foo "bar"
   is_key secret/copy/to:wom   "bat"
@@ -1191,15 +1191,15 @@ EOF
   generate secret/copy/from beep=boop foo=bar
 
   now copying
-  (run; ./safe copy secret/copy/from:beep secret/copy/to:another) ; exitok $? 0
+  (run; ${SAFE_CMD} copy secret/copy/from:beep secret/copy/to:another) ; exitok $? 0
   eq_key secret/copy/{from:beep,to:another}
 
 
   #######
   clearvault
   testing copying a full secret to a specified key should fail
-  (run; ./safe set secret/copy/from beep=boop)             ; exitok $? 0
-  (run; ./safe copy secret/copy/from secret/copy/to:hell) ; exitok $? 1
+  (run; ${SAFE_CMD} set secret/copy/from beep=boop)             ; exitok $? 0
+  (run; ${SAFE_CMD} copy secret/copy/from secret/copy/to:hell) ; exitok $? 1
   is_key secret/copy/from:beep "boop"
   no_key secret/copy/to
 
@@ -1207,7 +1207,7 @@ EOF
   #######
   clearvault
   testing copying from a secret that does not exist should fail
-  (run; ./safe copy secret/copy/from6 secret/copy/to) ; exitok $? 1
+  (run; ${SAFE_CMD} copy secret/copy/from6 secret/copy/to) ; exitok $? 1
   no_key secret/copy/from6
   no_key secret/copy/to
 
@@ -1216,15 +1216,15 @@ EOF
   clearvault
   testing copying from a key where the underlying secret does not exist should fail
   no_key secret/copy/from7:beep
-  (run; ./safe copy secret/copy/from7:beep secret/copy/to) ; exitok $? 1
+  (run; ${SAFE_CMD} copy secret/copy/from7:beep secret/copy/to) ; exitok $? 1
   no_key secret/copy/to
 
 
   #######
   clearvault
   testing copying from a missing key where the underlying secret exists should fail
-  (run; ./safe set secret/copy/from8 foo=bar)              ; exitok $? 0
-  (run; ./safe copy secret/copy/from8:beep secret/copy/to) ; exitok $? 1
+  (run; ${SAFE_CMD} set secret/copy/from8 foo=bar)              ; exitok $? 0
+  (run; ${SAFE_CMD} copy secret/copy/from8:beep secret/copy/to) ; exitok $? 1
   no_key secret/copy/to
 
 
@@ -1232,10 +1232,10 @@ EOF
   clearvault
   testing copying recursively from a leaf node secret
   now generating some secrets to test with
-  (run; ./safe set secret/copy/from foo=bar)             ; exitok $? 0
+  (run; ${SAFE_CMD} set secret/copy/from foo=bar)             ; exitok $? 0
 
   now copying a leaf node secret
-  (run; ./safe copy -Rf secret/copy/from secret/copy/to) ; exitok $? 0
+  (run; ${SAFE_CMD} copy -Rf secret/copy/from secret/copy/to) ; exitok $? 0
   eq_key secret/copy/{from,to}:foo
 
 
@@ -1243,10 +1243,10 @@ EOF
   clearvault
   testing copying recursively from a key
   now generating some secrets to test with
-  (run; ./safe set secret/copy/from foo=bar)                   ; exitok $? 0
+  (run; ${SAFE_CMD} set secret/copy/from foo=bar)                   ; exitok $? 0
 
   now recursively copying from:foo to to
-  (run; ./safe copy -Rf secret/copy/from:foo secret/copy/to) ; exitok $? 0
+  (run; ${SAFE_CMD} copy -Rf secret/copy/from:foo secret/copy/to) ; exitok $? 0
   eq_key secret/copy/{from,to}:foo
 
 
@@ -1254,10 +1254,10 @@ EOF
   clearvault
   testing copying recursively from a subtree
   now generating some secrets to test with
-  (run; ./safe set secret/copy/fromtree/one foo=bar)              ; exitok $? 0
+  (run; ${SAFE_CMD} set secret/copy/fromtree/one foo=bar)              ; exitok $? 0
 
   now recursively copying secret/copy/fromtree/* to secret/copy/totree/*
-  (run; ./safe copy -Rf secret/copy/fromtree secret/copy/totree) ; exitok $? 0
+  (run; ${SAFE_CMD} copy -Rf secret/copy/fromtree secret/copy/totree) ; exitok $? 0
   eq_key secret/copy/{from,to}tree/one:foo
 
 
@@ -1265,10 +1265,10 @@ EOF
   clearvault
   testing attempting to copy a subtree without -R should fail
   now generating some secrets to test with
-  (run; ./safe set secret/copy/fromtree/one foo=bar); exitok $? 0
+  (run; ${SAFE_CMD} set secret/copy/fromtree/one foo=bar); exitok $? 0
 
   now copying secret/copy/fromtree/* to secret/copy/totree/* without -R
-  (run; ./safe copy -f secret/copy/fromtree secret/copy/totree) ; exitok $? 1
+  (run; ${SAFE_CMD} copy -f secret/copy/fromtree secret/copy/totree) ; exitok $? 1
   is_key secret/copy/fromtree/one:foo "bar"
   no_key secret/copy/totree/one
 
@@ -1277,7 +1277,7 @@ EOF
   clearvault
   testing copying a non-existent secret with -f should fail silently
   now copying
-  (run; ./safe copy -f secret/copy/gobbledegook secret/copy/fakedes) ; exitok $? 0
+  (run; ${SAFE_CMD} copy -f secret/copy/gobbledegook secret/copy/fakedes) ; exitok $? 0
   no_key secret/copy/fakedes
 
 
@@ -1285,10 +1285,10 @@ EOF
   clearvault
   testing copying a non-existent key with -f should fail silently
   now generating some secrets to test with
-  (run; ./safe set secret/copy/from foo=bar)                   ; exitok $? 0
+  (run; ${SAFE_CMD} set secret/copy/from foo=bar)                   ; exitok $? 0
 
   now copying non-existent key with -f
-  (run; ./safe copy -f secret/copy/from:beep secret/copy/to) ; exitok $? 0
+  (run; ${SAFE_CMD} copy -f secret/copy/from:beep secret/copy/to) ; exitok $? 0
   no_key secret/copy/to
 
 
@@ -1308,10 +1308,10 @@ EOF
   no_key secret/move/to
 
   now generating some secrets to test with
-  (run; ./safe set secret/move/from beep=boop)       ; exitok $? 0
+  (run; ${SAFE_CMD} set secret/move/from beep=boop)       ; exitok $? 0
 
   now moving a single secret
-  (run; ./safe move secret/move/from secret/move/to) ; exitok $? 0
+  (run; ${SAFE_CMD} move secret/move/from secret/move/to) ; exitok $? 0
   no_key secret/move/from:beep
   is_key secret/move/to:beep "boop"
 
@@ -1323,7 +1323,7 @@ EOF
   generate secret/move/from beep=boop foo=bar
 
   now moving a secret without a key
-  (run; ./safe move secret/move/from:beep secret/move/to) ; exitok $? 0
+  (run; ${SAFE_CMD} move secret/move/from:beep secret/move/to) ; exitok $? 0
   no_key secret/move/from:beep
   is_key secret/move/from:foo  "bar"
 
@@ -1339,7 +1339,7 @@ EOF
   generate secret/move/to   wom=bat
 
   now moving a secret key to an existing secret
-  (run; ./safe move secret/move/from:beep secret/move/to:another) ; exitok $? 0
+  (run; ${SAFE_CMD} move secret/move/from:beep secret/move/to:another) ; exitok $? 0
 
   no_key secret/move/from:beep
   is_key secret/move/from:foo   "bar"
@@ -1355,10 +1355,10 @@ EOF
   no_key secre/move/to
 
   now generating some secrets to test with
-  (run; ./safe set secret/move/from beep=boop foo=bar)            ; exitok $? 0
+  (run; ${SAFE_CMD} set secret/move/from beep=boop foo=bar)            ; exitok $? 0
 
   now moving one secret key to a new secret key
-  (run; ./safe move secret/move/from:beep secret/move/to:another) ; exitok $? 0
+  (run; ${SAFE_CMD} move secret/move/from:beep secret/move/to:another) ; exitok $? 0
 
   no_key secret/move/from:beep
   is_key secret/move/from:foo   "bar"
@@ -1375,7 +1375,7 @@ EOF
   generate secret/move/from beep=boop
 
   now moving one secret subkey to another existing secret
-  (run; ./safe move secret/move/from secret/move/to:beep) ; exitok $? 1
+  (run; ${SAFE_CMD} move secret/move/from secret/move/to:beep) ; exitok $? 1
   is_key secret/move/from:beep "boop"
   no_key secret/move/to:beep
 
@@ -1386,7 +1386,7 @@ EOF
   no_key secret/move/from
   no_key secret/move/to
 
-  (run; ./safe move secret/copy/from secret/move/to) ; exitok $? 1
+  (run; ${SAFE_CMD} move secret/copy/from secret/move/to) ; exitok $? 1
   no_key secret/move/from
   no_key secret/move/to
 
@@ -1397,7 +1397,7 @@ EOF
   no_key secret/move/from
   no_key secret/move/to
 
-  (run; ./safe move secret/move/from:beep secret/move/to) ; exitok $? 1
+  (run; ${SAFE_CMD} move secret/move/from:beep secret/move/to) ; exitok $? 1
   no_key secret/move/from
   no_key secret/move/to
 
@@ -1410,7 +1410,7 @@ EOF
   generate secret/move/from foo=bar
 
   now moving a non-existent key to a new secret
-  (run; ./safe move secret/move/from:beep secret/move/to) ; exitok $? 1
+  (run; ${SAFE_CMD} move secret/move/from:beep secret/move/to) ; exitok $? 1
   is_key secret/move/from:foo "bar"
   no_key secret/move/to
 
@@ -1423,7 +1423,7 @@ EOF
   generate secret/move/from foo=bar
 
   now moving a single secret resursively
-  (run; ./safe move -Rf secret/move/from secret/move/to) ; exitok $? 0
+  (run; ${SAFE_CMD} move -Rf secret/move/from secret/move/to) ; exitok $? 0
   no_key secret/move/from:foo
   is_key secret/move/to:foo "bar"
 
@@ -1435,7 +1435,7 @@ EOF
   generate secret/move/from foo=bar
 
   now moving a key recursively
-  (run; ./safe move -Rf secret/move/from:foo secret/move/to) ; exitok $? 0
+  (run; ${SAFE_CMD} move -Rf secret/move/from:foo secret/move/to) ; exitok $? 0
   no_key secret/move/from
   is_key secret/move/to:foo "bar"
 
@@ -1447,7 +1447,7 @@ EOF
   generate secret/move/fromtree/one foo=bar
 
   now moving a subtree recursively
-  (run; ./safe move -Rf secret/move/fromtree secret/move/totree) ; exitok $? 0
+  (run; ${SAFE_CMD} move -Rf secret/move/fromtree secret/move/totree) ; exitok $? 0
   no_key secret/move/fromtree/one
   is_key secret/move/totree/one:foo "bar"
 
@@ -1459,7 +1459,7 @@ EOF
   generate secret/move/fromtree/one foo=bar
 
   now moving a subtree without the -R option
-  (run; ./safe move -f secret/move/fromtree secret/move/totree) ; exitok $? 1
+  (run; ${SAFE_CMD} move -f secret/move/fromtree secret/move/totree) ; exitok $? 1
   no_key secret/move/totree/on
 
 
@@ -1467,7 +1467,7 @@ EOF
   clearvault
   testing moving a non-existent secret with -f should fail silently
   no_key secret/move/gobbledegook
-  (run; ./safe move -f secret/move/gobbledegook secret/move/fakedes) ; exitok $? 0
+  (run; ${SAFE_CMD} move -f secret/move/gobbledegook secret/move/fakedes) ; exitok $? 0
   no_key secret/move/fakedes
 
 
@@ -1478,7 +1478,7 @@ EOF
   generate secret/move/from foo=bar
 
   now moving non-existent key
-  (run; ./safe copy -f secret/move/from:beep secret/move/to) ; exitok $? 0
+  (run; ${SAFE_CMD} copy -f secret/move/from:beep secret/move/to) ; exitok $? 0
   no_key secret/move/to
 
 
@@ -1496,11 +1496,11 @@ EOF
   testing safe gen --no-clobber
   no_key secret/existing
   now running safe gen --no-clobber with no pre-existing secrets
-  (run; ./safe gen --no-clobber secret/existing val) ; exitok $? 0
-  expected=$(./safe get secret/existing:val)
+  (run; ${SAFE_CMD} gen --no-clobber secret/existing val) ; exitok $? 0
+  expected=$(${SAFE_CMD} get secret/existing:val)
 
   now running safe gen --no-clobber with pre-existing secrets
-  (run; ./safe gen --no-clobber secret/existing val >t/home/got 2>&1) ; exitok $? 0
+  (run; ${SAFE_CMD} gen --no-clobber secret/existing val >t/home/got 2>&1) ; exitok $? 0
 
   now checking the error output
   cat >t/home/want <<EOF ; diffok
@@ -1509,7 +1509,7 @@ EOF
   is_key secret/existing:val "$expected"
 
   now running safe gen --no-clobber with pre-existing secrets in --quiet mode
-  (run; ./safe gen --no-clobber --quiet secret/existing val >t/home/got 2>&1) ; exitok $? 0
+  (run; ${SAFE_CMD} gen --no-clobber --quiet secret/existing val >t/home/got 2>&1) ; exitok $? 0
 
   now checking that we got no error output under --quiet
   cat >t/home/want <<EOF ; diffok
@@ -1524,11 +1524,11 @@ EOF
     no_key secret/existing
 
     now running safe $op --no-clobber with no pre-existing secrets
-    (run; ./safe $op --no-clobber secret/existing val=original >t/home/got 2>&1) ; exitok $? 0
+    (run; ${SAFE_CMD} $op --no-clobber secret/existing val=original >t/home/got 2>&1) ; exitok $? 0
     is_key secret/existing:val "original"
 
     now running safe $op --no-clobber with pre-existing secrets
-    (run; ./safe $op --no-clobber secret/existing val=override 2>t/home/got)     ; exitok $? 0
+    (run; ${SAFE_CMD} $op --no-clobber secret/existing val=override 2>t/home/got)     ; exitok $? 0
     now checking the error output
     cat >t/home/want <<EOF ; diffok
 val: override
@@ -1537,7 +1537,7 @@ EOF
     is_key secret/existing:val "original"
 
     now running safe $op --no-clobber with pre-existing secrets in --quiet mode
-    (run; ./safe $op --no-clobber --quiet secret/existing val=OVER 2>t/home/got) ; exitok $? 0
+    (run; ${SAFE_CMD} $op --no-clobber --quiet secret/existing val=OVER 2>t/home/got) ; exitok $? 0
     now checking the error output
     cat >t/home/want <<EOF ; diffok
 EOF
@@ -1550,11 +1550,11 @@ EOF
     no_key secret/existing
 
     now running safe $op --no-clobber with no pre-existing secrets
-    (run; ./safe $op --no-clobber secret/existing val=test)   ; exitok $? 0
+    (run; ${SAFE_CMD} $op --no-clobber secret/existing val=test)   ; exitok $? 0
     is_key secret/existing:val  "test"
 
     now running safe $op --no-clobber with pre-existing secrets but a new key
-    (run; ./safe $op --no-clobber secret/existing val2=test2) ; exitok $? 0
+    (run; ${SAFE_CMD} $op --no-clobber secret/existing val2=test2) ; exitok $? 0
     is_key secret/existing:val2 "test2"
   done
 
@@ -1565,7 +1565,7 @@ EOF
   no_key safe/existing/import
 
   now running safe import --no-clobber
-  (run; ./safe import --no-clobber secret/existing/import <<EOF >t/home/got 2>&1) ; exitok $? 1
+  (run; ${SAFE_CMD} import --no-clobber secret/existing/import <<EOF >t/home/got 2>&1) ; exitok $? 1
 {"secret/existing/import":{"should": "not import"}}
 EOF
   now checking the error output
@@ -1584,7 +1584,7 @@ EOF
     generate secret/existing/from key=val
 
     now running safe $op --no-clobber with no pre-existing destination secrets
-    (run; ./safe $op --no-clobber secret/existing/{from,to} >t/home/got 2>&1) ; exitok $? 0
+    (run; ${SAFE_CMD} $op --no-clobber secret/existing/{from,to} >t/home/got 2>&1) ; exitok $? 0
     is_key secret/existing/to:key "val"
     if [[ $op == "move" ]]; then
       no_key secret/existing/from
@@ -1600,7 +1600,7 @@ EOF
     generate secret/existing/to   key=TO
 
     now running safe $op --no-clobber with pre-existing destination secrets
-    (run; ./safe $op --no-clobber secret/existing/{from,to} >t/home/got 2>&1) ; exitok $? 0
+    (run; ${SAFE_CMD} $op --no-clobber secret/existing/{from,to} >t/home/got 2>&1) ; exitok $? 0
     now checking the error output
     cat >t/home/want <<EOF ; diffok
 Cowardly refusing to copy/move data into secret/existing/to, as that would clobber existing data
@@ -1616,7 +1616,7 @@ EOF
     generate secret/existing/to   key=TO
 
     now running safe $op --no-clobber with pre-existing destination secrets in --quiet mode
-    (run; ./safe $op --no-clobber --quiet secret/existing/{from,to} >t/home/got 2>&1) ; exitok $? 0
+    (run; ${SAFE_CMD} $op --no-clobber --quiet secret/existing/{from,to} >t/home/got 2>&1) ; exitok $? 0
     now checking the error output
     cat >t/home/want <<EOF ; diffok
 EOF
@@ -1631,7 +1631,7 @@ EOF
     generate secret/existing/from/first  key=val
     generate secret/existing/from/second key=val
     now running safe $op --no-clobber -Rf with no pre-existing secrets
-    (run; ./safe $op --no-clobber -Rf secret/existing/{from,to} >t/home/got 2>&1) ; exitok $? 0
+    (run; ${SAFE_CMD} $op --no-clobber -Rf secret/existing/{from,to} >t/home/got 2>&1) ; exitok $? 0
     now checking the error output
     cat >t/home/want <<EOF ; diffok
 EOF
@@ -1648,7 +1648,7 @@ EOF
     generate secret/existing/to/first    key=TO-1
 
     now running safe $op --no-clobber -Rf with pre-existing destination secrets
-    (run; ./safe $op --no-clobber -Rf secret/existing/{from,to} >t/home/got 2>&1) ; exitok $? 0
+    (run; ${SAFE_CMD} $op --no-clobber -Rf secret/existing/{from,to} >t/home/got 2>&1) ; exitok $? 0
 
     now checking the error output
     cat >t/home/want <<EOF ; diffok
@@ -1661,7 +1661,7 @@ EOF
     no_key secret/existing/to/second
 
     now running safe $op --no-clobber -Rf with pre-existing destination secrets in --quiet mode
-    (run; ./safe $op --no-clobber --quiet -Rf secret/existing/{from,to} >t/home/got 2>&1) ; exitok $? 0
+    (run; ${SAFE_CMD} $op --no-clobber --quiet -Rf secret/existing/{from,to} >t/home/got 2>&1) ; exitok $? 0
 
     now checking the error output
     cat >t/home/want <<EOF ; diffok
@@ -1678,16 +1678,16 @@ EOF
   generate secret/existing val=original
 
   now running safe fmt --no-clobber with no pre-existing formatted key
-  (run; ./safe fmt --no-clobber crypt-sha512 \
+  (run; ${SAFE_CMD} fmt --no-clobber crypt-sha512 \
                    secret/existing val crypted >t/home/got 2>&1) ; exitok $? 0
 
   now checking the error output
   cat >t/home/want <<EOF ; diffok
 EOF
-  expected=$(./safe get secret/existing:crypted)
+  expected=$(${SAFE_CMD} get secret/existing:crypted)
 
   now running safe fmt --no-clobber with a pre-existing formatted key
-  (run; ./safe fmt --no-clobber crypt-sha512 \
+  (run; ${SAFE_CMD} fmt --no-clobber crypt-sha512 \
                secret/existing val crypted >t/home/got 2>&1) ; exitok $? 0
 
   now checking the error output
@@ -1698,7 +1698,7 @@ EOF
   is_key secret/existing:crypted "$expected"
 
   now running safe fmt --no-clobber with a pre-existing formatted key in --query mode
-  (run; ./safe fmt --no-clobber --quiet crypt-sha512 \
+  (run; ${SAFE_CMD} fmt --no-clobber --quiet crypt-sha512 \
                secret/existing val crypted >t/home/got 2>&1) ; exitok $? 0
 
   now checking the error output
@@ -1716,7 +1716,7 @@ EOF
   generate secret/existing key=val
 
   now running safe delete --no-clobber
-  (run; ./safe delete --no-clobber -f secret/existing >t/home/got 2>&1) ; exitok $? 0
+  (run; ${SAFE_CMD} delete --no-clobber -f secret/existing >t/home/got 2>&1) ; exitok $? 0
 
   now checking the error output
   cat >t/home/want <<EOF ; diffok
@@ -1732,7 +1732,7 @@ EOF
   generate secret/existing/subkey key=val
 
   now running safe delete --no-clobber recursively
-  (run; ./safe delete --no-clobber -Rf secret/existing >t/home/got 2>&1) ; exitok $? 0
+  (run; ${SAFE_CMD} delete --no-clobber -Rf secret/existing >t/home/got 2>&1) ; exitok $? 0
   cat >t/home/want <<EOF ; diffok
 EOF
   no_key secret/existing{,/subkey}
@@ -1751,17 +1751,17 @@ EOF
   clearvault
   testing tree display
   now generating secrets to test with
-  (run; ./safe gen secret/tree/alpha     x)  ; exitok $? 0
-  (run; ./safe gen secret/tree/g         x)  ; exitok $? 0
-  (run; ./safe gen secret/tree/g/a       x)  ; exitok $? 0
-  (run; ./safe gen secret/tree/beta/name x)  ; exitok $? 0
-  (run; ./safe gen secret/tree/beta/env  x)  ; exitok $? 0
-  (run; ./safe gen secret/tree/g/a/m     x)  ; exitok $? 0
-  (run; ./safe gen secret/tree/g/a/m/m   x)  ; exitok $? 0
-  (run; ./safe gen secret/tree/g/a/m/m/a x)  ; exitok $? 0
+  (run; ${SAFE_CMD} gen secret/tree/alpha     x)  ; exitok $? 0
+  (run; ${SAFE_CMD} gen secret/tree/g         x)  ; exitok $? 0
+  (run; ${SAFE_CMD} gen secret/tree/g/a       x)  ; exitok $? 0
+  (run; ${SAFE_CMD} gen secret/tree/beta/name x)  ; exitok $? 0
+  (run; ${SAFE_CMD} gen secret/tree/beta/env  x)  ; exitok $? 0
+  (run; ${SAFE_CMD} gen secret/tree/g/a/m     x)  ; exitok $? 0
+  (run; ${SAFE_CMD} gen secret/tree/g/a/m/m   x)  ; exitok $? 0
+  (run; ${SAFE_CMD} gen secret/tree/g/a/m/m/a x)  ; exitok $? 0
 
   now running safe tree
-  (run; ./safe tree secret/tree >t/home/got) ; exitok $? 0
+  (run; ${SAFE_CMD} tree secret/tree >t/home/got) ; exitok $? 0
 
   now checking the output
   cat >t/home/want <<EOF ; diffok
@@ -1784,7 +1784,7 @@ EOF
 EOF
 
   now running safe tree with -d to limit display to parent paths
-  (run; ./safe tree -d secret/tree >t/home/got) ; exitok $? 0
+  (run; ${SAFE_CMD} tree -d secret/tree >t/home/got) ; exitok $? 0
 
   now checking the output
   cat >t/home/want <<EOF ; diffok
@@ -1806,7 +1806,7 @@ EOF
   generate secret/tree/robot   mark=val password=sekrit username=robo
 
   now retrieving a single subtree
-  (run; ./safe tree --keys secret/tree/a/b/c >t/home/got) ; exitok $? 0
+  (run; ${SAFE_CMD} tree --keys secret/tree/a/b/c >t/home/got) ; exitok $? 0
 
   now checking that tree output contains :keys
   cat <<'EOF' >t/home/want ; diffok
@@ -1818,7 +1818,7 @@ EOF
 
 EOF
   now retrieving multiple disjoint subtrees
-  (run; ./safe tree --keys secret/tree/a secret/tree/robot >t/home/got) ; exitok $? 0
+  (run; ${SAFE_CMD} tree --keys secret/tree/a secret/tree/robot >t/home/got) ; exitok $? 0
 
   now checking that tree output contains :keys
   cat <<'EOF' >t/home/want ; diffok
@@ -1856,7 +1856,7 @@ EOF
   generate secret/robot   username=bot password=sekrit
 
   now retrieving a single path
-  (run; ./safe paths secret/a/b/c >t/home/got) ; exitok $? 0
+  (run; ${SAFE_CMD} paths secret/a/b/c >t/home/got) ; exitok $? 0
   now paths should report on path per line
   cat <<'EOF' >t/home/want ; diffok
 secret/a/b/c
@@ -1864,7 +1864,7 @@ secret/a/b/c/d
 EOF
 
   now retrieving multiple paths
-  (run; ./safe paths secret/a secret/robot >t/home/got) ; exitok $? 0
+  (run; ${SAFE_CMD} paths secret/a secret/robot >t/home/got) ; exitok $? 0
   now should get all paths
   cat <<'EOF' >t/home/want ; diffok
 secret/a/b/c
@@ -1874,7 +1874,7 @@ EOF
 
   testing paths --keys
   now retrieving a single path with keys
-  (run; ./safe paths --keys secret/a/b/c >t/home/got) ; exitok $? 0
+  (run; ${SAFE_CMD} paths --keys secret/a/b/c >t/home/got) ; exitok $? 0
 
   now paths should report on path:key per line
   cat <<'EOF' >t/home/want ; diffok
@@ -1884,7 +1884,7 @@ EOF
 
 
   now retrieving multiple paths with keys
-  (run; ./safe paths --keys secret/a secret/robot >t/home/got) ; exitok $? 0
+  (run; ${SAFE_CMD} paths --keys secret/a secret/robot >t/home/got) ; exitok $? 0
   now should get all paths, and all the keys
   cat <<'EOF' >t/home/want ; diffok
 secret/a/b/c:subkey
@@ -1912,7 +1912,7 @@ EOF
   generate secret/export/a/b/c subkey='the-value-given'
 
   now exporting the vault data
-  (run; ./safe export secret/export >t/home/got) ; exitok $? 0
+  (run; ${SAFE_CMD} export secret/export >t/home/got) ; exitok $? 0
 
   now checking that the export contained our data
 cat >t/home/want <<EOF ; yamlok
@@ -1992,10 +1992,10 @@ EOF
 ]
 EOF
   now importing our data
-  (run; ./safe import secret/import <t/home/want) ; exitok $? 0
+  (run; ${SAFE_CMD} import secret/import <t/home/want) ; exitok $? 0
 
   now exporting our data
-  (run; ./safe export secret/import >t/home/got)  ; exitok $? 0
+  (run; ${SAFE_CMD} export secret/import >t/home/got)  ; exitok $? 0
 
   cat <<EOF >t/home/want
 secret/import/a/b/c:
@@ -2030,10 +2030,10 @@ secret/import/a/b/c/d:
   subsubkey: really deep
 EOF
   now importing our data
-  (run; ./safe import secret/import <t/home/want) ; exitok $? 0
+  (run; ${SAFE_CMD} import secret/import <t/home/want) ; exitok $? 0
 
   now exporting our data
-  (run; ./safe export secret/import >t/home/got)  ; exitok $? 0
+  (run; ${SAFE_CMD} export secret/import >t/home/got)  ; exitok $? 0
 
   cat <<EOF >t/home/want
 ---
@@ -2065,17 +2065,17 @@ EOF
 
   testing safe rekey
   now trying to rekey to require 5/3 keys should error
-  (run; ./safe rekey --keys 3 --threshold 5 >t/home/got 2>&1); exitok $? 1
+  (run; ${SAFE_CMD} rekey --keys 3 --threshold 5 >t/home/got 2>&1); exitok $? 1
   cat <<'EOF' > t/home/want ; diffok
 !! You specified only 3 unseal keys, but are requiring 5 keys to unseal vault. This is bad.
 EOF
   now trying to rekey to require 1/1+n keys should error
-  (run; ./safe rekey --threshold 1 --keys 2 >t/home/got 2>&1); exitok $? 1
+  (run; ${SAFE_CMD} rekey --threshold 1 --keys 2 >t/home/got 2>&1); exitok $? 1
   cat <<'EOF' > t/home/want ; diffok
 !! When specifying more than 1 unseal key, you must also have more than one key required to unseal.
 EOF
   now trying to rekey with a bad unseal key should error
-  (run; ./safe rekey </dev/null >t/home/got 2>&1); exitok $? 1
+  (run; ${SAFE_CMD} rekey </dev/null >t/home/got 2>&1); exitok $? 1
   # the below sed is used, as earlier versions of vault had a bad error message, that later versions
   # corrected, so we need to account for both error messages coming through
   sed -i -e 's/must specified/must be specified/' t/home/got
@@ -2085,25 +2085,25 @@ Vault rekey canceled successfully
 EOF
 
   now after failures to rekey, the cancel command was sent to reset the rekey
-  (./safe curl GET sys/rekey/init | grep '"started":false'); exitok $? 0
+  (${SAFE_CMD} curl GET sys/rekey/init | grep '"started":false'); exitok $? 0
 
 
   now restarting vault server to start over
   restart_vault_server
   now validating that the restarted vault is unsealed
-  (./safe set secret/handshake knock=knock); exitok $? 0
+  (${SAFE_CMD} set secret/handshake knock=knock); exitok $? 0
   now trying to rekey without using gpg
-  (run; echo "$unseal_key" | ./safe rekey --keys 1 > t/home/original); exitok $? 0
+  (run; echo "$unseal_key" | ${SAFE_CMD} rekey --keys 1 > t/home/original); exitok $? 0
   cat t/home/original | sed -E 's/Unseal key 1: .*/Unseal key 1: REPLACED/' > t/home/got
   cat <<'EOF' >t/home/want ; diffok
 Your Vault has been re-keyed. Please take note of your new unseal keys and store them safely!
 Unseal key 1: REPLACED
 EOF
   now "unsealing with the new unseal key succeeds (making sure data still exists + the new keys work)"
-  (./safe vault operator seal); exitok $? 0
+  (${SAFE_CMD} vault operator seal); exitok $? 0
   unseal_key=$(awk '/^Unseal key 1:/ { print $4 }' < t/home/original | head -n1)
-  (./safe vault operator unseal "$unseal_key" </dev/null); exitok $? 0
-  (./safe read secret/handshake > t/home/got); exitok $? 0
+  (${SAFE_CMD} vault operator unseal "$unseal_key" </dev/null); exitok $? 0
+  (${SAFE_CMD} read secret/handshake > t/home/got); exitok $? 0
   cat <<'EOF' >t/home/want; diffok
 --- # secret/handshake
 knock: knock
@@ -2115,23 +2115,23 @@ EOF
     testing safe rekey --gpg
     now trying to rekey with the threshold other than the number of gpg keys should error
     gpg --import assets/gpg.pubkey
-    (run; ./safe rekey --keys 3 --gpg safe-testing@safe.com >t/home/got 2>&1); exitok $? 1
+    (run; ${SAFE_CMD} rekey --keys 3 --gpg safe-testing@safe.com >t/home/got 2>&1); exitok $? 1
     cat <<'EOF' > t/home/want ; diffok
 !! Both --gpg and --keys were specified, and their counts did not match.
 EOF
 
     now trying to rekey with a gpg key that is not in the keyring fails
-    (run; ./safe rekey --gpg not-there@missing.com > t/home/got 2>&1); exitok $? 1
+    (run; ${SAFE_CMD} rekey --gpg not-there@missing.com > t/home/got 2>&1); exitok $? 1
     cat <<'EOF' >t/home/want ; diffok
 !! No GPG key found for not-there@missing.com in the local keyring
 EOF
 
     restart_vault_server
     now trying to rekey with gpg keys matching the threshold
-    (./safe set secret/handshake knock=knock); exitok $? 0
+    (${SAFE_CMD} set secret/handshake knock=knock); exitok $? 0
     gpg --import assets/gpg.pubkey
     gpg --allow-secret-key-import --import assets/gpg.key
-    (run; echo "$unseal_key" |./safe rekey --gpg safe-testing@safe.com > t/home/original); exitok $? 0
+    (run; echo "$unseal_key" |${SAFE_CMD} rekey --gpg safe-testing@safe.com > t/home/original); exitok $? 0
     cat t/home/original | sed -E 's/^[a-z0-9]+$/REPLACED/' > t/home/got
     cat <<'EOF' > t/home/want ; diffok
 Your Vault has been re-keyed. Please take note of your new unseal keys and store them safely!
@@ -2139,14 +2139,14 @@ Unseal key for safe-testing@safe.com:
 REPLACED
 EOF
     now "unsealing with the new unseal key succeeds (making sure data still exists + the new keys work)"
-    (./safe vault operator seal); exitok $? 0
+    (${SAFE_CMD} vault operator seal); exitok $? 0
     #FIXME retrieve the new unseal key, decrypt, and unseal vault, then read data
     encrypted_key=$(tail -n 1 t/home/original)
     unseal_key=$(echo $encrypted_key | xxd -r -p  | gpg -d)
     echo "Using new unseal key of '$unseal_key'"
-    (./safe vault operator unseal "$unseal_key" < /dev/null); exitok $? 0
+    (${SAFE_CMD} vault operator unseal "$unseal_key" < /dev/null); exitok $? 0
     rm t/home/original
-  (./safe read secret/handshake > t/home/got); exitok $? 0
+  (${SAFE_CMD} read secret/handshake > t/home/got); exitok $? 0
   cat <<'EOF' >t/home/want; diffok
 --- # secret/handshake
 knock: knock
@@ -2166,11 +2166,11 @@ EOF
   values=(eins zwei drei vier fuenf sechs sieben acht neun zehn elf)
   for val in "${values[@]}"; do
     now setting version $val of the same key
-    (./safe set secret/versioned key=${val} 2>/dev/null); exitok $? 0
+    (${SAFE_CMD} set secret/versioned key=${val} 2>/dev/null); exitok $? 0
   done
 
   now checking that not specifying a version gets the latest version
-  (./safe get secret/versioned >t/home/got); exitok $? 0
+  (${SAFE_CMD} get secret/versioned >t/home/got); exitok $? 0
   cat <<'EOF' >t/home/want; diffok
 --- # secret/versioned
 key: elf
@@ -2179,7 +2179,7 @@ EOF
 
   for vnum in $(seq 2 11); do
     now checking that version ${vnum} can be retrieved
-    (./safe get secret/versioned^${vnum} >t/home/got); exitok $? 0
+    (${SAFE_CMD} get secret/versioned^${vnum} >t/home/got); exitok $? 0
     cat <<EOF >t/home/want; diffok
 --- # secret/versioned^${vnum}
 key: ${values[${vnum}-1]}
@@ -2189,14 +2189,14 @@ EOF
 
   # If the default number of versions stops being 10, this would fail
   now checking that retrieving a missing version returns an error
-  (./safe get secret/versioned^1 2>t/home/got); exitok $? 1
+  (${SAFE_CMD} get secret/versioned^1 2>t/home/got); exitok $? 1
   cat <<'EOF' >t/home/want; diffok
 !! no secret exists at path `secret/versioned`
 EOF
 
   testing versions 
   now testing the output of versions
-  (./safe versions secret/versioned | tail -n +2 | awk '{ print $1" "$2}' >t/home/got); exitok $? 0
+  (${SAFE_CMD} versions secret/versioned | tail -n +2 | awk '{ print $1" "$2}' >t/home/got); exitok $? 0
   # The whitespace below between version num and status is a tab
   cat <<'EOF' >t/home/want; diffok
 2 alive
@@ -2215,12 +2215,12 @@ EOF
   clearvault
   now putting secret versions into the vault
   for vnum in $(seq 1 3); do
-    (./safe set secret/versioned key=val 2>/dev/null); exitok $? 0
+    (${SAFE_CMD} set secret/versioned key=val 2>/dev/null); exitok $? 0
   done
   now deleting version two
-  (./safe delete secret/versioned^2 >/dev/null); exitok $? 0
+  (${SAFE_CMD} delete secret/versioned^2 >/dev/null); exitok $? 0
   now checking the version list
-  (./safe versions secret/versioned | tail -n +2 | awk '{ print $1" "$2}' >t/home/got); exitok $? 0
+  (${SAFE_CMD} versions secret/versioned | tail -n +2 | awk '{ print $1" "$2}' >t/home/got); exitok $? 0
   cat << 'EOF' >t/home/want; diffok
 1 alive
 2 deleted
@@ -2231,12 +2231,12 @@ EOF
   clearvault
   now putting secret versions into the vault
   for vnum in $(seq 1 3); do
-    (./safe set secret/versioned key=val 2>/dev/null); exitok $? 0
+    (${SAFE_CMD} set secret/versioned key=val 2>/dev/null); exitok $? 0
   done
   now deleting the latest version
-  (./safe delete secret/versioned >/dev/null); exitok $? 0
+  (${SAFE_CMD} delete secret/versioned >/dev/null); exitok $? 0
   now checking the version list
-  (./safe versions secret/versioned | tail -n +2 | awk '{ print $1" "$2}' >t/home/got); exitok $? 0
+  (${SAFE_CMD} versions secret/versioned | tail -n +2 | awk '{ print $1" "$2}' >t/home/got); exitok $? 0
   cat << 'EOF' >t/home/want; diffok
 1 alive
 2 alive
@@ -2248,12 +2248,12 @@ EOF
   clearvault
   now putting secret versions into the vault
   for vnum in $(seq 1 3); do
-    (./safe set secret/versioned key=val 2>/dev/null); exitok $? 0
+    (${SAFE_CMD} set secret/versioned key=val 2>/dev/null); exitok $? 0
   done
   now destroying version two
-  (./safe delete -D secret/versioned^2 >/dev/null); exitok $? 0
+  (${SAFE_CMD} delete -D secret/versioned^2 >/dev/null); exitok $? 0
   now checking the version list
-  (./safe versions secret/versioned | tail -n +2 | awk '{ print $1" "$2}' >t/home/got); exitok $? 0
+  (${SAFE_CMD} versions secret/versioned | tail -n +2 | awk '{ print $1" "$2}' >t/home/got); exitok $? 0
   cat << 'EOF' >t/home/want; diffok
 1 alive
 2 destroyed
@@ -2264,12 +2264,12 @@ EOF
   clearvault
   now putting secret versions into the vault
   for vnum in $(seq 1 3); do
-    (./safe set secret/versioned key=val 2>/dev/null); exitok $? 0
+    (${SAFE_CMD} set secret/versioned key=val 2>/dev/null); exitok $? 0
   done
   now destroying the latest version
-  (./safe delete -D secret/versioned >/dev/null); exitok $? 0
+  (${SAFE_CMD} delete -D secret/versioned >/dev/null); exitok $? 0
   now checking the version list
-  (./safe versions secret/versioned | tail -n +2 | awk '{ print $1" "$2}' >t/home/got); exitok $? 0
+  (${SAFE_CMD} versions secret/versioned | tail -n +2 | awk '{ print $1" "$2}' >t/home/got); exitok $? 0
   cat << 'EOF' >t/home/want; diffok
 1 alive
 2 alive
@@ -2279,11 +2279,11 @@ EOF
   testing deleting already deleted versions
   clearvault
   now putting a secret into the vault
-  (./safe set secret/versioned key=val 2>/dev/null); exitok $? 0
+  (${SAFE_CMD} set secret/versioned key=val 2>/dev/null); exitok $? 0
   now deleting the secret
-  (./safe delete secret/versioned >/dev/null); exitok $? 0
+  (${SAFE_CMD} delete secret/versioned >/dev/null); exitok $? 0
   now deleting the same secret again
-  (./safe delete secret/versioned >/dev/null 2>t/home/got); exitok $? 1
+  (${SAFE_CMD} delete secret/versioned >/dev/null 2>t/home/got); exitok $? 1
   now checking that the error message conveys that the secret is already deleted
   cat << 'EOF' >t/home/want; diffok
 !! `secret/versioned' is deleted
@@ -2292,24 +2292,24 @@ EOF
   testing deleting already deleted versions with force
   clearvault
   now putting a secret into the vault
-  (./safe set secret/versioned key=val 2>/dev/null); exitok $? 0
+  (${SAFE_CMD} set secret/versioned key=val 2>/dev/null); exitok $? 0
   now deleting the secret
-  (./safe delete -f secret/versioned >/dev/null); exitok $? 0
+  (${SAFE_CMD} delete -f secret/versioned >/dev/null); exitok $? 0
   now deleting the same secret again
-  (./safe delete -f secret/versioned >/dev/null 2>t/home/got); exitok $? 0
+  (${SAFE_CMD} delete -f secret/versioned >/dev/null 2>t/home/got); exitok $? 0
     
   testing destroying specific versions that are already marked as deleted
   clearvault
   now putting secret versions into the vault
   for vnum in $(seq 1 3); do
-    (./safe set secret/versioned key=val 2>/dev/null); exitok $? 0
+    (${SAFE_CMD} set secret/versioned key=val 2>/dev/null); exitok $? 0
   done
   now deleting version two
-  (./safe delete secret/versioned^2 >/dev/null); exitok $? 0
+  (${SAFE_CMD} delete secret/versioned^2 >/dev/null); exitok $? 0
   now destroying version two
-  (./safe delete -D secret/versioned^2 >/dev/null); exitok $? 0
+  (${SAFE_CMD} delete -D secret/versioned^2 >/dev/null); exitok $? 0
   now checking the version list
-  (./safe versions secret/versioned | tail -n +2 | awk '{ print $1" "$2}' >t/home/got); exitok $? 0
+  (${SAFE_CMD} versions secret/versioned | tail -n +2 | awk '{ print $1" "$2}' >t/home/got); exitok $? 0
   cat << 'EOF' >t/home/want; diffok
 1 alive
 2 destroyed
@@ -2319,13 +2319,13 @@ EOF
   testing destroying already destroyed versions
   clearvault
   now putting a secret into the vault
-  (./safe set secret/versioned key=val 2>/dev/null); exitok $? 0
+  (${SAFE_CMD} set secret/versioned key=val 2>/dev/null); exitok $? 0
   now putting a second version of the secret into the vault
-  (./safe set secret/versioned key=val 2>/dev/null); exitok $? 0
+  (${SAFE_CMD} set secret/versioned key=val 2>/dev/null); exitok $? 0
   now destroying the secret
-  (./safe delete secret/versioned^1 -D >/dev/null); exitok $? 0
+  (${SAFE_CMD} delete secret/versioned^1 -D >/dev/null); exitok $? 0
   now destroying the same secret again
-  (./safe delete secret/versioned^1 -D 2>t/home/got); exitok $? 1
+  (${SAFE_CMD} delete secret/versioned^1 -D 2>t/home/got); exitok $? 1
   now checking that the error message conveys that the secret is already destroyed
   cat << 'EOF' >t/home/want; diffok
 !! `secret/versioned^1' is destroyed
@@ -2334,16 +2334,16 @@ EOF
   testing destroying already destroyed versions with force
   clearvault
   now putting a secret into the vault
-  (./safe set secret/versioned key=val 2>/dev/null); exitok $? 0
+  (${SAFE_CMD} set secret/versioned key=val 2>/dev/null); exitok $? 0
   now destroying the secret
-  (./safe delete secret/versioned -Df); exitok $? 0
+  (${SAFE_CMD} delete secret/versioned -Df); exitok $? 0
   now destroying the same secret again
-  (./safe delete secret/versioned -Df); exitok $? 0
+  (${SAFE_CMD} delete secret/versioned -Df); exitok $? 0
 
   testing destroying versions of secrets that dont exist
   clearvault
   now destroying a non-existent secret
-  (./safe delete secret/poof -D 2>t/home/got); exitok $? 1
+  (${SAFE_CMD} delete secret/poof -D 2>t/home/got); exitok $? 1
   now testing that the error message conveys that nothing is there
   cat << 'EOF' >t/home/want; diffok
 !! no secret exists at path `secret/poof`
@@ -2352,18 +2352,18 @@ EOF
   testing destroying versions of secrets that dont exist with force
   clearvault
   now destroying a non-existent secret
-  (./safe delete secret/poof -Df); exitok $? 0
+  (${SAFE_CMD} delete secret/poof -Df); exitok $? 0
 
   testing deleting all versions
   clearvault
   now putting three versions of a secret into the vault
   for vnum in $(seq 1 3); do
-    (./safe set secret/versioned key=val 2>/dev/null); exitok $? 0
+    (${SAFE_CMD} set secret/versioned key=val 2>/dev/null); exitok $? 0
   done
   now deleting all versions
-  (./safe delete secret/versioned -a); exitok $? 0
+  (${SAFE_CMD} delete secret/versioned -a); exitok $? 0
   now getting versions metadata
-  (./safe versions secret/versioned | tail -n +2 | awk '{ print $1" "$2}' >t/home/got); exitok $? 0
+  (${SAFE_CMD} versions secret/versioned | tail -n +2 | awk '{ print $1" "$2}' >t/home/got); exitok $? 0
   now checking that all versions are deleted
   cat << 'EOF' >t/home/want; diffok
 1 deleted
@@ -2376,14 +2376,14 @@ EOF
   clearvault
   now putting three versions of a secret into the vault
   for vnum in $(seq 1 3); do
-    (./safe set secret/versioned key=val 2>/dev/null); exitok $? 0
+    (${SAFE_CMD} set secret/versioned key=val 2>/dev/null); exitok $? 0
   done
   now deleting the latest version
-  (./safe delete secret/versioned); exitok $? 0
+  (${SAFE_CMD} delete secret/versioned); exitok $? 0
   now deleting all versions
-  (./safe delete secret/versioned -a); exitok $? 0
+  (${SAFE_CMD} delete secret/versioned -a); exitok $? 0
   now getting versions metadata
-  (./safe versions secret/versioned | tail -n +2 | awk '{ print $1" "$2}' >t/home/got); exitok $? 0
+  (${SAFE_CMD} versions secret/versioned | tail -n +2 | awk '{ print $1" "$2}' >t/home/got); exitok $? 0
   now checking that all versions are deleted
   cat << 'EOF' >t/home/want; diffok
 1 deleted
@@ -2395,51 +2395,51 @@ EOF
   clearvault
   now putting three versions of a secret into the vault
   for vnum in $(seq 1 3); do
-    (./safe set secret/versioned key=val 2>/dev/null); exitok $? 0
+    (${SAFE_CMD} set secret/versioned key=val 2>/dev/null); exitok $? 0
   done
   now destroying all versions
-  (./safe delete secret/versioned -Da 2>/dev/null); exitok $? 0
+  (${SAFE_CMD} delete secret/versioned -Da 2>/dev/null); exitok $? 0
   now checking that versions metadata is gone
-  (./safe versions secret/versioned >t/home/got 2>/dev/null); exitok $? 1
+  (${SAFE_CMD} versions secret/versioned >t/home/got 2>/dev/null); exitok $? 1
 
   testing destroying all versions when the latest version is already destroyed
   clearvault
   now putting three versions of a secret into the vault
   for vnum in $(seq 1 3); do
-    (./safe set secret/versioned key=val 2>/dev/null); exitok $? 0
+    (${SAFE_CMD} set secret/versioned key=val 2>/dev/null); exitok $? 0
   done
   now destroying the latest version
-  (./safe delete secret/versioned -D 2>/dev/null); exitok $? 0
+  (${SAFE_CMD} delete secret/versioned -D 2>/dev/null); exitok $? 0
   now destroying all versions
-  (./safe delete secret/versioned -Da 2>/dev/null); exitok $? 0
+  (${SAFE_CMD} delete secret/versioned -Da 2>/dev/null); exitok $? 0
   now checking that versions metadata is gone
-  (./safe versions secret/versioned >t/home/got 2>/dev/null); exitok $? 1
+  (${SAFE_CMD} versions secret/versioned >t/home/got 2>/dev/null); exitok $? 1
 
   testing that destroying all versions one by one cleans up the metadata
   clearvault
   now putting three versions of a secret into the vault
   for vnum in $(seq 1 3); do
-    (./safe set secret/versioned key=val 2>/dev/null); exitok $? 0
+    (${SAFE_CMD} set secret/versioned key=val 2>/dev/null); exitok $? 0
   done
   now destroying version 1
-  (./safe delete secret/versioned^1 -D); exitok $? 0
+  (${SAFE_CMD} delete secret/versioned^1 -D); exitok $? 0
   now destroying version 3
-  (./safe delete secret/versioned^3 -D); exitok $? 0
+  (${SAFE_CMD} delete secret/versioned^3 -D); exitok $? 0
   now destroying version 2
-  (./safe delete secret/versioned^2 -D); exitok $? 0
+  (${SAFE_CMD} delete secret/versioned^2 -D); exitok $? 0
   now checking that the metadata no longer exists
-  (./safe versions secret/versioned 2>/dev/null); exitok $? 1
+  (${SAFE_CMD} versions secret/versioned 2>/dev/null); exitok $? 1
 
   testing that reverting to a previous version works
   clearvault
   now putting three versions of a secret into the vault
   for vnum in $(seq 1 3); do
-    (./safe set secret/versioned key=$vnum 2>/dev/null); exitok $? 0
+    (${SAFE_CMD} set secret/versioned key=$vnum 2>/dev/null); exitok $? 0
   done
   now reverting back to version 2
-  (./safe revert secret/versioned 2); exitok $? 0
+  (${SAFE_CMD} revert secret/versioned 2); exitok $? 0
   now retrieving the version list
-  (./safe versions secret/versioned | tail -n +2 | awk '{ print $1" "$2}' >t/home/got); exitok $? 0
+  (${SAFE_CMD} versions secret/versioned | tail -n +2 | awk '{ print $1" "$2}' >t/home/got); exitok $? 0
   now checking that there are four living versions
   cat << 'EOF' >t/home/want; diffok
 1 alive
@@ -2448,7 +2448,7 @@ EOF
 4 alive
 EOF
   now getting the latest version of the secret
-  (./safe get secret/versioned:key >t/home/got); exitok $? 0
+  (${SAFE_CMD} get secret/versioned:key >t/home/got); exitok $? 0
   now checking that the latest version contains the value 2
   cat << 'EOF' >t/home/want; diffok
 2
@@ -2458,12 +2458,12 @@ EOF
   clearvault
   now putting three versions of a secret into the vault
   for vnum in $(seq 1 3); do
-    (./safe set secret/versioned key=$vnum 2>/dev/null); exitok $? 0
+    (${SAFE_CMD} set secret/versioned key=$vnum 2>/dev/null); exitok $? 0
   done
   now reverting back to version 3
-  (./safe revert secret/versioned 3); exitok $? 0
+  (${SAFE_CMD} revert secret/versioned 3); exitok $? 0
   now retrieving the version list
-  (./safe versions secret/versioned | tail -n +2 | awk '{ print $1" "$2}' >t/home/got); exitok $? 0
+  (${SAFE_CMD} versions secret/versioned | tail -n +2 | awk '{ print $1" "$2}' >t/home/got); exitok $? 0
   now checking that there are three living versions
   cat << 'EOF' >t/home/want; diffok
 1 alive
@@ -2471,7 +2471,7 @@ EOF
 3 alive
 EOF
   now getting the latest version of the secret
-  (./safe get secret/versioned:key >t/home/got); exitok $? 0
+  (${SAFE_CMD} get secret/versioned:key >t/home/got); exitok $? 0
   now checking that the latest version contains the value 3
   cat << 'EOF' >t/home/want; diffok
 3
@@ -2481,12 +2481,12 @@ EOF
   clearvault
   now putting three versions of a secret into the vault
   for vnum in $(seq 1 3); do
-    (./safe set secret/versioned key=$vnum 2>/dev/null); exitok $? 0
+    (${SAFE_CMD} set secret/versioned key=$vnum 2>/dev/null); exitok $? 0
   done
   now reverting back to version 4
-  (./safe revert secret/versioned 4 2>/dev/null); exitok $? 1
+  (${SAFE_CMD} revert secret/versioned 4 2>/dev/null); exitok $? 1
   now retrieving the version list
-  (./safe versions secret/versioned | tail -n +2 | awk '{ print $1" "$2}' >t/home/got); exitok $? 0
+  (${SAFE_CMD} versions secret/versioned | tail -n +2 | awk '{ print $1" "$2}' >t/home/got); exitok $? 0
   now checking that there are three living versions
   cat << 'EOF' >t/home/want; diffok
 1 alive
@@ -2494,7 +2494,7 @@ EOF
 3 alive
 EOF
   now getting the latest version of the secret
-  (./safe get secret/versioned:key >t/home/got); exitok $? 0
+  (${SAFE_CMD} get secret/versioned:key >t/home/got); exitok $? 0
   now checking that the latest version contains the value 3
   cat << 'EOF' >t/home/want; diffok
 3
@@ -2504,14 +2504,14 @@ EOF
   clearvault
   now putting three versions of a secret into the vault
   for vnum in $(seq 1 3); do
-    (./safe set secret/versioned key=$vnum 2>/dev/null); exitok $? 0
+    (${SAFE_CMD} set secret/versioned key=$vnum 2>/dev/null); exitok $? 0
   done
   now deleting version 2
-  (./safe delete secret/versioned^2); exitok $? 0
+  (${SAFE_CMD} delete secret/versioned^2); exitok $? 0
   now reverting back to version 2
-  (./safe revert secret/versioned 2 2>/dev/null); exitok $? 1
+  (${SAFE_CMD} revert secret/versioned 2 2>/dev/null); exitok $? 1
   now retrieving the version list
-  (./safe versions secret/versioned | tail -n +2 | awk '{ print $1" "$2}' >t/home/got); exitok $? 0
+  (${SAFE_CMD} versions secret/versioned | tail -n +2 | awk '{ print $1" "$2}' >t/home/got); exitok $? 0
   now checking that there are three versions with the correct states
   cat << 'EOF' >t/home/want; diffok
 1 alive
@@ -2519,7 +2519,7 @@ EOF
 3 alive
 EOF
   now getting the latest version of the secret
-  (./safe get secret/versioned:key >t/home/got); exitok $? 0
+  (${SAFE_CMD} get secret/versioned:key >t/home/got); exitok $? 0
   now checking that the latest version contains the value 3
   cat << 'EOF' >t/home/want; diffok
 3
@@ -2529,14 +2529,14 @@ EOF
   clearvault
   now putting three versions of a secret into the vault
   for vnum in $(seq 1 3); do
-    (./safe set secret/versioned key=$vnum 2>/dev/null); exitok $? 0
+    (${SAFE_CMD} set secret/versioned key=$vnum 2>/dev/null); exitok $? 0
   done
   now deleting version 2
-  (./safe delete secret/versioned^2); exitok $? 0
+  (${SAFE_CMD} delete secret/versioned^2); exitok $? 0
   now reverting back to version 2
-  (./safe revert secret/versioned 2 -d); exitok $? 0
+  (${SAFE_CMD} revert secret/versioned 2 -d); exitok $? 0
   now retrieving the version list
-  (./safe versions secret/versioned | tail -n +2 | awk '{ print $1" "$2}' >t/home/got); exitok $? 0
+  (${SAFE_CMD} versions secret/versioned | tail -n +2 | awk '{ print $1" "$2}' >t/home/got); exitok $? 0
   now checking that there are four versions with the correct states
   cat << 'EOF' >t/home/want; diffok
 1 alive
@@ -2545,7 +2545,7 @@ EOF
 4 alive
 EOF
   now getting the latest version of the secret
-  (./safe get secret/versioned:key >t/home/got); exitok $? 0
+  (${SAFE_CMD} get secret/versioned:key >t/home/got); exitok $? 0
   now checking that the latest version contains the value 3
   cat << 'EOF' >t/home/want; diffok
 2
@@ -2559,7 +2559,7 @@ EOF
   generate secret/export/a/b/c subkey='the-value-given'
 
   now exporting the vault data
-  (run; ./safe export secret/export secret/export secret/export/a secret/export/a/b secret/export/robot >t/home/got) ; exitok $? 0
+  (run; ${SAFE_CMD} export secret/export secret/export secret/export/a secret/export/a/b secret/export/robot >t/home/got) ; exitok $? 0
 
   now checking that the export contained our non-duplicated data
   cat >t/home/want <<EOF ; yamlok
@@ -2585,11 +2585,11 @@ EOF
   generate secret/export/robot username=bot password=BEEPBOOP mark=2
   generate secret/export/a/b/c subkey='the-value-given'
   now deleting version 2 of secret/export/admin
-  (./safe delete secret/export/admin^2 -f); exitok $? 0
+  (${SAFE_CMD} delete secret/export/admin^2 -f); exitok $? 0
   now destroying version 1 of secret/export/robot
-  (./safe delete secret/export/robot^1 -Df); exitok $? 0
+  (${SAFE_CMD} delete secret/export/robot^1 -Df); exitok $? 0
   now exporting the vault data
-  (run; ./safe export secret/export --all --deleted >t/home/got) ; exitok $? 0
+  (run; ${SAFE_CMD} export secret/export --all --deleted >t/home/got) ; exitok $? 0
   now checking that the export contained our data
   cat >t/home/want <<EOF ; jsonok
 [
@@ -2654,10 +2654,10 @@ EOF
   values=(eins zwei drei vier fuenf sechs sieben acht neun zehn elf)
   for val in "${values[@]}"; do
     now setting version $val of the same key
-    (./safe set secret/versioned key=${val} 2>/dev/null); exitok $? 0
+    (${SAFE_CMD} set secret/versioned key=${val} 2>/dev/null); exitok $? 0
   done
   now exporting the tree
-  (./safe export secret --all --deleted >t/home/got) ; exitok $? 0
+  (${SAFE_CMD} export secret --all --deleted >t/home/got) ; exitok $? 0
   cat >t/home/want <<EOF ; jsonok
 [
   {
@@ -2792,9 +2792,9 @@ EOF
 ] 
 EOF
   now importing the secrets
-  (run; ./safe import secret/import <t/home/want) ; exitok $? 0
+  (run; ${SAFE_CMD} import secret/import <t/home/want) ; exitok $? 0
   now exporting the secrets
-  (./safe export secret --all --deleted >t/home/got); exitok $? 0
+  (${SAFE_CMD} export secret --all --deleted >t/home/got); exitok $? 0
   now checking that the export matches the import
   jsonok
 
@@ -2803,14 +2803,14 @@ EOF
   values=(eins zwei drei)
   for val in "${values[@]}"; do
     now setting version $val of the same key
-    (./safe set secret/versioned key=${val} 2>/dev/null); exitok $? 0
+    (${SAFE_CMD} set secret/versioned key=${val} 2>/dev/null); exitok $? 0
   done
   now deleting version 2
-  (./safe delete secret/versioned^2 -f); exitok $? 0
+  (${SAFE_CMD} delete secret/versioned^2 -f); exitok $? 0
   now destroying version 1
-  (./safe delete secret/versioned^1 -Df); exitok $? 0
+  (${SAFE_CMD} delete secret/versioned^1 -Df); exitok $? 0
   now exporting the tree 
-  (./safe export secret --all >t/home/got) ; exitok $? 0
+  (${SAFE_CMD} export secret --all >t/home/got) ; exitok $? 0
   cat >t/home/want <<EOF ; jsonok
 [
   {
@@ -2842,10 +2842,10 @@ EOF
   values=(eins zwei drei)
   for val in "${values[@]}"; do
     now setting version $val of the same key
-    (./safe set secret/versioned key=${val} 2>/dev/null); exitok $? 0
+    (${SAFE_CMD} set secret/versioned key=${val} 2>/dev/null); exitok $? 0
   done
   now exporting 
-  (./safe export secret >t/home/got) ; exitok $? 0
+  (${SAFE_CMD} export secret >t/home/got) ; exitok $? 0
   now checking that the output matches what is expected
   cat >t/home/want <<EOF ; yamlok
 secret/versioned:
@@ -2882,9 +2882,9 @@ EOF
   }
 ]
 EOF
-  (run; ./safe import secret/import -I <t/home/want) ; exitok $? 0
+  (run; ${SAFE_CMD} import secret/import -I <t/home/want) ; exitok $? 0
   now exporting the secrets
-  (./safe export secret --all --deleted >t/home/got); exitok $? 0
+  (${SAFE_CMD} export secret --all --deleted >t/home/got); exitok $? 0
   now checking that the export matches the import
   cat >t/home/want <<EOF ; jsonok
 [
@@ -2942,9 +2942,9 @@ EOF
   }
 ]
 EOF
-  (run; ./safe import secret/import -i <t/home/want) ; exitok $? 0
+  (run; ${SAFE_CMD} import secret/import -i <t/home/want) ; exitok $? 0
   now exporting the secrets
-  (./safe export secret --all --deleted >t/home/got); exitok $? 0
+  (${SAFE_CMD} export secret --all --deleted >t/home/got); exitok $? 0
   now checking that the export matches the import
   cat >t/home/want <<EOF ; jsonok
 [
@@ -2999,9 +2999,9 @@ EOF
   }
 ]
 EOF
-  (run; ./safe import secret/import -iI <t/home/want) ; exitok $? 0
+  (run; ${SAFE_CMD} import secret/import -iI <t/home/want) ; exitok $? 0
   now exporting the secrets
-  (./safe export secret --all --deleted >t/home/got); exitok $? 0
+  (${SAFE_CMD} export secret --all --deleted >t/home/got); exitok $? 0
   now checking that the export matches the import
   cat >t/home/want <<EOF ; yamlok
 secret/versioned:
@@ -3038,9 +3038,9 @@ EOF
   }
 ]
 EOF
-  (run; ./safe import secret/import -s <t/home/want) ; exitok $? 0
+  (run; ${SAFE_CMD} import secret/import -s <t/home/want) ; exitok $? 0
   now exporting the secrets
-  (./safe export secret --all --deleted >t/home/got); exitok $? 0
+  (${SAFE_CMD} export secret --all --deleted >t/home/got); exitok $? 0
   now checking that the export matches the import
   cat >t/home/want <<EOF ; yamlok
 secret/versioned:
@@ -3057,17 +3057,17 @@ if [[ -z "${TEST_QUICK:-}" ]]; then
 
   testing safe x509 --no-clobber
   now running safe x509 issue --no-clobber with no pre-existing certificates
-  (run; ./safe x509 issue --no-clobber \
+  (run; ${SAFE_CMD} x509 issue --no-clobber \
                 --ca --name test \
                 secret/existing >t/home/got 2>&1) ; exitok $? 0
 
   now checking the error output
   cat >t/home/want <<EOF ; diffok
 EOF
-  expected=$(./safe get secret/existing)
+  expected=$(${SAFE_CMD} get secret/existing)
 
   now running safe x509 issue --no-clobber with pre-existing certificates
-  (run; ./safe x509 issue \
+  (run; ${SAFE_CMD} x509 issue \
                 --no-clobber --ca --name test \
                 secret/existing >t/home/got 2>&1) ; exitok $? 0
 
@@ -3078,7 +3078,7 @@ EOF
   is_key secret/existing "$expected" "<existing>"
 
   now running safe x509 issue --no-clobber with pre-existing certificates in --quiet mode
-  (run; ./safe x509 issue --quiet --no-clobber \
+  (run; ${SAFE_CMD} x509 issue --quiet --no-clobber \
                 --ca --name test \
                 secret/existing >t/home/got 2>&1) ; exitok $? 0
 
@@ -3088,7 +3088,7 @@ EOF
   is_key secret/existing "$expected" "<existing>"
 
   now running safe x509 revoke --no-clobber with no pre-existing revocation list
-  (run; ./safe x509 revoke --no-clobber \
+  (run; ${SAFE_CMD} x509 revoke --no-clobber \
                 --signed-by secret/existing \
                 secret/existing >t/home/got 3>&1) ; exitok $? 0
   cat >t/home/want <<EOF ; diffok
@@ -3096,103 +3096,103 @@ EOF
 
   testing safe x509 reissue
   now issuing a CA and a certificate for reissue testing
-  (run; ./safe x509 issue --ca        secret/reissue/ca --name test.ca   && \
-        ./safe x509 issue --signed-by secret/reissue/ca --name test.cert \
+  (run; ${SAFE_CMD} x509 issue --ca        secret/reissue/ca --name test.ca   && \
+        ${SAFE_CMD} x509 issue --signed-by secret/reissue/ca --name test.cert \
                           --bits 2048 secret/reissue/cert); exitok $? 0
-  serial1=$(./safe read secret/reissue/ca:serial)
+  serial1=$(${SAFE_CMD} read secret/reissue/ca:serial)
 
   now reissuing the certificate
-  ./safe cp secret/reissue/cert/ secret/reissue/orig
-  (run; ./safe x509 reissue secret/reissue/cert); exitok $? 0
+  ${SAFE_CMD} cp secret/reissue/cert/ secret/reissue/orig
+  (run; ${SAFE_CMD} x509 reissue secret/reissue/cert); exitok $? 0
 
   now checking that reissue changed the private key
-  ne "$(./safe read secret/reissue/orig:key)" \
-      "$(./safe read secret/reissue/cert:key)"
+  ne "$(${SAFE_CMD} read secret/reissue/orig:key)" \
+      "$(${SAFE_CMD} read secret/reissue/cert:key)"
 
   now checking that reissue bumps the CA serial number
-  serial2=$(./safe read secret/reissue/ca:serial)
+  serial2=$(${SAFE_CMD} read secret/reissue/ca:serial)
   eq $(( $serial1 + 1 )) $serial2
 
   now checking that reissue does not change certificate attributes
-  eq_or_diff "$(./safe x509 show secret/reissue/orig | grep -Ev 'secret/re|valid from|expires in|serial')" \
-              "$(./safe x509 show secret/reissue/cert | grep -Ev 'secret/re|valid from|expires in|serial')"
+  eq_or_diff "$(${SAFE_CMD} x509 show secret/reissue/orig | grep -Ev 'secret/re|valid from|expires in|serial')" \
+              "$(${SAFE_CMD} x509 show secret/reissue/cert | grep -Ev 'secret/re|valid from|expires in|serial')"
 
   now reissuing the certificate with a shorter ttl and a smaller key
-  (run; ./safe x509 reissue --ttl 5d --bits 1024 secret/reissue/cert); exitok $? 0
+  (run; ${SAFE_CMD} x509 reissue --ttl 5d --bits 1024 secret/reissue/cert); exitok $? 0
 
   now checking that the certificates have different dates
-  ne "$(./safe x509 show secret/reissue/orig | grep 'valid from')" \
-      "$(./safe x509 show secret/reissue/cert | grep 'valid from')"
+  ne "$(${SAFE_CMD} x509 show secret/reissue/orig | grep 'valid from')" \
+      "$(${SAFE_CMD} x509 show secret/reissue/cert | grep 'valid from')"
 
   now checking that reissue does not change certificate attributes, other than ttl
-  eq_or_diff "$(./safe x509 show secret/reissue/orig | grep -Ev 'secret/re|valid from|expires in|serial')" \
-              "$(./safe x509 show secret/reissue/cert | grep -Ev 'secret/re|valid from|expires in|serial')"
+  eq_or_diff "$(${SAFE_CMD} x509 show secret/reissue/orig | grep -Ev 'secret/re|valid from|expires in|serial')" \
+              "$(${SAFE_CMD} x509 show secret/reissue/cert | grep -Ev 'secret/re|valid from|expires in|serial')"
 
 
 
   testing safe x509 renew
   now issuing a CA and a certificate for renew testing
-  (run; ./safe x509 issue --ca        secret/renew/ca --name test.ca   && \
-        ./safe x509 issue --signed-by secret/renew/ca --name test.cert \
+  (run; ${SAFE_CMD} x509 issue --ca        secret/renew/ca --name test.ca   && \
+        ${SAFE_CMD} x509 issue --signed-by secret/renew/ca --name test.cert \
                           --bits 2048 secret/renew/cert); exitok $? 0
-  serial1=$(./safe read secret/renew/ca:serial)
+  serial1=$(${SAFE_CMD} read secret/renew/ca:serial)
 
   now renewing the certificate
-  ./safe cp secret/renew/cert/ secret/renew/orig
-  (run; ./safe x509 renew secret/renew/cert); exitok $? 0
+  ${SAFE_CMD} cp secret/renew/cert/ secret/renew/orig
+  (run; ${SAFE_CMD} x509 renew secret/renew/cert); exitok $? 0
 
   now checking that renew did not change the private key
-  eq "$(./safe read secret/renew/orig:key)" \
-      "$(./safe read secret/renew/cert:key)"
+  eq "$(${SAFE_CMD} read secret/renew/orig:key)" \
+      "$(${SAFE_CMD} read secret/renew/cert:key)"
 
   now checking that renew bumps the CA serial number
-  serial2=$(./safe read secret/renew/ca:serial)
+  serial2=$(${SAFE_CMD} read secret/renew/ca:serial)
   eq $(( $serial1 + 1 )) $serial2
 
   now checking that renew does not change certificate attributes
-  eq_or_diff "$(./safe x509 show secret/renew/orig | grep -Ev 'secret/re|valid from|expires in|serial')" \
-              "$(./safe x509 show secret/renew/cert | grep -Ev 'secret/re|valid from|expires in|serial')"
+  eq_or_diff "$(${SAFE_CMD} x509 show secret/renew/orig | grep -Ev 'secret/re|valid from|expires in|serial')" \
+              "$(${SAFE_CMD} x509 show secret/renew/cert | grep -Ev 'secret/re|valid from|expires in|serial')"
 
   now renewing the certificate with a shorter ttl
-  (run; ./safe x509 renew --ttl 5d secret/renew/cert); exitok $? 0
+  (run; ${SAFE_CMD} x509 renew --ttl 5d secret/renew/cert); exitok $? 0
 
   now checking that the certificates have different dates
-  ne "$(./safe x509 show secret/renew/orig | grep 'valid from')" \
-      "$(./safe x509 show secret/renew/cert | grep 'valid from')"
+  ne "$(${SAFE_CMD} x509 show secret/renew/orig | grep 'valid from')" \
+      "$(${SAFE_CMD} x509 show secret/renew/cert | grep 'valid from')"
 
   now checking that renew does not change certificate attributes, other than ttl
-  eq_or_diff "$(./safe x509 show secret/renew/orig | grep -Ev 'secret/re|valid from|expires in|serial')" \
-              "$(./safe x509 show secret/renew/cert | grep -Ev 'secret/re|valid from|expires in|serial')"
+  eq_or_diff "$(${SAFE_CMD} x509 show secret/renew/orig | grep -Ev 'secret/re|valid from|expires in|serial')" \
+              "$(${SAFE_CMD} x509 show secret/renew/cert | grep -Ev 'secret/re|valid from|expires in|serial')"
 
 
   now removing the CRL from a CA certificate
-  (run; ./safe rm secret/renew/ca:crl); exitok $? 0
+  (run; ${SAFE_CMD} rm secret/renew/ca:crl); exitok $? 0
   no_key secret/renew/ca:crl
 
   now checking that a CA without a CRL is invalid
-  (run; ./safe x509 validate secret/renew/ca); exitok $? 1
+  (run; ${SAFE_CMD} x509 validate secret/renew/ca); exitok $? 1
 
   now checking that renew can re-constitute a missing CRL
-  (run; ./safe x509 renew secret/renew/ca); exitok $? 0
+  (run; ${SAFE_CMD} x509 renew secret/renew/ca); exitok $? 0
   ok_key secret/renew/ca:crl
 
   now checking that a CA is valid again
-  (run; ./safe x509 validate secret/renew/ca); exitok $? 0
+  (run; ${SAFE_CMD} x509 validate secret/renew/ca); exitok $? 0
 
 
   now removing the serial from a CA certificate
-  (run; ./safe rm secret/renew/ca:serial); exitok $? 0
+  (run; ${SAFE_CMD} rm secret/renew/ca:serial); exitok $? 0
   no_key secret/renew/ca:serial
 
   now checking that a CA without a serial is invalid
-  (run; ./safe x509 validate secret/renew/ca); exitok $? 1
+  (run; ${SAFE_CMD} x509 validate secret/renew/ca); exitok $? 1
 
   now checking that renew can re-constitute a missing CA serial
-  (run; ./safe x509 renew secret/renew/ca); exitok $? 0
+  (run; ${SAFE_CMD} x509 renew secret/renew/ca); exitok $? 0
   ok_key secret/renew/ca:serial
 
   now checking that a CA is valid again
-  (run; ./safe x509 validate secret/renew/ca); exitok $? 0
+  (run; ${SAFE_CMD} x509 validate secret/renew/ca); exitok $? 0
 
   for op in ssh rsa dhparam; do
     case $op in
@@ -3208,13 +3208,13 @@ EOF
     no_key secret/existing
 
     now running safe $op --no-clobber with no pre-existing secrets
-    (run; ./safe $op --no-clobber secret/existing >t/home/got 2>/dev/null) ; exitok $? 0
+    (run; ${SAFE_CMD} $op --no-clobber secret/existing >t/home/got 2>/dev/null) ; exitok $? 0
     cat >t/home/want <<EOF ; diffok
 EOF
-    expected=$(./safe get secret/existing)
+    expected=$(${SAFE_CMD} get secret/existing)
 
     now running safe $op --no-clobber with pre-existing secrets
-    (run; ./safe $op --no-clobber secret/existing >t/home/got 2>&1) ; exitok $? 0
+    (run; ${SAFE_CMD} $op --no-clobber secret/existing >t/home/got 2>&1) ; exitok $? 0
 
     now checking the error output
     cat >t/home/want <<EOF ; diffok
@@ -3223,7 +3223,7 @@ EOF
     is_key secret/existing "$expected" '<existing>'
 
     now running safe $op --no-clobber with pre-existing secrets in --quiet mode
-    (run; ./safe $op --no-clobber --quiet secret/existing >t/home/got 2>&1) ; exitok $? 0
+    (run; ${SAFE_CMD} $op --no-clobber --quiet secret/existing >t/home/got 2>&1) ; exitok $? 0
 
     now checking the error output
     cat >t/home/want <<EOF ; diffok
@@ -3246,90 +3246,90 @@ EOF
   testing x509 commands
 
   now running safe x509 issue without a path
-  (run; ./safe x509 issue)                                                ; exitok $? 1
+  (run; ${SAFE_CMD} x509 issue)                                                ; exitok $? 1
   now running safe x509 issue without a name
-  (run; ./safe x509 issue --signed-by secret/enoent)                      ; exitok $? 1
+  (run; ${SAFE_CMD} x509 issue --signed-by secret/enoent)                      ; exitok $? 1
   now running safe x509 issue with a non-existent ca
-  (run; ./safe x509 issue --signed-by secret/enoent secret/cert)          ; exitok $? 1
+  (run; ${SAFE_CMD} x509 issue --signed-by secret/enoent secret/cert)          ; exitok $? 1
 
   now generating a new self-signed certificate
-  (run; ./safe x509 issue secret/x509/self-signed --name www.example.com) ; exitok $? 0
+  (run; ${SAFE_CMD} x509 issue secret/x509/self-signed --name www.example.com) ; exitok $? 0
   now validating our self-signed certificate
-  (run; ./safe x509 validate secret/x509/self-signed)                     ; exitok $? 0
+  (run; ${SAFE_CMD} x509 validate secret/x509/self-signed)                     ; exitok $? 0
 
   ok_key secret/x509/self-signed:{certificate,key,combined}
   no_key secret/x509/self-signed:{serial,crl}
 
   now validating the certificate applicability
-  (run; ./safe x509 check secret/x509/self-signed)                        ; exitok $? 0
-  (run; ./safe x509 check secret/x509/self-signed --for www.example.com)  ; exitok $? 0
-  (run; ./safe x509 check secret/x509/self-signed --for mail.example.com) ; exitok $? 1
-  (run; ./safe x509 check secret/x509/self-signed --for test@example.com) ; exitok $? 1
-  (run; ./safe x509 check secret/x509/self-signed --for 10.40.5.6)        ; exitok $? 1
+  (run; ${SAFE_CMD} x509 check secret/x509/self-signed)                        ; exitok $? 0
+  (run; ${SAFE_CMD} x509 check secret/x509/self-signed --for www.example.com)  ; exitok $? 0
+  (run; ${SAFE_CMD} x509 check secret/x509/self-signed --for mail.example.com) ; exitok $? 1
+  (run; ${SAFE_CMD} x509 check secret/x509/self-signed --for test@example.com) ; exitok $? 1
+  (run; ${SAFE_CMD} x509 check secret/x509/self-signed --for 10.40.5.6)        ; exitok $? 1
 
   now running safe x509 issue without a name
-  (run; ./safe x509 issue secret/fail-without-name)                       ; exitok $? 1
+  (run; ${SAFE_CMD} x509 issue secret/fail-without-name)                       ; exitok $? 1
   no_key secret/fail-without-name:{certificate,key,combined,serial,crl}
 
   now generate a CA certificate
-  (run; ./safe x509 issue secret/x509/ca --name ca.example.com --ca)      ; exitok $? 0
+  (run; ${SAFE_CMD} x509 issue secret/x509/ca --name ca.example.com --ca)      ; exitok $? 0
   ok_key secret/x509/ca:{certificate,key,combined,serial,crl}
 
   now validating our new CA certificate
-  (run; ./safe x509 validate secret/x509/ca --ca)                         ; exitok $? 0
-  (run; ./safe x509 validate secret/x509/ca --not-expired)                ; exitok $? 0
-  (run; ./safe x509 validate secret/x509/ca --for ca.example.com)         ; exitok $? 0
-  (run; ./safe x509 validate secret/x509/ca --for www.example.com)        ; exitok $? 1
-  (run; ./safe x509 validate secret/x509/ca --signed-by secret/x509/ca \
+  (run; ${SAFE_CMD} x509 validate secret/x509/ca --ca)                         ; exitok $? 0
+  (run; ${SAFE_CMD} x509 validate secret/x509/ca --not-expired)                ; exitok $? 0
+  (run; ${SAFE_CMD} x509 validate secret/x509/ca --for ca.example.com)         ; exitok $? 0
+  (run; ${SAFE_CMD} x509 validate secret/x509/ca --for www.example.com)        ; exitok $? 1
+  (run; ${SAFE_CMD} x509 validate secret/x509/ca --signed-by secret/x509/ca \
                                             --not-revoked)                ; exitok $? 0
 
   now running safe x509 check without a path
-  (run; ./safe x509 check)                                                ; exitok $? 1
+  (run; ${SAFE_CMD} x509 check)                                                ; exitok $? 1
   now running safe x509 check with --signed-by but no path
-  (run; ./safe x509 check --signed-by secret/enoent)                      ; exitok $? 1
+  (run; ${SAFE_CMD} x509 check --signed-by secret/enoent)                      ; exitok $? 1
   now running safe x509 check with no CA
-  (run; ./safe x509 check --signed-by secret/enoent secret/cert)          ; exitok $? 1
+  (run; ${SAFE_CMD} x509 check --signed-by secret/enoent secret/cert)          ; exitok $? 1
   now running safe x509 check with a bad certificate path
-  (run; ./safe x509 check --signed-by secret/x509/ca secret/enoent)       ; exitok $? 1
+  (run; ${SAFE_CMD} x509 check --signed-by secret/x509/ca secret/enoent)       ; exitok $? 1
 
   now issuing a CA-signed certificate
-  (run; ./safe x509 issue secret/x509/signed --signed-by secret/x509/ca \
+  (run; ${SAFE_CMD} x509 issue secret/x509/signed --signed-by secret/x509/ca \
                                               --name mail.example.com)     ; exitok $? 0
   now validating our CA-signed certificate
-  (run; ./safe x509 validate secret/x509/signed --signed-by secret/x509/ca \
+  (run; ${SAFE_CMD} x509 validate secret/x509/signed --signed-by secret/x509/ca \
                                                 --not-expired \
                                                 --not-revoked \
                                                 --for mail.example.com)   ; exitok $? 0
 
   now running safe x509 revoke without a path
-  (run; ./safe x509 revoke)                                               ; exitok $? 1
-  (run; ./safe x509 revoke --signed-by secret/x509/ca)                    ; exitok $? 1
+  (run; ${SAFE_CMD} x509 revoke)                                               ; exitok $? 1
+  (run; ${SAFE_CMD} x509 revoke --signed-by secret/x509/ca)                    ; exitok $? 1
   now running safe x509 revoke with a bad path
-  (run; ./safe x509 revoke --signed-by secret/x509/ca secret/enoent)      ; exitok $? 1
+  (run; ${SAFE_CMD} x509 revoke --signed-by secret/x509/ca secret/enoent)      ; exitok $? 1
   now running safe x509 revoke with a bad CA
-  (run; ./safe x509 revoke --signed-by secret/enoent secret/x509/signed)  ; exitok $? 1
+  (run; ${SAFE_CMD} x509 revoke --signed-by secret/enoent secret/x509/signed)  ; exitok $? 1
 
   now running safe x509 crl --renew without a path
-  (run; ./safe x509 crl --renew)                                          ; exitok $? 1
+  (run; ${SAFE_CMD} x509 crl --renew)                                          ; exitok $? 1
   now running safe x509 crl with a CA path but no --renew
-  (run; ./safe x509 crl secret/x509/ca)                                   ; exitok $? 1
+  (run; ${SAFE_CMD} x509 crl secret/x509/ca)                                   ; exitok $? 1
   now running safe x509 crl --renew against a bad path
-  (run; ./safe x509 crl --renew secret/enoent)                            ; exitok $? 1
+  (run; ${SAFE_CMD} x509 crl --renew secret/enoent)                            ; exitok $? 1
   now running safe x509 crl --renew without a CA
-  (run; ./safe x509 crl --renew secret/x509/signed)                       ; exitok $? 1
+  (run; ${SAFE_CMD} x509 crl --renew secret/x509/signed)                       ; exitok $? 1
   now running safe x509 crl --renew
-  (run; ./safe x509 crl --renew secret/x509/ca)                           ; exitok $? 0
+  (run; ${SAFE_CMD} x509 crl --renew secret/x509/ca)                           ; exitok $? 0
 
   now revoke our signed certificate
-  (run; ./safe x509 revoke secret/x509/signed --signed-by secret/x509/ca) ; exitok $? 0
+  (run; ${SAFE_CMD} x509 revoke secret/x509/signed --signed-by secret/x509/ca) ; exitok $? 0
   now validating that our signed certificate is only revoked
-  (run; ./safe x509 validate secret/x509/signed --signed-by secret/x509/ca \
+  (run; ${SAFE_CMD} x509 validate secret/x509/signed --signed-by secret/x509/ca \
                                                 --not-expired \
                                                 --revoked \
                                                 --for mail.example.com)   ; exitok $? 0
 
   now issuing a certificate with lots of subjectAltNames
-  (run; ./safe x509 issue secret/x509/multi --signed-by secret/x509/ca \
+  (run; ${SAFE_CMD} x509 issue secret/x509/multi --signed-by secret/x509/ca \
                                             --name dns.example.com \
                                             --name *.dns.example.com \
                                             --name 10.255.6.7 \
@@ -3337,7 +3337,7 @@ EOF
                                             --name admin@example.com \
                                             --name safe.vault@example.com) ; exitok $? 0
   now validating our SAN certificate
-  (run; ./safe x509 check secret/x509/multi --signed-by secret/x509/ca \
+  (run; ${SAFE_CMD} x509 check secret/x509/multi --signed-by secret/x509/ca \
                                             --not-expired \
                                             --not-revoked \
                                             --for dns.example.com \
@@ -3346,74 +3346,74 @@ EOF
                                             --for admin@example.com \
                                             --for safe.vault@example.com) ; exitok $? 0
   now checking our SAN certificate applicability
-  (run; ./safe x509 check secret/x509/multi --for whatever.dns.example.com \
+  (run; ${SAFE_CMD} x509 check secret/x509/multi --for whatever.dns.example.com \
                                             --for anything.dns.example.com \
                                             --for x.dns.example.com)     ; exitok $? 0
-  (run; ./safe x509 check secret/x509/multi --for x.y.dns.example.com)   ; exitok $? 1
-  (run; ./safe x509 check secret/x509/multi --for x.com)                 ; exitok $? 1
+  (run; ${SAFE_CMD} x509 check secret/x509/multi --for x.y.dns.example.com)   ; exitok $? 1
+  (run; ${SAFE_CMD} x509 check secret/x509/multi --for x.com)                 ; exitok $? 1
 
   now issuing a wildcard SAN certificate
-  (run; ./safe x509 issue secret/x509/wild --signed-by secret/x509/ca \
+  (run; ${SAFE_CMD} x509 issue secret/x509/wild --signed-by secret/x509/ca \
                                             --name cn.tld \
                                             --name '*.tld' \
                                             --name '*.*.tld' \
                                             --name '*.*.*.tld')           ; exitok $? 0
   now validating our wildcard SAN certificate applicability
-  (run; ./safe x509 check secret/x509/wild --signed-by secret/x509/ca \
+  (run; ${SAFE_CMD} x509 check secret/x509/wild --signed-by secret/x509/ca \
                                             --for cn.tld \
                                             --for x.tld \
                                             --for x.y.tld \
                                             --for x.y.z.tld)              ; exitok $? 0
-  (run; ./safe x509 check secret/x509/wild --signed-by secret/x509/ca \
+  (run; ${SAFE_CMD} x509 check secret/x509/wild --signed-by secret/x509/ca \
                                             --for tld)                    ; exitok $? 1
-  (run; ./safe x509 check secret/x509/wild --signed-by secret/x509/ca \
+  (run; ${SAFE_CMD} x509 check secret/x509/wild --signed-by secret/x509/ca \
                                             --for w.x.y.z.tld)            ; exitok $? 1
 
   now issuing a weak 1024-bit certificate
-  (run; ./safe x509 issue secret/x509/weak --bits 1024 -n weak.tld)      ; exitok $? 0
+  (run; ${SAFE_CMD} x509 issue secret/x509/weak --bits 1024 -n weak.tld)      ; exitok $? 0
   now checking that our 1024-bit certificate is actually 1024-bits
-  (run; ./safe x509 check secret/x509/weak --bits 1024)                  ; exitok $? 0
-  (run; ./safe x509 check secret/x509/weak --bits 2048)                  ; exitok $? 1
-  (run; ./safe x509 check secret/x509/weak --bits 4096)                  ; exitok $? 1
-  (run; ./safe x509 check secret/x509/weak --bits 1024 \
+  (run; ${SAFE_CMD} x509 check secret/x509/weak --bits 1024)                  ; exitok $? 0
+  (run; ${SAFE_CMD} x509 check secret/x509/weak --bits 2048)                  ; exitok $? 1
+  (run; ${SAFE_CMD} x509 check secret/x509/weak --bits 4096)                  ; exitok $? 1
+  (run; ${SAFE_CMD} x509 check secret/x509/weak --bits 1024 \
                                             --bits 2048 \
                                             --bits 4096)                  ; exitok $? 0
 
   now issuing a moderately strong 2048-bit certificate
-  (run; ./safe x509 issue secret/x509/meh --bits 2048 -n meh.tld)        ; exitok $? 0
+  (run; ${SAFE_CMD} x509 issue secret/x509/meh --bits 2048 -n meh.tld)        ; exitok $? 0
   now checking that our 2048-bit certificate is actually 2048-bits
-  (run; ./safe x509 check secret/x509/meh --bits 1024)                   ; exitok $? 1
-  (run; ./safe x509 check secret/x509/meh --bits 2048)                   ; exitok $? 0
-  (run; ./safe x509 check secret/x509/meh --bits 4096)                   ; exitok $? 1
-  (run; ./safe x509 check secret/x509/meh --bits 1024 \
+  (run; ${SAFE_CMD} x509 check secret/x509/meh --bits 1024)                   ; exitok $? 1
+  (run; ${SAFE_CMD} x509 check secret/x509/meh --bits 2048)                   ; exitok $? 0
+  (run; ${SAFE_CMD} x509 check secret/x509/meh --bits 4096)                   ; exitok $? 1
+  (run; ${SAFE_CMD} x509 check secret/x509/meh --bits 1024 \
                                           --bits 2048 \
                                           --bits 4096)                   ; exitok $? 0
 
   now issuing a strong 4096-bit certificate
-  (run; ./safe x509 issue secret/x509/strong --bits 4096 -n strong.tld)  ; exitok $? 0
+  (run; ${SAFE_CMD} x509 issue secret/x509/strong --bits 4096 -n strong.tld)  ; exitok $? 0
   now checking that our 4096-bit certificate is actually 4096-bits
-  (run; ./safe x509 check secret/x509/strong --bits 1024)                ; exitok $? 1
-  (run; ./safe x509 check secret/x509/strong --bits 2048)                ; exitok $? 1
-  (run; ./safe x509 check secret/x509/strong --bits 4096)                ; exitok $? 0
-  (run; ./safe x509 check secret/x509/strong --bits 1024 \
+  (run; ${SAFE_CMD} x509 check secret/x509/strong --bits 1024)                ; exitok $? 1
+  (run; ${SAFE_CMD} x509 check secret/x509/strong --bits 2048)                ; exitok $? 1
+  (run; ${SAFE_CMD} x509 check secret/x509/strong --bits 4096)                ; exitok $? 0
+  (run; ${SAFE_CMD} x509 check secret/x509/strong --bits 1024 \
                                               --bits 2048 \
                                               --bits 4096)                ; exitok $? 0
 
   now issuing a certificate with an invalid strength
-  (run; ./safe x509 issue secret/x509/bad --bits 1000000000 -n one.mil)  ; exitok $? 1
+  (run; ${SAFE_CMD} x509 issue secret/x509/bad --bits 1000000000 -n one.mil)  ; exitok $? 1
 
   now checking the validity of multiple certificates
-  (run; ./safe x509 check secret/x509/{weak,meh,strong})                 ; exitok $? 0
-  (run; ./safe x509 check secret/x509/{weak,ENOENT,strong})              ; exitok $? 1
+  (run; ${SAFE_CMD} x509 check secret/x509/{weak,meh,strong})                 ; exitok $? 0
+  (run; ${SAFE_CMD} x509 check secret/x509/{weak,ENOENT,strong})              ; exitok $? 1
 
   now issuing a CA certificate
-  (run; ./safe x509 issue secret/x509/imposter --name x.y.z --ca)        ; exitok $? 0
+  (run; ${SAFE_CMD} x509 issue secret/x509/imposter --name x.y.z --ca)        ; exitok $? 0
   now checking that we got a CA certificate
-  (run; ./safe x509 check secret/x509/imposter --ca)                     ; exitok $? 0
+  (run; ${SAFE_CMD} x509 check secret/x509/imposter --ca)                     ; exitok $? 0
   now overwrite our CA certificate with a non-CA certificate
-  (run; ./safe x509 issue secret/x509/imposter --name a.b.c)             ; exitok $? 0
+  (run; ${SAFE_CMD} x509 issue secret/x509/imposter --name a.b.c)             ; exitok $? 0
   now checking that we no longer have a CA certificate
-  (run; ./safe x509 check secret/x509/imposter --ca)                     ; exitok $? 1
+  (run; ${SAFE_CMD} x509 check secret/x509/imposter --ca)                     ; exitok $? 1
 fi
 
 done_testing=1

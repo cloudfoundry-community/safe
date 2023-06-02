@@ -1,5 +1,5 @@
 resources:
-- name: github-vault-13
+- name: github-vault-1.13
   type: github-release
   check_every: 1h
   source:

@@ -5,13 +5,13 @@ jobs:
     plan:
     - in_parallel: 
         steps: 
-        - { get: github-vault-13,          trigger: true }
-        - { get: build,   passed: [build], trigger: true }
+        - { get: github-vault-1.13,        trigger: true}
+        - { get: build,   passed: [build], trigger: true, params: {unpack: true}}
         - { get: version, passed: [build]}
         - { get: git,     passed: [build]}
         - { get: git-ci}
     - load_var: vault_version
-      file: github-vault-13/version
+      file: github-vault-1.13/version
       format: trim
       reveal: true
     - task: test

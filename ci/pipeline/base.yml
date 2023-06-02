@@ -16,7 +16,7 @@ groups:
   - name: (( concat "build-" meta.pipeline "-releases" ))
     jobs:
       - build
-      - test
+      - test-vault-1.13
       - rc
       - shipit
   - name: (( concat "test-" meta.pipeline "-pull-requests" ))

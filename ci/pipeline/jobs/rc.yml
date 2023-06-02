@@ -3,7 +3,7 @@ jobs:
     public: true
     plan:
     - in_parallel:
-        - { get: git,     trigger: true,  passed: [test] }
+        - { get: git,     trigger: true,  passed: [test-vault-1.13] }
         - { get: version, trigger: true, params: {pre: rc} }
     - put: shipit-version
       params: {file: version/number}

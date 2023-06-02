@@ -3,6 +3,7 @@ DESTDIR        ?=/usr/local
 RELEASE_ROOT   ?=release
 TARGETS        ?=linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 SAFE_PATH      ?=./$(PROJECT)
+TEST_PATH      ?=./ci/script/tests
 VAULT_VERSIONS ?=
 
 GO_LDFLAGS := -ldflags="-X main.Version=$(VERSION)"
@@ -16,7 +17,7 @@ build:
 	$(SAFE_PATH) -v
 
 test: $(if $(wildcard $(SAFE_PATH)),use,build)
-	./tests $(SAFE_PATH) ${VAULT_VERSIONS}
+	$(TEST_PATH) $(SAFE_PATH) ${VAULT_VERSIONS}
 
 install: build
 	mkdir -p $(DESTDIR)/bin

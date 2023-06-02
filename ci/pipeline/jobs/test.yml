@@ -1,25 +1,23 @@
 jobs:
-  - name: test
+  - name: test-vault1.13
     public: true
-    serial: true
+    serial: false
     plan:
-    - { get: git, trigger: true }
+    - in_parallel: 
+      steps: 
+      - { get: github-vault-13, trigger: true }
+      - { get: build, trigger: true }
+      - { get: git }
+      - { get: git-ci}
+    - load_var: vault_version
+      file_path: github-vault-13/tag
+      format: trim
+      reveal: true
     - task: test
-      config:
-        platform: linux
-        image_resource:
-          type: registry-image
-          source:
-            repository: (( grab meta.image.name ))
-            tag:        (( grab meta.image.tag ))
-        inputs:
-          - name: git
-            path: (( concat "gopath/src/" meta.go.module ))
-        run:
-          path: (( concat "./gopath/src/" meta.go.module "/ci/scripts/test" ))
-          args: []
-        params:
-          MODULE: (( grab meta.go.module ))
+      file: git-ci/ci/tasks/test.yml
+      params:
+        PROJECT: (( grab meta.go.project ))
+        VAULT_VERSIONS: ((.:vault_version))
     on_failure:
       put: notify
       params:

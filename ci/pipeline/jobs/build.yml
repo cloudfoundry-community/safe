@@ -10,7 +10,7 @@ jobs:
   - task: build
     file: git-ci/ci/tasks/build.yml
     params:
-      PROJECT: (( grab meta.kit ))
+      PROJECT: (( grab meta.name ))
   - put: build
     params:
       file: build/*.tar.gz

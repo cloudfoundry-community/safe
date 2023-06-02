@@ -15,6 +15,7 @@
 groups:
   - name: (( concat "build-" meta.pipeline "-releases" ))
     jobs:
+      - build
       - test
       - rc
       - shipit

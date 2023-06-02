@@ -35,8 +35,8 @@ release-all: $(RELEASES)
 define build-target
 release-$(1)/$(2)-$(PROJECT): require-VERSION
 	@echo "Building $(PROJECT) $(VERSION) ($(1)/$(2)) ..." 
-	GOOS=$(1) GOARCH=$(2) go build -o $(RELEASE_ROOT)/$(PROJECT)-$(VERSION)-$(1)-$(2) $(GO_LDFLAGS)
-	@ls -la $(RELEASE_ROOT)/$(PROJECT)-$(VERSION)-$(1)-$(2)
+	GOOS=$(1) GOARCH=$(2) go build -o $(RELEASE_ROOT)/$(PROJECT)-$(VERSION)-$(1)-$(2)$(if $(patsubst windows,,$(1)),,.exe) $(GO_LDFLAGS)
+	@ls -la $(RELEASE_ROOT)/$(PROJECT)-$(VERSION)-$(1)-$(2)$(if $(patsubst windows,,$(1)),,.exe)
 	@echo ""
 endef
 

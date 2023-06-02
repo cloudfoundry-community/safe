@@ -31,7 +31,7 @@ cd "$REPO_ROOT"
 go version; echo; echo
 make clean release-all VERSION=$VERSION PROJECT=$PROJECT
 cd release
-tar -zxvf ../../$BUILD_ROOT/$PROJECT-$VERSION.tar.gz *
+tar -zcvf ../../$BUILD_ROOT/$PROJECT-$VERSION.tar.gz $PROJECT-$VERSION-*
 
 echo
 echo "================================================================================"

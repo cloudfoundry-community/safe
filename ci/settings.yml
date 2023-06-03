@@ -19,12 +19,13 @@ meta:
     secret_key: ((aws.secret_access_key))
 
   github:
-    owner:  cloudfoundry-community
-    repo:   safe
-    branch: develop
-    main-branch: main
-    private_key:  ((github.private_key))
-    access_token: ((github.access_token))
+    owner:           cloudfoundry-community
+    repo:            safe
+    branch:          develop
+    main-branch:     main
+    private_key:     ((github.private_key))
+    access_token:    ((github.access_token))
+    access_token_rw: ((github.access_token_rw))
 
   slack:
     webhook: ((slack.webhook))

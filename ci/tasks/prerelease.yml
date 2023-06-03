@@ -23,9 +23,9 @@ params:
   NOTIFICATION_OUT: notifications
   DEVELOP_BRANCH:   develop
   RELEASE_BRANCH:   main
-  GITHUB_OWNER:     genesis-community
-  GIT_EMAIL:        genesis-ci@rubidiumstudios.com
-  GIT_NAME:         Genesis CI Bot
+  GITHUB_OWNER:     cloudfoundry-community
+  GIT_EMAIL:        ci@cloudfoundry-community.org
+  GIT_NAME:         Cloudfoundry Community CI Bot
 
 run:
   path: git-ci/ci/scripts/release

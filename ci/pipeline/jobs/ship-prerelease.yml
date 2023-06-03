@@ -5,7 +5,7 @@ jobs:
   plan:
   - do:
     - in_parallel:
-      - { get: build,   passed: [build], params: {unpack: true}}
+      - { get: build,   passed: [build]}
       - { get: version, passed: [build]}
       - { get: git,     passed: [build]}
       - { get: git-ci }
@@ -35,7 +35,6 @@ jobs:
     on_failure:
       put: notify
       params:
-        channel:  (( grab meta.slack.channel ))
         username: (( grab meta.slack.username ))
         icon_url: (( grab meta.slack.icon ))
         text:    '(( concat meta.slack.fail_url " " meta.pipeline ": ship prerelease job failed" ))'

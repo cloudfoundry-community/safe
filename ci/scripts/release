@@ -68,7 +68,7 @@ if [[ -n "$PRERELEASE" ]] ; then
   echo "$(cat git/.git/ref)" "-> ${RELEASE_ROOT}/commit (pre-release)"
   cp    git/.git/ref            "${RELEASE_ROOT}/commit"
 fi
-cp -av "${BUILD_ROOT}/${PROJECT}-${VERSION}"-* "${RELEASE_ROOT}/artifacts"
+tar -zxvf "${BUILD_ROOT}/${PROJECT}-${VERSION}".tar.gz -C "${RELEASE_ROOT}/artifacts"
 
 header "Release Notes for v${VERSION}"
 header="$(sed -i -e '1{w /dev/stdout' -e 'd}' "${RELEASE_NOTES_PATH}")"

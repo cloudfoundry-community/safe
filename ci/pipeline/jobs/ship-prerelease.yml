@@ -5,7 +5,7 @@ jobs:
   plan:
   - do:
     - in_parallel:
-      - { get: build,   passed: [build]}
+      - { get: build,   passed: [build], params: {unpack: true}}
       - { get: version, passed: [build]}
       - { get: git,     passed: [build]}
       - { get: git-ci }

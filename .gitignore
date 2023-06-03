@@ -1,6 +1,6 @@
 safe*
 !docs/safe*
-release
+/release
 ci/credentials.yml
 /t
 /vaults

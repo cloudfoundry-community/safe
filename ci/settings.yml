@@ -21,6 +21,8 @@ meta:
   github:
     owner:  cloudfoundry-community
     repo:   safe
+    branch: develop
+    main-branch: main
     private_key:  ((github.private_key))
     access_token: ((github.access_token))
 

@@ -16,13 +16,14 @@ groups:
   - name: (( concat "build-" meta.pipeline "-releases" ))
     jobs:
       - build
+      - ship-prerelease
       - test-vault-1.9
       - test-vault-1.10
       - test-vault-1.11
       - test-vault-1.12
       - test-vault-1.13
-      - rc
-      - shipit
+      - prepare
+      - ship-release
   - name: (( concat "test-" meta.pipeline "-pull-requests" ))
     jobs:
       - test-pr
@@ -65,6 +66,12 @@ meta:
     branch:       develop
     private_key:  (( param "Please generate an SSH Deployment Key for this repo and specify it here" ))
     access_token: (( param "Please generate a Personal Access Token and specify it here" ))
+    release_notes:
+      repo:       "ci-release-notes"
+      branch:     "main"
+      file:       (( concat meta.name "-release-notes.md" ))
+      uri:        (( concat "git@github.com:"  meta.github.owner "/" meta.github.release_notes.repo ))
+      edit:       (( concat "https://github.com/" meta.github.owner "/"  meta.github.release_notes.repo "/edit/"  meta.github.release_notes.branch "/" meta.github.release_notes.file ))
 
   slack:
     webhook:       (( param "Please specify your Slack Incoming Webhook Integration URL" ))

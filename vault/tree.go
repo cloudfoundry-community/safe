@@ -7,9 +7,9 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/cloudfoundry-community/goutils/tree"
 	"github.com/cloudfoundry-community/vaultkv"
 	"github.com/jhunt/go-ansi"
-	"github.com/starkandwayne/goutils/tree"
 )
 
 // This is a synchronized queue that specifically works with our tree algorithm,

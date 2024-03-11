@@ -30,8 +30,8 @@ safe in homebrew core is outdated, incorrect, and unmaintained.
 We maintain our own tap, which you are encouraged to use instead:
 
 ```
-brew tap starkandwayne/cf
-brew install starkandwayne/cf/safe
+brew tap cloudfoundry-community/cf
+brew install cloudfoundry-community/cf/safe
 ```
 
 

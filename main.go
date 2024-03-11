@@ -33,9 +33,9 @@ import (
 	env "github.com/jhunt/go-envirotron"
 	"gopkg.in/yaml.v2"
 
-	"github.com/starkandwayne/safe/prompt"
-	"github.com/starkandwayne/safe/rc"
-	"github.com/starkandwayne/safe/vault"
+	"github.com/cloudfoundry-community/safe/prompt"
+	"github.com/cloudfoundry-community/safe/rc"
+	"github.com/cloudfoundry-community/safe/vault"
 
 	uuid "github.com/pborman/uuid"
 )

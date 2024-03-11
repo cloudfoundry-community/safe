@@ -1,9 +1,9 @@
 package vault_test
 
 import (
+	"github.com/cloudfoundry-community/safe/vault"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
-	"github.com/starkandwayne/safe/vault"
 )
 
 var _ = Describe("Utils", func() {

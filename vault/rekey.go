@@ -6,9 +6,9 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/cloudfoundry-community/safe/prompt"
 	"github.com/cloudfoundry-community/vaultkv"
 	"github.com/jhunt/go-ansi"
-	"github.com/starkandwayne/safe/prompt"
 	"golang.org/x/crypto/ssh/terminal"
 )
 

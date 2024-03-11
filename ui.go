@@ -8,8 +8,8 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/cloudfoundry-community/safe/prompt"
 	"github.com/jhunt/go-ansi"
-	"github.com/starkandwayne/safe/prompt"
 )
 
 func warn(warning string, args ...interface{}) {

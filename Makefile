@@ -46,4 +46,4 @@ $(foreach target,$(TARGETS),$(eval $(call build-target,$(word 1, $(subst /, ,$(t
 clean:
 	rm -rf $(SAFE_PATH) $(RELEASE_ROOT) 
 
-.DEFAULT_GOAL := release-al
+.DEFAULT_GOAL := release-all

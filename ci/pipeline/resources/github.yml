@@ -5,5 +5,5 @@ resources:
   source:
     user:         (( grab meta.github.owner ))
     repository:   (( grab meta.github.repo ))
-    access_token: (( grab meta.github.access_token ))
+    access_token: (( grab meta.github.access_token_rw || meta.github.access_token ))
 

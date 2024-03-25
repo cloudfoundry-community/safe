@@ -338,7 +338,7 @@ my $last_release = get_latest_commit_tag($last_release_path);
 header "Building Release Notes from commit messages since $last_release";
 my ($release_notes,$commits) = parse_commits($rc_path, $last_release_path);
 
-my $software_updates;
+my $software_updates = '';
 unless ($ENV{NO_RELEASE_VERSIONS}) {
 	header "Calculating Release Changes since $last_release";
 	$software_updates = calculate_software_updates($rc_path,$last_release_path);

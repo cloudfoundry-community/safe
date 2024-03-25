@@ -25,6 +25,8 @@ jobs:
         GIT_NAME:               (( grab meta.git.name ))
         GIT_EMAIL:              (( grab meta.git.email ))
         PROJECT:                (( grab meta.name ))
+        NO_UPSTREAM_SYNC:       true
+        NO_RELEASE_VERSIONS:    true
     - put: release-notes
       params:
         rebase: true

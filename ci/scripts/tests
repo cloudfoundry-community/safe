@@ -88,7 +88,7 @@ testing() {
   if [[ -t 1 ]]; then
     echo -e "[\033[1;36m$version\033[0m|\033[1;35mkv$kvversion\033[0m] \033[1;34m$*\033[0m"
   else
-    echo "[$v] $*"
+    echo "[$version] $*"
   fi
   test="$*"
 }

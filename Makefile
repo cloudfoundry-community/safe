@@ -3,7 +3,7 @@ DESTDIR        ?=/usr/local
 RELEASE_ROOT   ?=release
 TARGETS        ?=linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 SAFE_PATH      ?=./$(PROJECT)
-TEST_PATH      ?=./ci/script/tests
+TEST_PATH      ?=./ci/scripts/tests
 VAULT_VERSIONS ?=
 
 GO_LDFLAGS := -ldflags="-X main.Version=$(VERSION)"

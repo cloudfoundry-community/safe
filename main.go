@@ -2117,7 +2117,9 @@ can be useful when you're trying to get your bearings. If '-q' is given, safe
 will not inspect each key in a v1 v2 mount backend to see if it has been marked
 as deleted. This may cause keys which would 404 in an attempt to read them to
 appear in the tree, but is often considerably quicker for larger vaults. This
-flag does nothing for kv v1 mounts.
+flag does nothing for kv v1 mounts. If '--keys' is given, the keys within each
+secret will be displayed inline with the secret name in the format:
+<secret-name>: key1, key2, key3
 `,
 	}, func(command string, args ...string) error {
 		rc.Apply(opt.UseTarget)

@@ -618,9 +618,9 @@ func (s Secrets) printableTree(color, secrets bool, index int) *tree.Node {
 	}
 	isSecret := index == len(firstSplit)-1
 
-	var dirFmt, secFmt, keyFmt = "%s/", "%s", ":%s"
+	var dirFmt, secFmt = "%s/", "%s"
 	if color {
-		dirFmt, secFmt, keyFmt = "@B{%s/}", "@G{%s}", "@Y{:%s}"
+		dirFmt, secFmt = "@B{%s/}", "@G{%s}"
 	}
 
 	if isSecret {
@@ -634,9 +634,20 @@ func (s Secrets) printableTree(color, secrets bool, index int) *tree.Node {
 	}
 
 	if isSecret {
-		if len(s[0].Versions) > 0 {
-			for _, k := range s[0].Versions[len(s[0].Versions)-1].Data.Keys() {
-				ret.Append(tree.Node{Name: ansi.Sprintf(keyFmt, k)})
+		if len(s[0].Versions) > 0 && len(s[0].Versions[len(s[0].Versions)-1].Data.Keys()) > 0 {
+			keys := s[0].Versions[len(s[0].Versions)-1].Data.Keys()
+			sort.Strings(keys) // Sort keys for consistent output
+			
+			// Create child nodes for each key instead of appending to the name
+			for _, key := range keys {
+				keyName := fmt.Sprintf(":%s", key)
+				if color {
+					keyName = ansi.Sprintf("@Y{%s}", keyName)
+				}
+				keyNode := &tree.Node{
+					Name: keyName,
+				}
+				ret.Append(*keyNode)
 			}
 		}
 	}

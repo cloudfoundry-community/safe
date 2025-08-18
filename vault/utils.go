@@ -1,9 +1,7 @@
 package vault
 
 import (
-	"os"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 )
@@ -96,13 +94,3 @@ func Canonicalize(p string) string {
 	return p
 }
 
-func userHomeDir() string {
-	if runtime.GOOS == "windows" {
-		home := os.Getenv("USERPROFILE")
-		if home == "" {
-			home = os.Getenv("HOMEDRIVE") + os.Getenv("HOMEPATH")
-		}
-		return home
-	}
-	return os.Getenv("HOME")
-}

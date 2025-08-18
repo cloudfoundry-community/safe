@@ -9,14 +9,14 @@ import (
 	"github.com/cloudfoundry-community/safe/prompt"
 	"github.com/cloudfoundry-community/vaultkv"
 	"github.com/jhunt/go-ansi"
-	"golang.org/x/crypto/ssh/terminal"
+	"golang.org/x/term"
 )
 
-var termState *terminal.State
+var termState *term.State
 
 func (v *Vault) cancelRekey() {
 	if termState != nil {
-		terminal.Restore(int(os.Stdin.Fd()), termState)
+		term.Restore(int(os.Stdin.Fd()), termState)
 	}
 	err := v.client.Client.RekeyCancel()
 	if err != nil {
@@ -30,7 +30,7 @@ func (v *Vault) cancelRekey() {
 func (v *Vault) ReKey(unsealKeyCount, numToUnseal int, pgpKeys []string) ([]string, error) {
 	err := v.client.Client.RekeyCancel()
 	if err != nil {
-		return nil, fmt.Errorf("An error occurred when trying to cancel potentially preexisting rekey: %s", err)
+		return nil, fmt.Errorf("an error occurred when trying to cancel potentially preexisting rekey: %s", err)
 	}
 
 	backup := len(pgpKeys) > 0
@@ -41,7 +41,7 @@ func (v *Vault) ReKey(unsealKeyCount, numToUnseal int, pgpKeys []string) ([]stri
 		Backup:    backup,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("An error occurred when starting a new rekey operation: %s", err)
+		return nil, fmt.Errorf("an error occurred when starting a new rekey operation: %s", err)
 	}
 
 	// we successfully started a rekey, we should now cancel on failure, unless we finish rekeying
@@ -55,14 +55,14 @@ func (v *Vault) ReKey(unsealKeyCount, numToUnseal int, pgpKeys []string) ([]stri
 	signal.Ignore(os.Interrupt, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
 	signal.Notify(sighandler, os.Interrupt, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
-		for _ = range sighandler {
+		for range sighandler {
 			v.cancelRekey()
 			os.Exit(1)
 		}
 	}()
 
-	if terminal.IsTerminal(int(os.Stdin.Fd())) {
-		termState, err = terminal.GetState(int(os.Stdin.Fd()))
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		termState, err = term.GetState(int(os.Stdin.Fd()))
 		if err != nil {
 			return nil, err
 		}
@@ -76,10 +76,10 @@ func (v *Vault) ReKey(unsealKeyCount, numToUnseal int, pgpKeys []string) ([]stri
 
 	rekeyDone, err := rekey.Submit(givenKeys...)
 	if err != nil {
-		return nil, fmt.Errorf("Key submission failed: %s", err)
+		return nil, fmt.Errorf("key submission failed: %s", err)
 	}
 	if !rekeyDone {
-		return nil, fmt.Errorf("The rekey did not finish (is somebody else trying to rekey at the same time?)")
+		return nil, fmt.Errorf("the rekey did not finish (is somebody else trying to rekey at the same time?)")
 	}
 
 	// vault should be rekeyed by here, as our progress met the requirement

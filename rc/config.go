@@ -1,7 +1,6 @@
 package rc
 
 import (
-	"io/ioutil"
 	"os"
 	"os/signal"
 	"runtime"
@@ -87,7 +86,7 @@ func (legacy *oldConfig) convert() Config {
 func Read() Config {
 	var c Config
 
-	b, err := ioutil.ReadFile(saferc())
+	b, err := os.ReadFile(saferc())
 	if err != nil {
 		return Config{Version: 1}
 	}
@@ -123,7 +122,7 @@ func (c *Config) Write() error {
 		return err
 	}
 
-	err = ioutil.WriteFile(saferc(), b, 0600)
+	err = os.WriteFile(saferc(), b, 0600)
 	if err != nil {
 		return err
 	}
@@ -155,18 +154,18 @@ func (c *Config) Write() error {
 		return err
 	}
 	if c.Options.ManageVaultToken {
-		ioutil.WriteFile(fmt.Sprintf("%s/.vault-token", userHomeDir()), []byte(v.Token), 0600)
+		os.WriteFile(fmt.Sprintf("%s/.vault-token", userHomeDir()), []byte(v.Token), 0600)
 	}
 
-	return ioutil.WriteFile(svtoken(), b, 0600)
+	return os.WriteFile(svtoken(), b, 0600)
 }
 
-//Returns the path of the file that the certificates were written into
+// Returns the path of the file that the certificates were written into
 func writeTempCACerts(certs []string) (string, error) {
 	cleanupLock.Lock()
 	defer cleanupLock.Unlock()
 
-	caFile, err := ioutil.TempFile("", "safe-ca-cert")
+	caFile, err := os.CreateTemp("", "safe-ca-cert")
 	if err != nil {
 		return "", fmt.Errorf("Could not write CAs to a temp file: %s", err.Error())
 	}
@@ -181,7 +180,7 @@ func writeTempCACerts(certs []string) (string, error) {
 	toCleanup = append(toCleanup, caFile.Name())
 
 	go func() {
-		sigChan := make(chan os.Signal)
+		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, os.Interrupt)
 		<-sigChan
 		Cleanup()
@@ -217,7 +216,7 @@ func (c *Config) Apply(use string) error {
 	} else {
 		if os.Getenv("VAULT_TOKEN") == "" {
 			tokenFile := fmt.Sprintf("%s/.vault-token", os.Getenv("HOME"))
-			b, err := ioutil.ReadFile(tokenFile)
+			b, err := os.ReadFile(tokenFile) // #nosec G304 - Reading user's vault token from standard location
 			if err == nil {
 				os.Setenv("VAULT_TOKEN", strings.TrimSpace(string(b)))
 			}
@@ -348,7 +347,7 @@ func (c *Config) Vault(which string) (*Vault, error) {
 	return v, nil
 }
 
-//Cleanup will clean up any temporary files that the rc package may have made.
+// Cleanup will clean up any temporary files that the rc package may have made.
 // Cleanup is thread-safe and can be called multiple times.
 func Cleanup() {
 	cleanupLock.Lock()

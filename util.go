@@ -10,27 +10,45 @@ import (
 func duration(s string) (time.Duration, error) {
 	re := regexp.MustCompile(`^(\d+)([HhDdMmYy])$`)
 	if m := re.FindStringSubmatch(s); m != nil {
-		v, err := strconv.ParseUint(m[1], 10, 0)
+		v, err := strconv.ParseUint(m[1], 10, 64)
 		if err != nil {
 			return 0, err
 		}
 
+		// Check for overflow before multiplication
+		const maxDuration = int64(^time.Duration(0) >> 1)
+		
 		switch m[2] {
 		case "H", "h":
+			if v > uint64(maxDuration/time.Hour) {
+				return 0, fmt.Errorf("duration overflow: %d hours is too large", v)
+			}
 			return time.Hour * time.Duration(v), nil
 		case "D", "d":
-			return time.Hour * time.Duration(24*v), nil
+			hoursPerDay := uint64(24)
+			if v > uint64(maxDuration/time.Hour)/hoursPerDay {
+				return 0, fmt.Errorf("duration overflow: %d days is too large", v)
+			}
+			return time.Hour * time.Duration(hoursPerDay*v), nil
 		case "M", "m":
-			return time.Hour * time.Duration(24*30*v), nil
+			hoursPerMonth := uint64(24 * 30)
+			if v > uint64(maxDuration/time.Hour)/hoursPerMonth {
+				return 0, fmt.Errorf("duration overflow: %d months is too large", v)
+			}
+			return time.Hour * time.Duration(hoursPerMonth*v), nil
 		case "Y", "y":
-			return time.Hour * time.Duration(24*365*v), nil
+			hoursPerYear := uint64(24 * 365)
+			if v > uint64(maxDuration/time.Hour)/hoursPerYear {
+				return 0, fmt.Errorf("duration overflow: %d years is too large", v)
+			}
+			return time.Hour * time.Duration(hoursPerYear*v), nil
 		}
 	}
 	return 0, fmt.Errorf("unrecognized time spec '%s'", s)
 }
 
 func uniq(l []string) []string {
-	seen := make(map[string] bool)
+	seen := make(map[string]bool)
 	u := make([]string, 0)
 
 	for _, s := range l {

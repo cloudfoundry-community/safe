@@ -1,7 +1,7 @@
 package vault
 
 import (
-	"crypto/md5"
+	"crypto/md5" // #nosec G501 - MD5 used for SSH fingerprint display only, not security
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -32,7 +32,7 @@ func sshkey(bits int) (string, string, string, error) {
 	public := ssh.MarshalAuthorizedKey(pubkey)
 
 	var fp []string
-	f := []byte(fmt.Sprintf("%x", md5.Sum(pubkey.Marshal())))
+	f := []byte(fmt.Sprintf("%x", md5.Sum(pubkey.Marshal()))) // #nosec G401 - MD5 used for SSH fingerprint display only
 	for i := 0; i < len(f); i += 2 {
 		fp = append(fp, string(f[i:i+2]))
 	}

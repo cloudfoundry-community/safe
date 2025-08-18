@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"net/url"
@@ -81,11 +80,11 @@ func NewProxyRouter() (*ProxyRouter, error) {
 func openSOCKS5Helper(toOpen, knownHostsFile string, skipHostKeyValidation bool) (string, error) {
 	u, err := url.Parse(toOpen)
 	if err != nil {
-		return "", fmt.Errorf("Could not parse proxy URL (%s): %s", toOpen, err)
+		return "", fmt.Errorf("could not parse proxy URL (%s): %s", toOpen, err)
 	}
 
 	if u.User == nil {
-		return "", fmt.Errorf("No user provided for SSH proxy")
+		return "", fmt.Errorf("no user provided for SSH proxy")
 	}
 
 	if u.Port() == "" {
@@ -99,16 +98,16 @@ func openSOCKS5Helper(toOpen, knownHostsFile string, skipHostKeyValidation bool)
 	}
 
 	if len(privateKeyPath) == 0 {
-		return "", fmt.Errorf("No private key path provided")
+		return "", fmt.Errorf("no private key path provided")
 	}
 
 	if len(privateKeyPath) > 1 {
-		return "", fmt.Errorf("More than one private key provided")
+		return "", fmt.Errorf("more than one private key provided")
 	}
 
-	privateKeyContents, err := ioutil.ReadFile(privateKeyPath[0])
+	privateKeyContents, err := os.ReadFile(privateKeyPath[0])
 	if err != nil {
-		return "", fmt.Errorf("Could not read private key file (%s): %s", privateKeyPath[0], err)
+		return "", fmt.Errorf("could not read private key file (%s): %s", privateKeyPath[0], err)
 	}
 
 	sshClient, err := StartSSHTunnel(SOCKS5SSHConfig{
@@ -119,12 +118,12 @@ func openSOCKS5Helper(toOpen, knownHostsFile string, skipHostKeyValidation bool)
 		SkipHostKeyValidation: skipHostKeyValidation,
 	})
 	if err != nil {
-		return "", fmt.Errorf("Could not start SSH tunnel: %s", err)
+		return "", fmt.Errorf("could not start SSH tunnel: %s", err)
 	}
 
 	socks5Addr, err := StartSOCKS5Server(sshClient.Dial)
 	if err != nil {
-		return "", fmt.Errorf("Could not start SOCKS5 Server: %s", err)
+		return "", fmt.Errorf("could not start SOCKS5 Server: %s", err)
 	}
 
 	return fmt.Sprintf("socks5://%s", socks5Addr), nil
@@ -154,26 +153,26 @@ type SOCKS5SSHConfig struct {
 // StartSSHTunnel makes an SSH connection according to the given config. It
 // returns an SSH client if it was successful and an error otherwise.
 func StartSSHTunnel(conf SOCKS5SSHConfig) (*ssh.Client, error) {
-	hostKeyCallback := ssh.InsecureIgnoreHostKey()
+	hostKeyCallback := ssh.InsecureIgnoreHostKey() // #nosec G106 - Default, will be overridden if SkipHostKeyValidation is false
 	var err error
 
 	if !conf.SkipHostKeyValidation {
 		if conf.KnownHostsFile == "" {
 			if os.Getenv("HOME") == "" {
-				return nil, fmt.Errorf("No home directory set and no known hosts file explicitly given; cannot validate host key")
+				return nil, fmt.Errorf("no home directory set and no known hosts file explicitly given; cannot validate host key")
 			}
 			conf.KnownHostsFile = fmt.Sprintf("%s/.ssh/known_hosts", os.Getenv("HOME"))
 		}
 
 		hostKeyCallback, err = knownHostsPromptCallback(conf.KnownHostsFile)
 		if err != nil {
-			return nil, fmt.Errorf("Error opening known_hosts file at `%s': %s", conf.KnownHostsFile, err)
+			return nil, fmt.Errorf("error opening known_hosts file at `%s': %s", conf.KnownHostsFile, err)
 		}
 	}
 
 	privateKeySigner, err := ssh.ParsePrivateKey(conf.PrivateKey)
 	if err != nil {
-		return nil, fmt.Errorf("Could not create signer for private key: %s", err)
+		return nil, fmt.Errorf("could not create signer for private key: %s", err)
 	}
 
 	sshConfig := &ssh.ClientConfig{
@@ -194,12 +193,12 @@ func StartSOCKS5Server(dialFn func(string, string) (net.Conn, error)) (string, e
 		Dial: noopDialContext(dialFn),
 	})
 	if err != nil {
-		return "", fmt.Errorf("Error starting local SOCKS5 server: %s", err)
+		return "", fmt.Errorf("error starting local SOCKS5 server: %s", err)
 	}
 
 	socks5Listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return "", fmt.Errorf("Error starting local SOCKS5 server: %s", err)
+		return "", fmt.Errorf("error starting local SOCKS5 server: %s", err)
 	}
 
 	go func() {
@@ -215,7 +214,7 @@ func StartSOCKS5Server(dialFn func(string, string) (net.Conn, error)) (string, e
 func knownHostsPromptCallback(knownHostsFile string) (ssh.HostKeyCallback, error) {
 	tmpCallback, err := knownhosts.New(knownHostsFile)
 	if err != nil {
-		return nil, fmt.Errorf("Could not handle known hosts file: %s", err)
+		return nil, fmt.Errorf("could not handle known hosts file: %s", err)
 	}
 
 	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
@@ -255,8 +254,7 @@ Please contact your system administrator.
 Add correct host key in %[3]s to get rid of this message.
 Offending %[1]s key in %[3]s:%[4]d
 %[1]s host key for %[5]s has changed and safe uses strict checking.
-Host key verification failed.
-`
+Host key verification failed`
 			return fmt.Errorf(hostKeyConflictError,
 				key.Type(), ssh.FingerprintSHA256(key), knownHostsFile, wantedKey.Line, hostname)
 		}
@@ -265,7 +263,7 @@ Host key verification failed.
 		//Let's see if we can ask the user if they want to add it
 		if !isatty.IsTerminal(os.Stderr.Fd()) || !promptAddNewKnownHost(hostname, remote, key) {
 			//If its not a terminal or the user declined, we're rejecting it
-			return fmt.Errorf("Host key verification failed: %s", err)
+			return fmt.Errorf("host key verification failed: %s", err)
 		}
 
 		err = writeKnownHosts(knownHostsFile, hostname, key)
@@ -295,14 +293,14 @@ Are you sure you want to continue connecting (yes/no)? `, hostname, remote.Strin
 
 func writeKnownHosts(knownHostsFile, hostname string, key ssh.PublicKey) error {
 	normalizedHostname := knownhosts.Normalize(hostname)
-	f, err := os.OpenFile(knownHostsFile, os.O_APPEND|os.O_RDWR, 0600)
+	f, err := os.OpenFile(knownHostsFile, os.O_APPEND|os.O_RDWR, 0600) // #nosec G304 - knownHostsFile is from user config for SSH known hosts
 	if err != nil {
-		return fmt.Errorf("Could not open `%s' for reading: %s", knownHostsFile, err)
+		return fmt.Errorf("could not open `%s' for reading: %s", knownHostsFile, err)
 	}
 
 	fileInfo, err := f.Stat()
 	if err != nil {
-		return fmt.Errorf("Could not retrieve info for file `%s': %s", knownHostsFile, err)
+		return fmt.Errorf("could not retrieve info for file `%s': %s", knownHostsFile, err)
 	}
 
 	if fileInfo.Size() != 0 {

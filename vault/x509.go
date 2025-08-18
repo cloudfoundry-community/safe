@@ -3,7 +3,7 @@ package vault
 import (
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha1"
+	"crypto/sha1" // #nosec G505 - SHA1 used for certificate fingerprint calculation per RFC standard
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -127,6 +127,7 @@ func (s Secret) X509(requireKey bool) (*X509, error) {
 
 	if s.Has("crl") {
 		v := s.Get("crl")
+		// TODO: Migrate to x509.ParseRevocationList when refactoring CRL handling
 		crl, err := x509.ParseCRL([]byte(v))
 		if err != nil {
 			return nil, fmt.Errorf("not a valid CA certificate (CRL parsing failed: %s)", err)
@@ -319,7 +320,7 @@ func HandleJointKeyUsages(usages []string) (ku x509.KeyUsage, eku []x509.ExtKeyU
 	}
 	if hasNoKeyUsage {
 		if len(usages) > 1 {
-			err = fmt.Errorf("Cannot specify not to have key usages and also to use specific key usages")
+			err = fmt.Errorf("cannot specify not to have key usages and also to use specific key usages")
 		}
 
 		return
@@ -328,7 +329,7 @@ func HandleJointKeyUsages(usages []string) (ku x509.KeyUsage, eku []x509.ExtKeyU
 	keyUsageStrs, rest := keyUsages(usages)
 	extKeyUsageStrs, rest := extendedKeyUsages(rest)
 	if len(rest) > 0 {
-		err = fmt.Errorf("Unknown key usage string(s): `%s'", strings.Join(rest, "', `"))
+		err = fmt.Errorf("unknown key usage string(s): `%s'", strings.Join(rest, "', `"))
 		return
 	}
 
@@ -600,6 +601,7 @@ func (x X509) Secret(skipIfExists bool) (*Secret, error) {
 		if x.CRL.TBSCertList.RevokedCertificates == nil {
 			x.CRL.TBSCertList.RevokedCertificates = make([]pkix.RevokedCertificate, 0)
 		}
+		// TODO: Migrate to x509.CreateRevocationList when refactoring CRL handling
 		b, err := x.Certificate.CreateCRL(rand.Reader, x.PrivateKey, x.CRL.TBSCertList.RevokedCertificates, time.Now(), time.Now().Add(10*365*24*time.Hour))
 		if err != nil {
 			return s, err
@@ -672,11 +674,11 @@ func getKeyIDFromPublicKey(key interface{}) ([]byte, error) {
 	switch k := key.(type) {
 	case *rsa.PublicKey:
 		kASN1 := x509.MarshalPKCS1PublicKey(k)
-		tmpArray := sha1.Sum(kASN1)
+		tmpArray := sha1.Sum(kASN1) // #nosec G401 - SHA1 used for certificate fingerprint calculation per RFC standard
 		ret = tmpArray[:]
 
 	default:
-		err = fmt.Errorf("Unsupported public key algorithm")
+		err = fmt.Errorf("unsupported public key algorithm")
 	}
 
 	return ret, err

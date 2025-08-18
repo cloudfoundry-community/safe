@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
+	"io"
 	"os"
 	"regexp"
 	"strings"
@@ -12,19 +12,8 @@ import (
 	"github.com/jhunt/go-ansi"
 )
 
-func warn(warning string, args ...interface{}) {
-	ansi.Fprintf(os.Stderr, "warning: @Y{%s}\n", fmt.Sprintf(warning, args...))
-}
-
-func fail(err error) {
-	if err != nil {
-		ansi.Fprintf(os.Stderr, "failed: @R{%s}\n", err)
-		os.Exit(2)
-	}
-}
-
 func parseKeyVal(key string, quiet bool) (string, string, bool, error) {
-	if strings.Index(key, "=") >= 0 {
+	if strings.Contains(key, "=") {
 		l := strings.SplitN(key, "=", 2)
 		if l[1] == "" {
 			return l[0], "", false, nil
@@ -33,16 +22,16 @@ func parseKeyVal(key string, quiet bool) (string, string, bool, error) {
 			ansi.Fprintf(os.Stderr, "%s: @G{%s}\n", l[0], l[1])
 		}
 		return l[0], l[1], false, nil
-	} else if strings.Index(key, "@") >= 0 {
+	} else if strings.Contains(key, "@") {
 		l := strings.SplitN(key, "@", 2)
 		if l[1] == "" {
-			return l[0], "", true, fmt.Errorf("No file specified: expecting %s@<filename>", l[0])
+			return l[0], "", true, fmt.Errorf("no file specified: expecting %s@<filename>", l[0])
 		}
 
 		if l[1] == "-" {
-			b, err := ioutil.ReadAll(os.Stdin)
+			b, err := io.ReadAll(os.Stdin)
 			if err != nil {
-				return l[0], "", true, fmt.Errorf("Failed to read from standard input: %s", err)
+				return l[0], "", true, fmt.Errorf("failed to read from standard input: %s", err)
 			}
 			if !quiet {
 				ansi.Fprintf(os.Stderr, "%s: <@M{$stdin}\n", l[0])
@@ -50,9 +39,9 @@ func parseKeyVal(key string, quiet bool) (string, string, bool, error) {
 			return l[0], string(b), false, nil
 		}
 
-		b, err := ioutil.ReadFile(l[1])
+		b, err := os.ReadFile(l[1])
 		if err != nil {
-			return l[0], "", true, fmt.Errorf("Failed to read contents of %s: %s", l[1], err)
+			return l[0], "", true, fmt.Errorf("failed to read contents of %s: %s", l[1], err)
 		}
 		if !quiet {
 			ansi.Fprintf(os.Stderr, "%s: <@C{%s}\n", l[0], l[1])
@@ -85,7 +74,6 @@ func pr(label string, confirm bool, secure bool) string {
 type table struct {
 	headers []string
 	rows    [][]string
-	numCols int
 }
 
 func (t *table) setHeader(headers ...string) {

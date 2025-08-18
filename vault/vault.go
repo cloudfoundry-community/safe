@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"os"
@@ -62,7 +61,7 @@ func NewVault(conf VaultConfig) (*Vault, error) {
 
 	proxyRouter, err := NewProxyRouter()
 	if err != nil {
-		return nil, fmt.Errorf("Error setting up proxy: %s", err)
+		return nil, fmt.Errorf("error setting up proxy: %s", err)
 	}
 
 	return &Vault{
@@ -75,7 +74,7 @@ func NewVault(conf VaultConfig) (*Vault, error) {
 					Proxy: proxyRouter.Proxy,
 					TLSClientConfig: &tls.Config{
 						RootCAs:            conf.CACerts,
-						InsecureSkipVerify: conf.SkipVerify,
+						InsecureSkipVerify: conf.SkipVerify, // #nosec G402 - User-controlled via config for development/testing
 					},
 					MaxIdleConnsPerHost: 100,
 				},
@@ -119,7 +118,7 @@ func (v *Vault) Curl(method string, path string, body []byte) (*http.Response, e
 	path = Canonicalize(path)
 	u, err := url.Parse(path)
 	if err != nil {
-		return nil, fmt.Errorf("Could not parse input path: %s", err.Error())
+		return nil, fmt.Errorf("could not parse input path: %s", err.Error())
 	}
 
 	query, err := url.ParseQuery(u.RawQuery)
@@ -302,7 +301,7 @@ func (v *Vault) verifySecretState(path string, opts verifyOpts) error {
 		}
 
 	default:
-		return fmt.Errorf("Unsupported mount version: %d", mountV)
+		return fmt.Errorf("unsupported mount version: %d", mountV)
 	}
 	return nil
 }
@@ -373,7 +372,7 @@ func (v *Vault) canSemanticallyDelete(path string) error {
 	}
 
 	if len(s.data) != 1 || !s.Has(key) {
-		return fmt.Errorf("Cannot delete specific non-isolated key of non-latest version")
+		return fmt.Errorf("cannot delete specific non-isolated key of non-latest version")
 	}
 
 	return nil
@@ -503,7 +502,7 @@ func (v *Vault) DestroyVersions(path string, versions []uint) error {
 func (v *Vault) Undelete(path string) error {
 	secret, key, version := ParsePath(path)
 	if key != "" {
-		return fmt.Errorf("Cannot undelete specific key (%s)", path)
+		return fmt.Errorf("cannot undelete specific key (%s)", path)
 	}
 
 	respVersions, err := v.Versions(secret)
@@ -521,7 +520,10 @@ func (v *Vault) Undelete(path string) error {
 		return destroyedErr
 	}
 
-	idx := int(uint(version) - firstVersion)
+	if version < firstVersion {
+		return fmt.Errorf("version %d is less than first version %d", version, firstVersion)
+	}
+	idx := int(version - firstVersion)
 	if idx >= len(respVersions) {
 		return fmt.Errorf("version %d of `%s' does not yet exist", version, secret)
 	}
@@ -619,17 +621,17 @@ func (v *Vault) Copy(oldpath, newpath string, opts MoveCopyOpts) error {
 	dstPath, dstKey, dstVersion := ParsePath(newpath)
 
 	if dstVersion != 0 {
-		return fmt.Errorf("Copying a secret to a specific destination version is not supported")
+		return fmt.Errorf("copying a secret to a specific destination version is not supported")
 	}
 
 	if opts.Deep && srcVersion != 0 {
-		return fmt.Errorf("Performing a deep copy of a specified version is not supported")
+		return fmt.Errorf("performing a deep copy of a specified version is not supported")
 	}
 
 	var toWrite []*Secret
 	if srcKey != "" { //Just a single key.
 		if opts.Deep {
-			return fmt.Errorf("Cannot take deep copy of a specific key")
+			return fmt.Errorf("cannot take deep copy of a specific key")
 		}
 		srcSecret, err := v.Read(oldpath)
 		if err != nil {
@@ -657,7 +659,7 @@ func (v *Vault) Copy(oldpath, newpath string, opts MoveCopyOpts) error {
 		toWrite[0].Set(dstKey, srcSecret.Get(srcKey), false)
 	} else {
 		if dstKey != "" {
-			return fmt.Errorf("Cannot move full secret `%s` into specific key `%s`", oldpath, newpath)
+			return fmt.Errorf("cannot move full secret `%s` into specific key `%s`", oldpath, newpath)
 		}
 		t, err := v.ConstructSecrets(srcPath, TreeOpts{
 			FetchKeys:           true,
@@ -763,7 +765,7 @@ func (v *Vault) Move(oldpath, newpath string, opts MoveCopyOpts) error {
 
 	err := v.canSemanticallyDelete(oldpath)
 	if err != nil {
-		return fmt.Errorf("Can't move `%s': %s. Did you mean cp?", oldpath, err)
+		return fmt.Errorf("can't move `%s': %s. Did you mean cp?", oldpath, err)
 	}
 	if err != nil {
 		return err
@@ -776,6 +778,9 @@ func (v *Vault) Move(oldpath, newpath string, opts MoveCopyOpts) error {
 
 	if opts.Deep && opts.DeletedVersions {
 		err = v.client.DestroyAll(oldpath)
+		if err != nil {
+			return err
+		}
 	} else {
 		err = v.Delete(oldpath, DeleteOpts{})
 		if err != nil {
@@ -789,29 +794,6 @@ type mountpoint struct {
 	Type        string                 `json:"type"`
 	Description string                 `json:"description"`
 	Config      map[string]interface{} `json:"config"`
-}
-
-func convertMountpoint(o interface{}) (mountpoint, bool) {
-	mount := mountpoint{}
-	if m, ok := o.(map[string]interface{}); ok {
-		if t, ok := m["type"].(string); ok {
-			mount.Type = t
-		} else {
-			return mount, false
-		}
-		if d, ok := m["description"].(string); ok {
-			mount.Description = d
-		} else {
-			return mount, false
-		}
-		if c, ok := m["config"].(map[string]interface{}); ok {
-			mount.Config = c
-		} else {
-			return mount, false
-		}
-		return mount, true
-	}
-	return mount, false
 }
 
 func (v *Vault) Mounts(typ string) ([]string, error) {
@@ -868,7 +850,7 @@ func (v *Vault) Mount(typ, path string, params map[string]interface{}) error {
 		}
 
 		if res.StatusCode != 204 {
-			body, err := ioutil.ReadAll(res.Body)
+			body, err := io.ReadAll(res.Body)
 			if err != nil {
 				return err
 			}
@@ -887,7 +869,7 @@ func (v *Vault) Mount(typ, path string, params map[string]interface{}) error {
 		}
 
 		if res.StatusCode != 204 {
-			body, err := ioutil.ReadAll(res.Body)
+			body, err := io.ReadAll(res.Body)
 			if err != nil {
 				return err
 			}
@@ -908,7 +890,7 @@ func (v *Vault) RetrievePem(backend, path string) ([]byte, error) {
 		return nil, err
 	}
 
-	body, err := ioutil.ReadAll(res.Body)
+	body, err := io.ReadAll(res.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -924,7 +906,7 @@ func DecodeErrorResponse(body []byte) error {
 	var raw map[string]interface{}
 
 	if err := json.Unmarshal(body, &raw); err != nil {
-		return fmt.Errorf("Received non-200 with non-JSON payload:\n%s\n", body)
+		return fmt.Errorf("received non-200 with non-JSON payload:\n%s", body)
 	}
 
 	if rawErrors, ok := raw["errors"]; ok {
@@ -935,12 +917,12 @@ func DecodeErrorResponse(body []byte) error {
 					errors = append(errors, err)
 				}
 			}
-			return fmt.Errorf(strings.Join(errors, "\n"))
+			return fmt.Errorf("%s", strings.Join(errors, "\n"))
 		} else {
-			return fmt.Errorf("Received unexpected format of Vault error messages:\n%v\n", errors)
+			return fmt.Errorf("received unexpected format of Vault error messages:\n%v", errors)
 		}
 	} else {
-		return fmt.Errorf("Received non-200 with no error messagess:\n%v\n", raw)
+		return fmt.Errorf("received non-200 with no error messagess:\n%v", raw)
 	}
 }
 
@@ -966,13 +948,13 @@ func (v *Vault) CreateSignedCertificate(backend, role, path string, params CertO
 		return err
 	}
 
-	body, err := ioutil.ReadAll(res.Body)
+	body, err := io.ReadAll(res.Body)
 	if err != nil {
 		return err
 	}
 
 	if res.StatusCode >= 400 {
-		return fmt.Errorf("Unable to create certificate %s: %s\n", params.CN, DecodeErrorResponse(body))
+		return fmt.Errorf("unable to create certificate %s: %s", params.CN, DecodeErrorResponse(body))
 	}
 
 	var raw map[string]interface{}
@@ -983,22 +965,22 @@ func (v *Vault) CreateSignedCertificate(backend, role, path string, params CertO
 				var c, k, s interface{}
 				var ok bool
 				if c, ok = data["certificate"]; !ok {
-					return fmt.Errorf("No certificate found when issuing certificate %s:\n%v\n", params.CN, data)
+					return fmt.Errorf("no certificate found when issuing certificate %s:\n%v", params.CN, data)
 				}
 				if cert, ok = c.(string); !ok {
-					return fmt.Errorf("Invalid data type for certificate %s:\n%v\n", params.CN, data)
+					return fmt.Errorf("invalid data type for certificate %s:\n%v", params.CN, data)
 				}
 				if k, ok = data["private_key"]; !ok {
-					return fmt.Errorf("No private_key found when issuing certificate %s:\n%v\n", params.CN, data)
+					return fmt.Errorf("no private_key found when issuing certificate %s:\n%v", params.CN, data)
 				}
 				if key, ok = k.(string); !ok {
-					return fmt.Errorf("Invalid data type for private_key %s:\n%v\n", params.CN, data)
+					return fmt.Errorf("invalid data type for private_key %s:\n%v", params.CN, data)
 				}
 				if s, ok = data["serial_number"]; !ok {
-					return fmt.Errorf("No serial_number found when issuing certificate %s:\n%v\n", params.CN, data)
+					return fmt.Errorf("no serial_number found when issuing certificate %s:\n%v", params.CN, data)
 				}
 				if serial, ok = s.(string); !ok {
-					return fmt.Errorf("Invalid data type for serial_number %s:\n%v\n", params.CN, data)
+					return fmt.Errorf("invalid data type for serial_number %s:\n%v", params.CN, data)
 				}
 
 				secret, err := v.Read(path)
@@ -1023,13 +1005,13 @@ func (v *Vault) CreateSignedCertificate(backend, role, path string, params CertO
 				}
 				return v.Write(path, secret)
 			} else {
-				return fmt.Errorf("Invalid response datatype requesting certificate %s:\n%v\n", params.CN, d)
+				return fmt.Errorf("invalid response datatype requesting certificate %s:\n%v", params.CN, d)
 			}
 		} else {
-			return fmt.Errorf("No data found when requesting certificate %s:\n%v\n", params.CN, d)
+			return fmt.Errorf("no data found when requesting certificate %s:\n%v", params.CN, d)
 		}
 	} else {
-		return fmt.Errorf("Unparseable json creating certificate %s:\n%s\n", params.CN, body)
+		return fmt.Errorf("unparseable json creating certificate %s:\n%s", params.CN, body)
 	}
 }
 
@@ -1044,7 +1026,7 @@ func (v *Vault) RevokeCertificate(backend, serial string) error {
 			return err
 		}
 		if !secret.Has("serial") {
-			return fmt.Errorf("Certificate specified using path %s, but no serial secret was found there", serial)
+			return fmt.Errorf("certificate specified using path %s, but no serial secret was found there", serial)
 		}
 		serial = secret.Get("serial")
 	}
@@ -1064,18 +1046,18 @@ func (v *Vault) RevokeCertificate(backend, serial string) error {
 	}
 
 	if res.StatusCode >= 400 {
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		if err != nil {
 			return err
 		}
-		return fmt.Errorf("Unable to revoke certificate %s: %s\n", serial, DecodeErrorResponse(body))
+		return fmt.Errorf("unable to revoke certificate %s: %s", serial, DecodeErrorResponse(body))
 	}
 	return nil
 }
 
 func (v *Vault) CheckPKIBackend(backend string) error {
 	if mounted, _ := v.IsMounted("pki", backend); !mounted {
-		return fmt.Errorf("The PKI backend `%s` has not been configured. Try running `safe pki init --backend %s`\n", backend, backend)
+		return fmt.Errorf("the PKI backend `%s` has not been configured. Try running `safe pki init --backend %s`", backend, backend)
 	}
 	return nil
 }
@@ -1111,7 +1093,7 @@ func (v *Vault) FindSigningCA(cert *X509, certPath string, signPath string) (*X5
 			caPath := certPath[0:strings.LastIndex(certPath, "/")] + "/ca"
 			s, err := v.Read(caPath)
 			if err != nil {
-				return nil, "", fmt.Errorf("No signing authority provided and no 'ca' sibling found")
+				return nil, "", fmt.Errorf("no signing authority provided and no 'ca' sibling found")
 			}
 			ca, err := s.X509(true)
 			if err != nil {
@@ -1126,9 +1108,9 @@ func (v *Vault) SaveSealKeys(keys []string) {
 	path := "secret/vault/seal/keys"
 	s := NewSecret()
 	for i, key := range keys {
-		s.Set(fmt.Sprintf("key%d", i+1), key, false)
+		_ = s.Set(fmt.Sprintf("key%d", i+1), key, false)
 	}
-	v.Write(path, s)
+	_ = v.Write(path, s)
 }
 
 func (v *Vault) SetURL(u string) {

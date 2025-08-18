@@ -21,7 +21,7 @@ func (v *Vault) NewRootToken(keys []string) (string, error) {
 		return "", err
 	}
 	if !done {
-		return "", fmt.Errorf("Not enough keys were provided")
+		return "", fmt.Errorf("not enough keys were provided")
 	}
 
 	token, err := genRoot.RootToken()

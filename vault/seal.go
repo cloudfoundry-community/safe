@@ -4,7 +4,7 @@ import (
 	"github.com/cloudfoundry-community/vaultkv"
 )
 
-//SealKeys returns the threshold for unsealing the vault
+// SealKeys returns the threshold for unsealing the vault
 func (v *Vault) SealKeys() (int, error) {
 	state, err := v.client.Client.SealStatus()
 	if err != nil {
@@ -36,7 +36,7 @@ func (v *Vault) Unseal(keys []string) error {
 			return err
 		}
 
-		if state.Sealed == false {
+		if !state.Sealed {
 			break
 		}
 	}

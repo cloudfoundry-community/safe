@@ -1,10 +1,9 @@
 package main
 
 import (
+	crand "crypto/rand"
 	"fmt"
-	// not crypto, not significant
-	"math/rand"
-	"time"
+	"math/big"
 )
 
 var Adjectives []string
@@ -50,12 +49,16 @@ func init() {
 	}
 }
 
-func init() {
-	rand.Seed(time.Now().Unix())
+func cryptoRandInt(max int) int {
+	nBig, err := crand.Int(crand.Reader, big.NewInt(int64(max)))
+	if err != nil {
+		panic(err)
+	}
+	return int(nBig.Int64())
 }
 
 func RandomName() string {
 	return fmt.Sprintf("%s-%s",
-		Adjectives[rand.Intn(len(Adjectives))],
-		Nouns[rand.Intn(len(Nouns))])
+		Adjectives[cryptoRandInt(len(Adjectives))],
+		Nouns[cryptoRandInt(len(Nouns))])
 }

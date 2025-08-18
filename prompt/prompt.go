@@ -7,7 +7,7 @@ import (
 
 	"github.com/jhunt/go-ansi"
 	"github.com/mattn/go-isatty"
-	"golang.org/x/crypto/ssh/terminal"
+	"golang.org/x/term"
 )
 
 var in *bufio.Reader
@@ -32,7 +32,7 @@ func Secure(label string, args ...interface{}) string {
 	}
 
 	ansi.Fprintf(os.Stderr, label, args...)
-	b, _ := terminal.ReadPassword(int(os.Stdin.Fd()))
+	b, _ := term.ReadPassword(int(os.Stdin.Fd()))
 	ansi.Fprintf(os.Stderr, "\n")
 	return string(b)
 }

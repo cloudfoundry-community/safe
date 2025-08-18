@@ -12,10 +12,10 @@ import (
 
 const (
 	DestructiveCommand    string = "@R"
-	NonDestructiveCommand        = "@G"
-	AdministrativeCommand        = "@W"
-	MiscellaneousCommand         = "@W"
-	HiddenCommand                = "HIDEME"
+	NonDestructiveCommand string = "@G"
+	AdministrativeCommand string = "@W"
+	MiscellaneousCommand  string = "@W"
+	HiddenCommand         string = "HIDEME"
 )
 
 type Help struct {

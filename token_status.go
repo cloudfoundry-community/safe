@@ -37,7 +37,7 @@ func (t TokenStatus) String() string {
 	}
 
 	if len(t.info.Policies) == 0 {
-		retArray = append(retArray, fmt.Sprintf("Token has @R{no policies}"))
+		retArray = append(retArray, "Token has @R{no policies}")
 	} else {
 		noun := "policy"
 		if len(t.info.Policies) > 1 {

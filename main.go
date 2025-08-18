@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
-	"io/ioutil"
+	"io"
 	"math/big"
 	"net"
 	"net/http/httputil"
@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"github.com/cloudfoundry-community/vaultkv"
-	"github.com/jhunt/go-ansi"
 	fmt "github.com/jhunt/go-ansi"
 	"github.com/jhunt/go-cli"
 	env "github.com/jhunt/go-envirotron"
@@ -45,7 +44,7 @@ var Version string
 func connect(auth bool) *vault.Vault {
 	var caCertPool *x509.CertPool
 	if os.Getenv("VAULT_CACERT") != "" {
-		contents, err := ioutil.ReadFile(os.Getenv("VAULT_CACERT"))
+		contents, err := os.ReadFile(os.Getenv("VAULT_CACERT"))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "@R{!! Could not read CA certificates: %s}", err.Error())
 		}
@@ -632,7 +631,7 @@ provided multiple times to provide multiple CA certificates.
 				// If not a PEM block, try to interpret it as a filepath pointing to
 				// a file that contains a PEM block.
 				if p == nil {
-					pemData, err := ioutil.ReadFile(input)
+					pemData, err := os.ReadFile(input) // #nosec G304 - User-specified certificate file path
 					if err != nil {
 						return fmt.Errorf("%s: While reading from file `%s': %s", errorPrefix, input, err.Error())
 					}
@@ -801,7 +800,7 @@ subsequent activations of the Vault.
 			}
 		}
 
-		f, err := ioutil.TempFile("", "kazoo")
+		f, err := os.CreateTemp("", "kazoo")
 		if err != nil {
 			return err
 		}
@@ -819,7 +818,7 @@ listener "tcp" {
 		cmd := exec.Command("vault", "version")
 		versionOutput, err := cmd.CombinedOutput()
 		if err == nil {
-			matches := regexp.MustCompile("v([0-9]+)\\.([0-9]+)").FindSubmatch(versionOutput)
+			matches := regexp.MustCompile(`v([0-9]+)\.([0-9]+)`).FindSubmatch(versionOutput)
 			if len(matches) >= 3 {
 				major, err := strconv.ParseUint(string(matches[1]), 10, 64)
 				if err != nil {
@@ -852,7 +851,7 @@ listener "tcp" {
 		}
 
 		echan := make(chan error)
-		cmd = exec.Command("vault", "server", "-config", f.Name())
+		cmd = exec.Command("vault", "server", "-config", f.Name()) // #nosec G204 - f.Name() is a temp file we created
 		cmd.Start()
 		go func() {
 			echan <- cmd.Wait()
@@ -1460,7 +1459,6 @@ Flags:
 		method := "token"
 		if len(args) > 0 {
 			method = args[0]
-			args = args[1:]
 		}
 
 		var token string
@@ -1915,7 +1913,7 @@ paths/keys.
 			printedPaths := make(map[string]bool, 0)
 			for _, path := range args {
 				p, _, _ := vault.ParsePath(path)
-				if printed, _ := printedPaths[p]; printed {
+				if printedPaths[p] {
 					continue
 				}
 				printedPaths[p] = true
@@ -1970,7 +1968,6 @@ paths/keys.
 				fmt.Printf("@B{%s}:\n", args[i])
 			}
 
-			const numColumns = 3
 			table := table{}
 
 			table.setHeader("version", "status", "created at")
@@ -2259,7 +2256,6 @@ been irrevocably destroyed. An error also occurs if a key is specified.
 		v := connect(true)
 
 		for _, path := range args {
-			var err error
 			if opt.Undelete.All {
 				secret, key, version := vault.ParsePath(path)
 				if key != "" {
@@ -2280,12 +2276,13 @@ been irrevocably destroyed. An error also occurs if a key is specified.
 					versions = append(versions, v.Version)
 				}
 
-				err = v.Client().Undelete(path, versions)
+				if err = v.Client().Undelete(path, versions); err != nil {
+					return err
+				}
 			} else {
-				err = v.Undelete(path)
-			}
-			if err != nil {
-				return err
+				if err := v.Undelete(path); err != nil {
+					return err
+				}
 			}
 		}
 
@@ -2536,7 +2533,7 @@ rting garbage data and then destroying it (which is originally done to preserve 
 -s (--shallow) will write only the latest version for each secret.
 `}, func(command string, args ...string) error {
 		rc.Apply(opt.UseTarget)
-		b, err := ioutil.ReadAll(os.Stdin)
+		b, err := io.ReadAll(os.Stdin)
 		if err != nil {
 			return err
 		}
@@ -2633,6 +2630,11 @@ rting garbage data and then destroying it (which is originally done to preserve 
 					data := vault.NewSecret()
 					for k, v := range secret.Versions[i].Value {
 						data.Set(k, v, false)
+					}
+					// Safe conversion: i is bounded by len(secret.Versions)
+					if firstVersion > ^uint(0)-uint(i) {
+						ansi.Fprintf(os.Stderr, "@R{Version number overflow detected for secret}\n")
+						return
 					}
 					s.Versions = append(s.Versions, vault.SecretVersion{
 						Number: firstVersion + uint(i),
@@ -2944,7 +2946,7 @@ Currently available options are:
 				if *entry.val {
 					value = "@G{true}"
 				}
-				table.addRow(entry.opt, ansi.Sprintf(value))
+				table.addRow(entry.opt, fmt.Sprintf(value))
 			}
 
 			table.print()
@@ -2979,7 +2981,7 @@ Currently available options are:
 				if opt.opt == optionKey {
 					found = true
 					*opt.val = optionVal
-					ansi.Printf("updated @G{%s}\n", opt.opt)
+					fmt.Printf("updated @G{%s}\n", opt.opt)
 					break
 				}
 			}
@@ -3236,13 +3238,13 @@ secret/vault/seal/keys, as key1, key2, ... keyN.
 		if len(opt.Rekey.GPG) > 0 {
 			unsealKeys = len(opt.Rekey.GPG)
 			for _, email := range opt.Rekey.GPG {
-				output, err := exec.Command("gpg", "--export", email).Output()
+				output, err := exec.Command("gpg", "--export", email).Output() // #nosec G204 - GPG email arguments are user-provided but not shell-interpreted
 				if err != nil {
 					return fmt.Errorf("Failed to retrieve GPG key for %s from local keyring: %s", email, err.Error())
 				}
 
 				// gpg --export returns 0, with no stdout if the key wasn't found, so handle that
-				if output == nil || len(output) == 0 {
+				if len(output) == 0 {
 					return fmt.Errorf("No GPG key found for %s in the local keyring", email)
 				}
 				gpgKeys = append(gpgKeys, base64.StdEncoding.EncodeToString(output))
@@ -3393,7 +3395,7 @@ sent as DATA.
 		}
 
 		if opt.Curl.DataOnly {
-			b, err := ioutil.ReadAll(res.Body)
+			b, err := io.ReadAll(res.Body)
 			if err != nil {
 				return err
 			}
@@ -4199,8 +4201,8 @@ prints out information about a certificate, including:
 				fmt.Printf("  @C{self-signed}\n")
 			}
 
-			toStart := cert.Certificate.NotBefore.Sub(time.Now())
-			toEnd := cert.Certificate.NotAfter.Sub(time.Now())
+			toStart := time.Until(cert.Certificate.NotBefore)
+			toEnd := time.Until(cert.Certificate.NotAfter)
 
 			days := int(toStart.Hours() / 24)
 			if days == 1 {

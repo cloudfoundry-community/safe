@@ -3,7 +3,7 @@ package vault
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -51,7 +51,10 @@ func (v *Vault) Strongbox() (map[string]string, error) {
 		return m, fmt.Errorf("received an HTTP %d response from %s", res.StatusCode, uri)
 	}
 
-	b, err := ioutil.ReadAll(res.Body)
+	b, err := io.ReadAll(res.Body)
+	if err != nil {
+		return m, err
+	}
 	err = json.Unmarshal(b, &m)
 	return m, err
 }

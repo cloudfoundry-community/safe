@@ -70,7 +70,7 @@ func (r *Runner) Help(out io.Writer, topic string) {
 				if f == "" {
 					f = "@W"
 				}
-				ansi.Fprintf(out, "    "+f+"{%-10s}  %s\n", cmd, h.Summary)
+				_, _ = ansi.Fprintf(out, "    "+f+"{%-10s}  %s\n", cmd, h.Summary)
 			}
 		}
 
@@ -82,21 +82,21 @@ func (r *Runner) Help(out io.Writer, topic string) {
 	if help, ok := r.Topics[topic]; ok && help != nil {
 		if help.Summary != "" {
 			/* this is a command, print it like one */
-			ansi.Fprintf(out, "safe @G{%s} - @C{%s}\n", topic, help.Summary)
+			_, _ = ansi.Fprintf(out, "safe @G{%s} - @C{%s}\n", topic, help.Summary)
 			if help.Usage != "" {
-				ansi.Fprintf(out, "USAGE: "+help.Usage+"\n")
+				_, _ = ansi.Fprintf(out, "USAGE: "+help.Usage+"\n")
 			}
 			if help.Description != "" {
-				ansi.Fprintf(out, "\n")
+				_, _ = ansi.Fprintf(out, "\n")
 			}
 		}
 		if help.Description != "" {
-			ansi.Fprintf(out, help.Description+"\n")
+			_, _ = ansi.Fprintf(out, help.Description+"\n")
 		}
 		return
 	}
 
-	ansi.Fprintf(out, "@R{Unrecognized command or help topic '%s'}\n", topic)
+	_, _ = ansi.Fprintf(out, "@R{Unrecognized command or help topic '%s'}\n", topic)
 	fmt.Fprintf(out, "Try 'safe help' to get started with safe,\n")
 	fmt.Fprintf(out, " or 'safe commands' for a list of valid commands\n")
 	os.Exit(1)
@@ -106,9 +106,9 @@ func (r *Runner) ExitWithUsage(topic string) {
 	if help, ok := r.Topics[topic]; ok && help != nil {
 		if help.Summary != "" {
 			/* this is a command, print it like one */
-			ansi.Fprintf(os.Stderr, "safe @G{%s} - @C{%s}\n", topic, help.Summary)
+			_, _ = ansi.Fprintf(os.Stderr, "safe @G{%s} - @C{%s}\n", topic, help.Summary)
 			if help.Usage != "" {
-				ansi.Fprintf(os.Stderr, "USAGE: "+help.Usage+"\n")
+				_, _ = ansi.Fprintf(os.Stderr, "USAGE: "+help.Usage+"\n")
 			}
 		}
 	}

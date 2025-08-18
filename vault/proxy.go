@@ -282,10 +282,10 @@ func promptAddNewKnownHost(hostname string, remote net.Addr, key ssh.PublicKey) 
 Are you sure you want to continue connecting (yes/no)? `, hostname, remote.String(), key.Type(), ssh.FingerprintSHA256(key))
 
 	var response string
-	fmt.Scanln(&response)
+	_, _ = fmt.Scanln(&response)
 	for response != "yes" && response != "no" {
 		fmt.Fprintf(os.Stderr, "Please type 'yes' or 'no': ")
-		fmt.Scanln(&response)
+		_, _ = fmt.Scanln(&response)
 	}
 
 	return response == "yes"

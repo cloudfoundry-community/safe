@@ -551,7 +551,7 @@ provided multiple times to provide multiple CA certificates.
 					fmt.Fprintf(os.Stderr, "\n")
 					os.Exit(1)
 				}
-				r.Execute("targets")
+				_ = r.Execute("targets")
 
 				fmt.Fprintf(os.Stderr, "Which Vault would you like to target?\n")
 				t := prompt.Normal("@G{> }")
@@ -796,7 +796,7 @@ subsequent activations of the Vault.
 				if err != nil {
 					break
 				}
-				conn.Close()
+				_ = conn.Close()
 			}
 		}
 
@@ -852,7 +852,7 @@ listener "tcp" {
 
 		echan := make(chan error)
 		cmd = exec.Command("vault", "server", "-config", f.Name()) // #nosec G204 - f.Name() is a temp file we created
-		cmd.Start()
+		_ = cmd.Start()
 		go func() {
 			echan <- cmd.Wait()
 		}()
@@ -892,12 +892,12 @@ listener "tcp" {
 		}
 		previous := cfg.Current
 
-		cfg.SetTarget(name, rc.Vault{
+		_ = cfg.SetTarget(name, rc.Vault{
 			URL:         fmt.Sprintf("http://127.0.0.1:%d", port),
 			SkipVerify:  false,
 			NoStrongbox: true,
 		})
-		cfg.Write()
+		_ = cfg.Write()
 
 		rc.Apply("")
 		v := connect(false)
@@ -934,9 +934,9 @@ listener "tcp" {
 			die(fmt.Errorf("Unable to generate a new root token: %s", err))
 		}
 
-		cfg.SetToken(token)
-		os.Setenv("VAULT_TOKEN", token)
-		cfg.Write()
+		_ = cfg.SetToken(token)
+		_ = os.Setenv("VAULT_TOKEN", token)
+		_ = cfg.Write()
 		v = connect(true)
 
 		exists, err := v.MountExists("secret")
@@ -953,8 +953,8 @@ listener "tcp" {
 		}
 
 		s := vault.NewSecret()
-		s.Set("knock", "knock", false)
-		v.Write("secret/handshake", s)
+		_ = s.Set("knock", "knock", false)
+		_ = v.Write("secret/handshake", s)
 
 		if !opt.Quiet {
 			fmt.Fprintf(os.Stderr, "Now targeting (temporary) @Y{%s} at @C{%s}\n", cfg.Current, cfg.URL())
@@ -978,7 +978,7 @@ listener "tcp" {
 			}
 		}
 		delete(cfg.Vaults, name)
-		cfg.Write()
+		_ = cfg.Write()
 		return err
 	})
 
@@ -1063,11 +1063,11 @@ Vault will remain sealed).
 		}
 
 		/* auth with the new root token, transparently */
-		cfg.SetToken(token)
+		_ = cfg.SetToken(token)
 		if err := cfg.Write(); err != nil {
 			return err
 		}
-		os.Setenv("VAULT_TOKEN", token)
+		_ = os.Setenv("VAULT_TOKEN", token)
 		v = connect(true)
 
 		/* be nice to the machines and machine-like intelligences */
@@ -1180,8 +1180,8 @@ Vault will remain sealed).
 
 			/* write secret/handshake, just for fun */
 			s := vault.NewSecret()
-			s.Set("knock", "knock", false)
-			v.Write("secret/handshake", s)
+			_ = s.Set("knock", "knock", false)
+			_ = v.Write("secret/handshake", s)
 
 			if !opt.Init.JSON {
 				fmt.Printf("safe has unsealed the Vault for you, and written a test value\n")
@@ -1578,8 +1578,8 @@ Flags:
 		if err != nil {
 			return fmt.Errorf("Could not find target with name `%s'")
 		}
-		cfg.SetToken(token)
-		cfg.SetCurrent(currentTarget, false)
+		_ = cfg.SetToken(token)
+		_ = cfg.SetCurrent(currentTarget, false)
 		return cfg.Write()
 	})
 
@@ -1589,7 +1589,7 @@ Flags:
 		Type:    AdministrativeCommand,
 	}, func(command string, args ...string) error {
 		cfg := rc.Apply(opt.UseTarget)
-		cfg.SetToken("")
+		_ = cfg.SetToken("")
 		err := cfg.Write()
 		if err != nil {
 			return err
@@ -2629,12 +2629,13 @@ rting garbage data and then destroying it (which is originally done to preserve 
 					}
 					data := vault.NewSecret()
 					for k, v := range secret.Versions[i].Value {
-						data.Set(k, v, false)
+						_ = data.Set(k, v, false)
 					}
 					// Safe conversion: i is bounded by len(secret.Versions)
-					if firstVersion > ^uint(0)-uint(i) {
-						ansi.Fprintf(os.Stderr, "@R{Version number overflow detected for secret}\n")
-						return
+					// Check if adding i to firstVersion would overflow
+					if i < 0 || uint(i) > ^uint(0)-firstVersion {
+						fmt.Fprintf(os.Stderr, "@R{Version number overflow detected for secret}\n")
+						return fmt.Errorf("version number overflow detected")
 					}
 					s.Versions = append(s.Versions, vault.SecretVersion{
 						Number: firstVersion + uint(i),
@@ -2658,7 +2659,7 @@ rting garbage data and then destroying it (which is originally done to preserve 
 		var fn importFunc
 		//determine which version of the export format this is
 		var typeTest interface{}
-		json.Unmarshal(b, &typeTest)
+		_ = json.Unmarshal(b, &typeTest)
 		switch v := typeTest.(type) {
 		case map[string]interface{}:
 			fn = v1Import
@@ -4412,11 +4413,11 @@ Currently, only the --renew option is supported, and it is required:
 	}
 
 	if opt.Version {
-		r.Execute("version")
+		_ = r.Execute("version")
 		return
 	}
 	if opt.Help { //-h was given as a global arg
-		r.Execute("help")
+		_ = r.Execute("help")
 		return
 	}
 
@@ -4424,25 +4425,25 @@ Currently, only the --renew option is supported, and it is required:
 		opt.SkipIfExists = !opt.Clobber
 
 		if opt.Version {
-			r.Execute("version")
+			_ = r.Execute("version")
 			return
 		}
 
 		if p.Command == "" { //No recognized command was found
-			r.Execute("help")
+			_ = r.Execute("help")
 			return
 		}
 
 		if opt.Help { // -h or --help was given after a command
-			r.Execute("help", p.Command)
+			_ = r.Execute("help", p.Command)
 			continue
 		}
 
 		os.Unsetenv("VAULT_SKIP_VERIFY")
 		os.Unsetenv("SAFE_SKIP_VERIFY")
 		if opt.Insecure {
-			os.Setenv("VAULT_SKIP_VERIFY", "1")
-			os.Setenv("SAFE_SKIP_VERIFY", "1")
+			_ = os.Setenv("VAULT_SKIP_VERIFY", "1")
+			_ = os.Setenv("SAFE_SKIP_VERIFY", "1")
 		}
 
 		defer rc.Cleanup()
@@ -4460,7 +4461,7 @@ Currently, only the --renew option is supported, and it is required:
 	//If there were no args given, the above loop that would try to give help
 	// doesn't execute at all, so we catch it here.
 	if p.Command == "" {
-		r.Execute("help")
+		_ = r.Execute("help")
 	}
 
 	if err = p.Error(); err != nil {

@@ -16,7 +16,7 @@ func duration(s string) (time.Duration, error) {
 		}
 
 		// Check for overflow before multiplication
-		const maxDuration = int64(^time.Duration(0) >> 1)
+		const maxDuration = time.Duration(^time.Duration(0) >> 1)
 		
 		switch m[2] {
 		case "H", "h":
@@ -29,19 +29,34 @@ func duration(s string) (time.Duration, error) {
 			if v > uint64(maxDuration/time.Hour)/hoursPerDay {
 				return 0, fmt.Errorf("duration overflow: %d days is too large", v)
 			}
-			return time.Hour * time.Duration(hoursPerDay*v), nil
+			// G115: Safe conversion after overflow check
+			product := hoursPerDay * v
+			if product > uint64(maxDuration/time.Hour) {
+				return 0, fmt.Errorf("duration overflow: calculated hours too large")
+			}
+			return time.Hour * time.Duration(product), nil
 		case "M", "m":
 			hoursPerMonth := uint64(24 * 30)
 			if v > uint64(maxDuration/time.Hour)/hoursPerMonth {
 				return 0, fmt.Errorf("duration overflow: %d months is too large", v)
 			}
-			return time.Hour * time.Duration(hoursPerMonth*v), nil
+			// G115: Safe conversion after overflow check
+			product := hoursPerMonth * v
+			if product > uint64(maxDuration/time.Hour) {
+				return 0, fmt.Errorf("duration overflow: calculated hours too large")
+			}
+			return time.Hour * time.Duration(product), nil
 		case "Y", "y":
 			hoursPerYear := uint64(24 * 365)
 			if v > uint64(maxDuration/time.Hour)/hoursPerYear {
 				return 0, fmt.Errorf("duration overflow: %d years is too large", v)
 			}
-			return time.Hour * time.Duration(hoursPerYear*v), nil
+			// G115: Safe conversion after overflow check
+			product := hoursPerYear * v
+			if product > uint64(maxDuration/time.Hour) {
+				return 0, fmt.Errorf("duration overflow: calculated hours too large")
+			}
+			return time.Hour * time.Duration(product), nil
 		}
 	}
 	return 0, fmt.Errorf("unrecognized time spec '%s'", s)

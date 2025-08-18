@@ -22,7 +22,7 @@ func readline() string {
 }
 
 func Normal(label string, args ...interface{}) string {
-	ansi.Fprintf(os.Stderr, label, args...)
+	_, _ = ansi.Fprintf(os.Stderr, label, args...)
 	return readline()
 }
 
@@ -31,8 +31,8 @@ func Secure(label string, args ...interface{}) string {
 		return readline()
 	}
 
-	ansi.Fprintf(os.Stderr, label, args...)
+	_, _ = ansi.Fprintf(os.Stderr, label, args...)
 	b, _ := term.ReadPassword(int(os.Stdin.Fd()))
-	ansi.Fprintf(os.Stderr, "\n")
+	_, _ = ansi.Fprintf(os.Stderr, "\n")
 	return string(b)
 }

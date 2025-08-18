@@ -16,15 +16,15 @@ var termState *term.State
 
 func (v *Vault) cancelRekey() {
 	if termState != nil {
-		term.Restore(int(os.Stdin.Fd()), termState)
+		_ = term.Restore(int(os.Stdin.Fd()), termState)
 	}
 	err := v.client.Client.RekeyCancel()
 	if err != nil {
-		ansi.Fprintf(os.Stderr, "Failed to cancel rekey process: %s\n", err.Error())
+		_, _ = ansi.Fprintf(os.Stderr, "Failed to cancel rekey process: %s\n", err.Error())
 		return
 	}
 
-	ansi.Fprintf(os.Stderr, "@y{Vault rekey canceled successfully}\n")
+	_, _ = ansi.Fprintf(os.Stderr, "@y{Vault rekey canceled successfully}\n")
 }
 
 func (v *Vault) ReKey(unsealKeyCount, numToUnseal int, pgpKeys []string) ([]string, error) {

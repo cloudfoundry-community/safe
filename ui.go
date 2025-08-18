@@ -19,7 +19,7 @@ func parseKeyVal(key string, quiet bool) (string, string, bool, error) {
 			return l[0], "", false, nil
 		}
 		if !quiet {
-			ansi.Fprintf(os.Stderr, "%s: @G{%s}\n", l[0], l[1])
+			_, _ = ansi.Fprintf(os.Stderr, "%s: @G{%s}\n", l[0], l[1])
 		}
 		return l[0], l[1], false, nil
 	} else if strings.Contains(key, "@") {
@@ -34,7 +34,7 @@ func parseKeyVal(key string, quiet bool) (string, string, bool, error) {
 				return l[0], "", true, fmt.Errorf("failed to read from standard input: %s", err)
 			}
 			if !quiet {
-				ansi.Fprintf(os.Stderr, "%s: <@M{$stdin}\n", l[0])
+				_, _ = ansi.Fprintf(os.Stderr, "%s: <@M{$stdin}\n", l[0])
 			}
 			return l[0], string(b), false, nil
 		}
@@ -44,7 +44,7 @@ func parseKeyVal(key string, quiet bool) (string, string, bool, error) {
 			return l[0], "", true, fmt.Errorf("failed to read contents of %s: %s", l[1], err)
 		}
 		if !quiet {
-			ansi.Fprintf(os.Stderr, "%s: <@C{%s}\n", l[0], l[1])
+			_, _ = ansi.Fprintf(os.Stderr, "%s: <@C{%s}\n", l[0], l[1])
 		}
 		return l[0], string(b), false, nil
 	}
@@ -64,10 +64,10 @@ func pr(label string, confirm bool, secure bool) string {
 		b := prompt.Secure("%s @C{[confirm]:} ", label)
 
 		if a == b && a != "" {
-			ansi.Fprintf(os.Stderr, "\n")
+			_, _ = ansi.Fprintf(os.Stderr, "\n")
 			return a
 		}
-		ansi.Fprintf(os.Stderr, "\n@Y{oops, try again }(Ctrl-C to cancel)\n\n")
+		_, _ = ansi.Fprintf(os.Stderr, "\n@Y{oops, try again }(Ctrl-C to cancel)\n\n")
 	}
 }
 
@@ -196,11 +196,11 @@ func (t *table) _printRow(row []string, widths []int) {
 
 	//no spaces at the end of the last col
 	t._printCell(row[len(row)-1], 0)
-	os.Stdout.Write([]byte{'\n'})
+	_, _ = os.Stdout.Write([]byte{'\n'})
 }
 
 func (t *table) _printCell(cell string, spaces int) {
-	os.Stdout.Write([]byte(cell))
+	_, _ = os.Stdout.Write([]byte(cell))
 
 	if spaces == 0 {
 		return
@@ -211,7 +211,7 @@ func (t *table) _printCell(cell string, spaces int) {
 		spaceBuf[idx] = ' '
 	}
 
-	os.Stdout.Write(spaceBuf)
+	_, _ = os.Stdout.Write(spaceBuf)
 }
 
 func (t *table) _sprintf(f string, args ...interface{}) string {

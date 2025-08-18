@@ -516,14 +516,20 @@ func (v *Vault) Undelete(path string) error {
 
 	destroyedErr := fmt.Errorf("`%s' version: %d is destroyed", secret, version)
 	firstVersion := respVersions[0].Version
-	if uint(version) < firstVersion {
+	if version < uint64(firstVersion) {
 		return destroyedErr
 	}
 
-	if version < firstVersion {
+	// G115: Perform safe conversion with bounds checking
+	if version < uint64(firstVersion) {
 		return fmt.Errorf("version %d is less than first version %d", version, firstVersion)
 	}
-	idx := int(version - firstVersion)
+	diff := version - uint64(firstVersion)
+	const maxInt = int(^uint(0) >> 1)
+	if diff > uint64(maxInt) {
+		return fmt.Errorf("version difference too large for int conversion")
+	}
+	idx := int(diff)
 	if idx >= len(respVersions) {
 		return fmt.Errorf("version %d of `%s' does not yet exist", version, secret)
 	}
@@ -609,7 +615,7 @@ func (v *Vault) Copy(oldpath, newpath string, opts MoveCopyOpts) error {
 	if opts.SkipIfExists {
 		if _, err := v.Read(newpath); err == nil {
 			if !opts.Quiet {
-				ansi.Fprintf(os.Stderr, "@R{Cowardly refusing to copy/move data into} @C{%s}@R{, as that would clobber existing data}\n", newpath)
+				_, _ = ansi.Fprintf(os.Stderr, "@R{Cowardly refusing to copy/move data into} @C{%s}@R{, as that would clobber existing data}\n", newpath)
 			}
 			return nil
 		} else if !IsNotFound(err) {
@@ -656,7 +662,7 @@ func (v *Vault) Copy(oldpath, newpath string, opts MoveCopyOpts) error {
 		}
 
 		toWrite = append(toWrite, dstOrig)
-		toWrite[0].Set(dstKey, srcSecret.Get(srcKey), false)
+		_ = toWrite[0].Set(dstKey, srcSecret.Get(srcKey), false)
 	} else {
 		if dstKey != "" {
 			return fmt.Errorf("cannot move full secret `%s` into specific key `%s`", oldpath, newpath)
@@ -734,9 +740,9 @@ func (v *Vault) MoveCopyTree(oldRoot, newRoot string, f func(string, string, Mov
 		}
 		if len(existingPaths) > 0 {
 			if !opts.Quiet {
-				ansi.Fprintf(os.Stderr, "@R{Cowardly refusing to copy/move data into} @C{%s}@R{, as the following paths would be clobbered:}\n", newRoot)
+				_, _ = ansi.Fprintf(os.Stderr, "@R{Cowardly refusing to copy/move data into} @C{%s}@R{, as the following paths would be clobbered:}\n", newRoot)
 				for _, path := range existingPaths {
-					ansi.Fprintf(os.Stderr, "@R{- }@C{%s}\n", path)
+					_, _ = ansi.Fprintf(os.Stderr, "@R{- }@C{%s}\n", path)
 				}
 			}
 			return nil

@@ -132,7 +132,7 @@ func (c *Config) Write() error {
 		return err
 	}
 	if v == nil {
-		os.Remove(svtoken())
+		_ = os.Remove(svtoken())
 		return nil
 	}
 
@@ -154,7 +154,7 @@ func (c *Config) Write() error {
 		return err
 	}
 	if c.Options.ManageVaultToken {
-		os.WriteFile(fmt.Sprintf("%s/.vault-token", userHomeDir()), []byte(v.Token), 0600)
+		_ = os.WriteFile(fmt.Sprintf("%s/.vault-token", userHomeDir()), []byte(v.Token), 0600)
 	}
 
 	return os.WriteFile(svtoken(), b, 0600)
@@ -198,27 +198,27 @@ func (c *Config) Apply(use string) error {
 	}
 
 	if v != nil {
-		os.Setenv("VAULT_ADDR", v.URL)
-		os.Setenv("VAULT_TOKEN", v.Token)
+		_ = os.Setenv("VAULT_ADDR", v.URL)
+		_ = os.Setenv("VAULT_TOKEN", v.Token)
 		if v.SkipVerify {
-			os.Setenv("VAULT_SKIP_VERIFY", "1")
+			_ = os.Setenv("VAULT_SKIP_VERIFY", "1")
 		}
 		if len(v.CACerts) > 0 {
 			filename, err := writeTempCACerts(v.CACerts)
 			if err != nil {
 				return err
 			}
-			os.Setenv("VAULT_CACERT", filename)
+			_ = os.Setenv("VAULT_CACERT", filename)
 		}
 		if v.Namespace != "" {
-			os.Setenv("VAULT_NAMESPACE", v.Namespace)
+			_ = os.Setenv("VAULT_NAMESPACE", v.Namespace)
 		}
 	} else {
 		if os.Getenv("VAULT_TOKEN") == "" {
 			tokenFile := fmt.Sprintf("%s/.vault-token", os.Getenv("HOME"))
 			b, err := os.ReadFile(tokenFile) // #nosec G304 - Reading user's vault token from standard location
 			if err == nil {
-				os.Setenv("VAULT_TOKEN", strings.TrimSpace(string(b)))
+				_ = os.Setenv("VAULT_TOKEN", strings.TrimSpace(string(b)))
 			}
 		}
 	}

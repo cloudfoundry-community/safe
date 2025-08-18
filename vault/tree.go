@@ -238,7 +238,7 @@ func (t secretTree) convertToSecrets() Secrets {
 				}
 
 				for _, key := range version.Branches {
-					thisVersion.Data.Set(key.Basename(), key.Value, false)
+					_ = thisVersion.Data.Set(key.Basename(), key.Value, false)
 				}
 
 				thisEntry.Versions = append(thisEntry.Versions, thisVersion)

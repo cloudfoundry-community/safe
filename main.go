@@ -34,6 +34,7 @@ import (
 
 	"github.com/cloudfoundry-community/safe/prompt"
 	"github.com/cloudfoundry-community/safe/rc"
+	"github.com/cloudfoundry-community/safe/tui"
 	"github.com/cloudfoundry-community/safe/vault"
 
 	uuid "github.com/pborman/uuid"
@@ -116,6 +117,7 @@ type Options struct {
 
 	HelpCommand    struct{} `cli:"help"`
 	VersionCommand struct{} `cli:"version"`
+	TUI            struct{} `cli:"tui"`
 
 	Envvars struct{} `cli:"envvars"`
 	Targets struct {
@@ -347,6 +349,14 @@ func main() {
 		}
 		os.Exit(0)
 		return nil
+	})
+
+	r.Dispatch("tui", &Help{
+		Summary: "Launch interactive TUI mode",
+		Usage:   "safe tui [TARGET]",
+		Type:    AdministrativeCommand,
+	}, func(command string, args ...string) error {
+		return tui.Run(args...)
 	})
 
 	r.Dispatch("help", nil, func(command string, args ...string) error {

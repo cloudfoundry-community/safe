@@ -321,6 +321,18 @@ type Options struct {
 }
 
 func main() {
+	// Busybox-style binary name detection
+	// When invoked as "tsafe" or "safe-tui", launch TUI directly
+	baseName := filepath.Base(os.Args[0])
+	baseName = strings.TrimSuffix(baseName, ".exe") // Windows compatibility
+	if baseName == "tsafe" || baseName == "safe-tui" {
+		if err := tui.Run(os.Args[1:]...); err != nil {
+			fmt.Fprintf(os.Stderr, "@R{!! %s}\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	var opt Options
 	opt.Gen.Policy = "a-zA-Z0-9"
 

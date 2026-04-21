@@ -151,6 +151,7 @@ type Options struct {
 		File   string `cli:"-f, --file"`
 		Memory bool   `cli:"-m, --memory"`
 		Port   int    `cli:"-p, --port"`
+		Engine string `cli:"--engine"`
 	} `cli:"local"`
 
 	Init struct {
@@ -792,6 +793,11 @@ available. You can pin the engine explicitly with --engine bao or
 			return fmt.Errorf("Please specify either --memory or --file <path>, but not both")
 		}
 
+		engine, err := selectLocalEngine(opt.Local.Engine)
+		if err != nil {
+			return fmt.Errorf("@R{%s}", err)
+		}
+
 		var port int
 		if opt.Local.Port != 0 {
 			port = opt.Local.Port
@@ -818,45 +824,19 @@ listener "tcp" {
 }
 `, port)
 
-		//the "storage" configuration key was once called "backend"
-		storageKey := "storage"
-		cmd := exec.Command("vault", "version")
-		versionOutput, err := cmd.CombinedOutput()
-		if err == nil {
-			matches := regexp.MustCompile(`v([0-9]+)\.([0-9]+)`).FindSubmatch(versionOutput)
-			if len(matches) >= 3 {
-				major, err := strconv.ParseUint(string(matches[1]), 10, 64)
-				if err != nil {
-					goto doneVersionCheck
-				}
-				minor, err := strconv.ParseUint(string(matches[2]), 10, 64)
-				if err != nil {
-					goto doneVersionCheck
-				}
-
-				//if version < 0.8.0
-				if major == 0 && minor < 8 {
-					storageKey = "backend"
-				}
-			}
-		} else {
-			return fmt.Errorf("@R{Vault is not currently installed or located in $PATH}")
-		}
-	doneVersionCheck:
-
 		keys := make([]string, 0)
 		if opt.Local.Memory {
-			fmt.Fprintf(f, "%s \"inmem\" {}\n", storageKey)
+			fmt.Fprintf(f, "storage \"inmem\" {}\n")
 		} else {
 			opt.Local.File = filepath.ToSlash(opt.Local.File)
-			fmt.Fprintf(f, "%s \"file\" { path = \"%s\" }\n", storageKey, opt.Local.File)
+			fmt.Fprintf(f, "storage \"file\" { path = \"%s\" }\n", opt.Local.File)
 			if _, err := os.Stat(opt.Local.File); err == nil || !os.IsNotExist(err) {
 				keys = append(keys, pr("Unseal Key", false, true))
 			}
 		}
 
 		echan := make(chan error)
-		cmd = exec.Command("vault", "server", "-config", f.Name()) // #nosec G204 - f.Name() is a temp file we created
+		cmd := exec.Command(engine.Binary(), "server", "-config", f.Name()) // #nosec G204 - f.Name() is a temp file we created
 		_ = cmd.Start()
 		go func() {
 			echan <- cmd.Wait()

@@ -439,5 +439,24 @@ safe env --bash
 eval $(safe env --bash)
 ```
 
+### local
+
+Spin up a throwaway Vault or OpenBao server for testing or experimentation.
+By default safe auto-detects which server binary is on `$PATH`, preferring
+`bao` if both are installed; pass `--engine vault` or `--engine bao` to
+override.
+
+```
+safe local --memory
+safe local --memory --engine bao
+safe local --file /tmp/my-vault --engine vault
+```
+
+Use `--memory` for a transient in-memory server (data is lost on exit), or
+`--file <dir>` to persist the encrypted data across runs. On OpenBao, the
+`--file` backend works for a fresh directory only — re-targeting an
+existing one needs the original root token, which requires `--engine vault`
+because OpenBao disables the legacy generate-root API.
+
 [vault]:  https://vaultproject.io
 [spruce]: https://github.com/geofffranks/spruce

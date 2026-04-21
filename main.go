@@ -756,7 +756,7 @@ The following options are recognized:
 
 	r.Dispatch("local", &Help{
 		Summary: "Run a local vault",
-		Usage:   "safe local (--memory|--file path/to/dir) [--as name] [--port port]",
+		Usage:   "safe local (--memory|--file path/to/dir) [--as name] [--port port] [--engine vault|bao]",
 		Description: `
 Spins up a new Vault instance.
 
@@ -777,6 +777,11 @@ spinning it down when not in use, specify the --file/-f flag, and give it
 the path to a directory to use for the file backend.  The files created
 by the mechanism will be encrypted.  You will be given the seal key for
 subsequent activations of the Vault.
+
+By default, safe launches whichever server binary it finds on $PATH,
+preferring 'bao' (OpenBao) over 'vault' (HashiCorp Vault) when both are
+available. You can pin the engine explicitly with --engine bao or
+--engine vault.
 `,
 		Type: AdministrativeCommand,
 	}, func(command string, args ...string) error {

@@ -920,7 +920,7 @@ listener "tcp" {
 
 		token := ""
 		if len(keys) == 0 {
-			keys, _, err = v.Init(1, 1)
+			keys, token, err = v.Init(1, 1)
 			if err != nil {
 				die(fmt.Errorf("Unable to initialize the new (temporary) Vault: %s", err))
 			}
@@ -929,9 +929,12 @@ listener "tcp" {
 		if err = v.Unseal(keys); err != nil {
 			die(fmt.Errorf("Unable to unseal the new (temporary) Vault: %s", err))
 		}
-		token, err = v.NewRootToken(keys)
-		if err != nil {
-			die(fmt.Errorf("Unable to generate a new root token: %s", err))
+
+		if token == "" {
+			token, err = v.NewRootToken(keys)
+			if err != nil {
+				die(fmt.Errorf("Unable to generate a new root token: %s", err))
+			}
 		}
 
 		_ = cfg.SetToken(token)

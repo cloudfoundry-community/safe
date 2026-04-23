@@ -458,5 +458,55 @@ Use `--memory` for a transient in-memory server (data is lost on exit), or
 existing one needs the original root token, which requires `--engine vault`
 because OpenBao disables the legacy generate-root API.
 
+
+Testing
+-------
+
+### Unit tests
+
+```
+make test         # go unit tests (fast, offline)
+```
+
+### Round-trip integration suite
+
+`ci/scripts/tests` is a ~2000-line bash suite that spins up a live Vault or
+OpenBao server, points the safe binary at it, and exercises the full command
+surface (set/get/tree/policy/approle/rekey/x509/...). Invoke via make:
+
+```
+# Run against HashiCorp Vault
+make test-release ENGINE=vault VERSIONS=1.13.13
+
+# Run against OpenBao
+make test-release ENGINE=bao   VERSIONS=2.5.3
+
+# Multiple versions accepted as a whitespace-separated list
+make test-release ENGINE=vault VERSIONS="1.11.10 1.12.6 1.13.13"
+
+# Skip the GPG rekey sub-block on machines without gpg installed
+SAFE_DISABLE_GPG_TESTS=1 make test-release ENGINE=bao VERSIONS=2.5.3
+```
+
+Engine binaries are downloaded on first use into `./vaults/` and cached; subsequent
+runs against the same version are offline.
+
+The Concourse CI matrix runs the same suite via
+`ci/scripts/test-release-against-engine`. The `test-vault-1.9` … `test-vault-1.13`
+jobs track the latest patch of each Vault minor line; `test-openbao-2.5` tracks
+the latest OpenBao 2.5.x patch. Engine releases live at:
+
+- Vault: https://releases.hashicorp.com/vault/
+- OpenBao: https://github.com/openbao/openbao/releases
+
+### Helper library tests
+
+The engine-aware URL/archive/alias helpers in `ci/scripts/lib/engine.sh` have
+dedicated fast unit tests:
+
+```
+make test-release-engine   # plain bash, no network, <1s
+```
+
 [vault]:  https://vaultproject.io
 [spruce]: https://github.com/geofffranks/spruce

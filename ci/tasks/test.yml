@@ -17,5 +17,5 @@ outputs:
 - name: work
 
 run:
-  path: git-ci/ci/scripts/test-release-against-vault
+  path: git-ci/ci/scripts/test-release-against-engine
 

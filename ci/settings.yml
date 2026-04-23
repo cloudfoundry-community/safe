@@ -1,4 +1,10 @@
 ---
+groups:
+- name: (( concat "build-" meta.pipeline "-releases" ))
+  jobs:
+  - (( append ))
+  - test-openbao-2.5
+
 meta:
   name:    safe
   release: Safe

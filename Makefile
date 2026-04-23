@@ -83,6 +83,27 @@ test-short: ## Run tests in short mode
 	@go test -short $(shell go list ./... | grep -v vendor)
 	@echo "$(GREEN)✓ Short tests complete$(RESET)"
 
+# Round-trip integration suite against a live vault/bao server. Invoked by
+# ci/scripts/test-release-against-engine in Concourse and by devs locally.
+# Override ENGINE / VERSIONS / SAFE_PATH / TEST_PATH as needed.
+SAFE_PATH ?= ./$(BINARY_NAME)
+TEST_PATH ?= ./ci/scripts/tests
+ENGINE    ?= vault
+VERSIONS  ?=
+
+.PHONY: test-release
+test-release: $(if $(wildcard $(SAFE_PATH)),,build) ## Run engine round-trip suite (ENGINE=vault|bao VERSIONS="1.13.2")
+	@test -n "$(VERSIONS)" || { echo "$(YELLOW)ERROR: VERSIONS must be set (e.g. VERSIONS=\"1.13.2\" or \"2.5.3\")$(RESET)"; exit 1; }
+	@echo "$(GREEN)Running round-trip suite (ENGINE=$(ENGINE)) against $(VERSIONS)...$(RESET)"
+	@ENGINE=$(ENGINE) $(TEST_PATH) $(SAFE_PATH) $(VERSIONS)
+	@echo "$(GREEN)✓ Round-trip suite passed$(RESET)"
+
+.PHONY: test-release-engine
+test-release-engine: ## Run engine helper lib unit tests (fast, offline)
+	@echo "$(GREEN)Running engine helper unit tests...$(RESET)"
+	@bash ci/scripts/t/engine_test.sh
+	@echo "$(GREEN)✓ Engine helper tests passed$(RESET)"
+
 .PHONY: coverage
 coverage: ## Generate test coverage report
 	@echo "$(GREEN)Generating coverage report...$(RESET)"
@@ -263,5 +284,5 @@ deps-tidy: ## Clean up go.mod and go.sum
 	@echo "$(GREEN)✓ Dependencies tidied$(RESET)"
 
 # Include all phony targets
-.PHONY: build linux linux-arm64 darwin darwin-arm64 windows build-all test test-short test-all coverage coverage-html report fmt vet lint \
+.PHONY: build linux linux-arm64 darwin darwin-arm64 windows build-all test test-short test-release test-release-engine test-all coverage coverage-html report fmt vet lint \
         govulncheck gosec staticcheck trivy security check check-all clean shipit version install install-user deps deps-update deps-tidy help

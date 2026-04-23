@@ -2,14 +2,20 @@
 # vim:et:ts=2:sts=2:sw=2
 set -u
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+# shellcheck source=lib/engine.sh
+source "${SCRIPT_DIR}/lib/engine.sh"
+
 done_testing=0
 rc=0
 platform=
-arch=amd64
+arch=
 old_home="$HOME"
-vault_pid=
+engine_pid=
 root_token=
 unseal_key=
+
+ENGINE="${ENGINE:-vault}"
 
 SAFE_CMD=$1 ; shift
 declare -a versions;
@@ -23,9 +29,9 @@ else
     "1.12.6"
     "1.13.2"
   )
-fi 
+fi
 
-echo "Will be testing against Vault version(s):"
+echo "Will be testing ${ENGINE} version(s):"
 for x in ${versions[@]}; do
   echo "- $x"
 done
@@ -41,6 +47,12 @@ case $OSTYPE in
   echo >&2 "UNRECOGNIZED OSTYPE '$OSTYPE'"
   exit 1
   ;;
+esac
+
+case "$(uname -m)" in
+  x86_64|amd64)   arch=amd64 ;;
+  aarch64|arm64)  arch=arm64 ;;
+  *) echo >&2 "UNRECOGNIZED arch '$(uname -m)'"; exit 1 ;;
 esac
 
 
@@ -263,18 +275,18 @@ dump_log() {
   fi
 }
 
-kill_running_vault() {
-  if [[ -n $vault_pid ]] ; then
-    kill $vault_pid
-    wait $vault_pid
-    vault_pid=
+kill_running_engine() {
+  if [[ -n $engine_pid ]] ; then
+    kill $engine_pid
+    wait $engine_pid
+    engine_pid=
   fi
 }
 
 cleanup() {
   export HOME=${old_home}
   rm -rf t/
-  kill_running_vault
+  kill_running_engine
 
   if [[ ${done_testing} -eq 1 && ${rc} -eq 0 ]]; then
     tests_passed
@@ -284,27 +296,82 @@ cleanup() {
   exit ${rc}
 }
 
-restart_vault_server() {
-  kill_running_vault
-  rm -f t/home/log
-  mkdir -p ./vaults/bin
-  cp ./vaults/vault-${platform}-${version} ./vaults/bin/vault
+_start_engine_dev() {
   ./vaults/bin/vault server -dev -dev-listen-address 127.0.0.1:8198 >t/home/log 2>&1 &
-  vault_pid=$!
-  waitfor=600
+  engine_pid=$!
+  local waitfor=600
   while ! grep -iq '^root token: ' t/home/log; do
     if [[ $waitfor -gt 0 ]]; then
       waitfor=$((waitfor - 1))
       sleep 0.1
     else
-      failed "timed out waiting for vault server (-dev) to start"
+      failed "timed out waiting for ${ENGINE} server (-dev) to start"
       dump_log 1
       exit 3 # FIXME: this is the wrong thing to do
     fi
   done
-
   root_token=$(awk '/^Root Token:/ { print $3 }' < t/home/log | head -n1)
   unseal_key=$(awk '/^Unseal Key:/ { print $3 }' < t/home/log | head -n1)
+}
+
+_start_engine_config() {
+  # OpenBao v2.5.x flipped `disable_unauthed_rekey_endpoints` to default-true
+  # for security reasons; rekey endpoints return 405 without the opt-out.
+  # Flip it back here so the round-trip suite can exercise `safe rekey`.
+  # Deprecation tracked in Future considerations — migrate to sys/rotate/*
+  # before OpenBao drops the legacy surface.
+  cat > t/home/engine.hcl <<'EOF'
+storage "inmem" {}
+listener "tcp" {
+  address = "127.0.0.1:8198"
+  tls_disable = 1
+  disable_unauthed_rekey_endpoints = "false"
+}
+disable_mlock = true
+EOF
+  ./vaults/bin/vault server -config=t/home/engine.hcl >t/home/log 2>&1 &
+  engine_pid=$!
+  local waitfor=600
+  while ! curl -sSf -o /dev/null http://127.0.0.1:8198/v1/sys/seal-status 2>/dev/null; do
+    if [[ $waitfor -gt 0 ]]; then
+      waitfor=$((waitfor - 1))
+      sleep 0.1
+    else
+      failed "timed out waiting for ${ENGINE} server (-config) to start"
+      dump_log 1
+      exit 3
+    fi
+  done
+  local init_json
+  init_json=$(curl -sS -X PUT http://127.0.0.1:8198/v1/sys/init \
+    -d '{"secret_shares":1,"secret_threshold":1}')
+  root_token=$(echo "$init_json" | jq -r '.root_token')
+  unseal_key=$(echo "$init_json" | jq -r '.keys[0]')
+  curl -sS -X PUT http://127.0.0.1:8198/v1/sys/unseal \
+    -d "{\"key\":\"$unseal_key\"}" >/dev/null
+  # Non-dev mode does not auto-mount secret/; pre-create it at KV v1 so the
+  # subsequent unmount+remount flow matches dev-mode expectations.
+  curl -sS -X POST -H "X-Vault-Token: $root_token" \
+    http://127.0.0.1:8198/v1/sys/mounts/secret \
+    -d '{"type":"kv","options":{"version":"1"}}' >/dev/null
+}
+
+restart_engine_server() {
+  kill_running_engine
+  rm -f t/home/log t/home/engine.hcl
+  mkdir -p ./vaults/bin
+  local local_name
+  local_name="$(engine_local_binary "$ENGINE" "$platform" "$version")"
+  # Always placed at ./vaults/bin/vault: safe's `vault` subcommand shells out
+  # to whatever `vault` is on PATH. OpenBao's CLI shares Vault's server/
+  # secrets/auth/operator surface, so running bao-as-vault works here.
+  cp "./vaults/${local_name}" ./vaults/bin/vault
+
+  case "$(engine_startup_mode "$ENGINE")" in
+    dev)    _start_engine_dev    ;;
+    config) _start_engine_config ;;
+    *) bail "unknown startup mode for ENGINE=${ENGINE}" ;;
+  esac
 
   now targeting test vault server
   (run; ${SAFE_CMD} target unit-tests http://127.0.0.1:8198) ; exitok $? 0
@@ -340,26 +407,36 @@ mkdir -p vaults t/tmp
 trap 'cleanup' INT QUIT TERM EXIT
 
 for version in "${versions[@]}"; do
-  killall vault-${platform}-${version} >/dev/null 2>&1 || true
+  killall "$(engine_local_binary "$ENGINE" "$platform" "$version")" >/dev/null 2>&1 || true
 done
 for version in "${versions[@]}"; do
 for kvversion in 1 2; do
-  # KV v2 was introduced in 0.10
+  # KV v2 was introduced in Vault 0.10. Legacy guard for manually-invoked 0.x
+  # Vault runs; OpenBao is 2.x-only so this never fires for ENGINE=bao.
   if [[ kvversion -eq 2 && $version =~ ^0\.[6-9].* ]]; then
     continue
   fi
 
-  echo "VAULT ${version}" -- KV v${kvversion}
-  killall vault-${platform}-${version} >/dev/null 2>&1 || true
+  local_name="$(engine_local_binary "$ENGINE" "$platform" "$version")"
+  echo "${ENGINE} ${version} -- KV v${kvversion}"
+  killall "$local_name" >/dev/null 2>&1 || true
   echo "----------------------------------------------"
-  if [[ ! -f vaults/vault-${platform}-${version} ]]; then
-    echo "Downloading Vault ${version} CLI..."
-    curl --fail -L > t/tmp/archive.zip \
-      https://releases.hashicorp.com/vault/${version}/vault_${version}_${platform}_${arch}.zip \
-      || bail "download of vault ${version} failed"
+  if [[ ! -f "vaults/${local_name}" ]]; then
+    echo "Downloading ${ENGINE} ${version} CLI..."
+    url="$(engine_url "$ENGINE" "$version" "$platform" "$arch")" \
+      || bail "could not resolve ${ENGINE} URL for ${platform}/${arch}"
+    ext="$(engine_archive_ext "$ENGINE")"
+    archive="t/tmp/archive.${ext}"
+    rm -f "$archive"
+    curl --fail -L "$url" -o "$archive" \
+      || bail "download of ${ENGINE} ${version} failed ($url)"
 
-    unzip -d t/tmp t/tmp/archive.zip
-    mv t/tmp/vault vaults/vault-${platform}-${version}
+    case "$ext" in
+      zip)    unzip -o -d t/tmp "$archive" ;;
+      tar.gz) tar -xzf "$archive" -C t/tmp ;;
+      *)      bail "unsupported archive format: $ext" ;;
+    esac
+    mv "t/tmp/$(engine_binary_name "$ENGINE")" "vaults/${local_name}"
     echo "DONE"
     echo
   fi
@@ -381,7 +458,7 @@ for kvversion in 1 2; do
 
   #######
   testing setup
-  restart_vault_server
+  restart_engine_server
   clearvault
 
   ########    ###    ########   ######   ######## ########
@@ -410,7 +487,7 @@ for kvversion in 1 2; do
                       http://127.0.0.1:8198) ; exitok $? 0
   (run; ${SAFE_CMD} target http://127.0.0.1:8198) ; exitok $? 1
   (run; ${SAFE_CMD} -T http://127.0.0.1:8198 env) ; exitok $? 1
-  restart_vault_server
+  restart_engine_server
 
 
    ######  ##     ## ########  ##
@@ -456,7 +533,7 @@ $secret_id
   now checking that we can do stuff with the Vault
   (run; ${SAFE_CMD} set secret/beep/boop foo=bar) ; exitok $? 0
   (run; ${SAFE_CMD} get secret/beep/boop) ; exitok $? 0
-  restart_vault_server
+  restart_engine_server
 
    ######   ######## ########       ##  ######  ######## ########
   ##    ##  ##          ##         ##  ##    ## ##          ##
@@ -2089,7 +2166,7 @@ EOF
 
 
   now restarting vault server to start over
-  restart_vault_server
+  restart_engine_server
   now validating that the restarted vault is unsealed
   (${SAFE_CMD} set secret/handshake knock=knock); exitok $? 0
   now trying to rekey without using gpg
@@ -2126,7 +2203,7 @@ EOF
 !! No GPG key found for not-there@missing.com in the local keyring
 EOF
 
-    restart_vault_server
+    restart_engine_server
     now trying to rekey with gpg keys matching the threshold
     (${SAFE_CMD} set secret/handshake knock=knock); exitok $? 0
     gpg --import assets/gpg.pubkey

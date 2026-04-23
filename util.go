@@ -15,8 +15,11 @@ func duration(s string) (time.Duration, error) {
 			return 0, err
 		}
 
-		// Check for overflow before multiplication
-		const maxDuration = time.Duration(^time.Duration(0) >> 1)
+		// Check for overflow before multiplication. The max int64 is computed
+		// via an unsigned-shifted all-ones mask; using ^time.Duration(0) (a
+		// signed int64 -1) with arithmetic right-shift would yield -1, making
+		// every non-zero value look "too large".
+		const maxDuration = time.Duration(^uint64(0) >> 1)
 		
 		switch m[2] {
 		case "H", "h":

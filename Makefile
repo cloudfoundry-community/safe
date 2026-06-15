@@ -72,16 +72,22 @@ build-all: linux linux-arm64 darwin darwin-arm64 windows ## Build binaries for a
 ##@ Testing & Quality
 
 .PHONY: test
-test: ## Run all tests
+test: ## Run all tests with race detector
 	@echo "$(GREEN)Running tests...$(RESET)"
-	@go test -v $(shell go list ./... | grep -v vendor)
+	@go test -race -v $(shell go list ./... | grep -v vendor)
 	@echo "$(GREEN)✓ Tests complete$(RESET)"
 
 .PHONY: test-short
-test-short: ## Run tests in short mode
+test-short: ## Run tests in short mode (no race detector)
 	@echo "$(GREEN)Running short tests...$(RESET)"
 	@go test -short $(shell go list ./... | grep -v vendor)
 	@echo "$(GREEN)✓ Short tests complete$(RESET)"
+
+.PHONY: test-race
+test-race: ## Run all tests with the race detector explicitly
+	@echo "$(GREEN)Running tests with race detector...$(RESET)"
+	@go test -race ./...
+	@echo "$(GREEN)✓ Race detector tests complete$(RESET)"
 
 .PHONY: coverage
 coverage: ## Generate test coverage report
@@ -263,5 +269,5 @@ deps-tidy: ## Clean up go.mod and go.sum
 	@echo "$(GREEN)✓ Dependencies tidied$(RESET)"
 
 # Include all phony targets
-.PHONY: build linux linux-arm64 darwin darwin-arm64 windows build-all test test-short test-all coverage coverage-html report fmt vet lint \
+.PHONY: build linux linux-arm64 darwin darwin-arm64 windows build-all test test-short test-race test-all coverage coverage-html report fmt vet lint \
         govulncheck gosec staticcheck trivy security check check-all clean shipit version install install-user deps deps-update deps-tidy help

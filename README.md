@@ -439,5 +439,36 @@ safe env --bash
 eval $(safe env --bash)
 ```
 
+Testing
+-------
+
+Run the full test suite with the race detector enabled:
+
+```
+make test
+```
+
+Run tests without the race detector (faster, useful during tight edit cycles):
+
+```
+make test-short
+```
+
+Run the race detector explicitly against all packages:
+
+```
+go test -race ./...
+```
+
+Generate a coverage report:
+
+```
+make coverage
+```
+
+The `coverage` target writes `coverage.out` and prints per-function coverage
+percentages. Use `make coverage-html` to open an interactive HTML report in
+your browser.
+
 [vault]:  https://vaultproject.io
 [spruce]: https://github.com/geofffranks/spruce

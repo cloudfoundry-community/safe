@@ -30,7 +30,7 @@ func (v *Vault) cancelRekey() {
 func (v *Vault) ReKey(unsealKeyCount, numToUnseal int, pgpKeys []string) ([]string, error) {
 	err := v.client.Client.RekeyCancel()
 	if err != nil {
-		return nil, fmt.Errorf("an error occurred when trying to cancel potentially preexisting rekey: %s", err)
+		return nil, fmt.Errorf("an error occurred when trying to cancel potentially preexisting rekey: %w", err)
 	}
 
 	backup := len(pgpKeys) > 0
@@ -41,7 +41,7 @@ func (v *Vault) ReKey(unsealKeyCount, numToUnseal int, pgpKeys []string) ([]stri
 		Backup:    backup,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("an error occurred when starting a new rekey operation: %s", err)
+		return nil, fmt.Errorf("an error occurred when starting a new rekey operation: %w", err)
 	}
 
 	// we successfully started a rekey, we should now cancel on failure, unless we finish rekeying
@@ -51,11 +51,14 @@ func (v *Vault) ReKey(unsealKeyCount, numToUnseal int, pgpKeys []string) ([]stri
 			v.cancelRekey()
 		}
 	}()
+	// Catch interrupts during the interactive unseal-key prompts: cancel the
+	// in-flight rekey on the Vault server, then terminate. prompt.Secure blocks
+	// on stdin in this goroutine, so a signal-driven os.Exit is the only way to
+	// abort the operation cleanly without leaving a half-started rekey.
 	sighandler := make(chan os.Signal, 4)
-	signal.Ignore(os.Interrupt, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
 	signal.Notify(sighandler, os.Interrupt, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
-		for range sighandler {
+		if _, ok := <-sighandler; ok {
 			v.cancelRekey()
 			os.Exit(1)
 		}
@@ -76,7 +79,7 @@ func (v *Vault) ReKey(unsealKeyCount, numToUnseal int, pgpKeys []string) ([]stri
 
 	rekeyDone, err := rekey.Submit(givenKeys...)
 	if err != nil {
-		return nil, fmt.Errorf("key submission failed: %s", err)
+		return nil, fmt.Errorf("key submission failed: %w", err)
 	}
 	if !rekeyDone {
 		return nil, fmt.Errorf("the rekey did not finish (is somebody else trying to rekey at the same time?)")
@@ -85,6 +88,7 @@ func (v *Vault) ReKey(unsealKeyCount, numToUnseal int, pgpKeys []string) ([]stri
 	// vault should be rekeyed by here, as our progress met the requirement
 	shouldCancelRekey = false
 	signal.Stop(sighandler)
+	close(sighandler)
 
 	return rekey.Keys(), nil
 }

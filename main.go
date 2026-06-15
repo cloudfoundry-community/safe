@@ -44,7 +44,7 @@ var Version string
 func connect(auth bool) *vault.Vault {
 	var caCertPool *x509.CertPool
 	if os.Getenv("VAULT_CACERT") != "" {
-		contents, err := os.ReadFile(os.Getenv("VAULT_CACERT"))
+		contents, err := os.ReadFile(os.Getenv("VAULT_CACERT")) // #nosec G703 -- VAULT_CACERT is a standard Vault environment variable controlled by the user
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "@R{!! Could not read CA certificates: %s}", err.Error())
 		}
@@ -415,7 +415,10 @@ func main() {
 			fmt.Fprintf(os.Stderr, "@Y{Specifying --target to the targets command makes no sense; ignoring...}\n")
 		}
 
-		cfg := rc.Apply(opt.UseTarget)
+		cfg, err := rc.Apply(opt.UseTarget)
+		if err != nil {
+			return err
+		}
 		if opt.Targets.JSON {
 			type vault struct {
 				Name      string `json:"name"`
@@ -505,9 +508,17 @@ provided multiple times to provide multiple CA certificates.
 	}, func(command string, args ...string) error {
 		var cfg rc.Config
 		if !opt.Target.Interactive && len(args) == 0 {
-			cfg = rc.Apply(opt.UseTarget)
+			var err error
+			cfg, err = rc.Apply(opt.UseTarget)
+			if err != nil {
+				return err
+			}
 		} else {
-			cfg = rc.Read()
+			var err error
+			cfg, err = rc.Read()
+			if err != nil {
+				return err
+			}
 		}
 		skipverify := false
 		if os.Getenv("SAFE_SKIP_VERIFY") == "1" {
@@ -676,7 +687,10 @@ provided multiple times to provide multiple CA certificates.
 		Usage:   "safe target delete ALIAS",
 		Type:    DestructiveCommand,
 	}, func(command string, args ...string) error {
-		cfg := rc.Apply(opt.UseTarget)
+		cfg, err := rc.Apply(opt.UseTarget)
+		if err != nil {
+			return err
+		}
 		if len(args) != 1 {
 			r.ExitWithUsage("target delete")
 		}
@@ -707,7 +721,10 @@ The following options are recognized:
 	                  queried Vaults are sealed.
 		`,
 	}, func(command string, args ...string) error {
-		cfg := rc.Apply(opt.UseTarget)
+		cfg, err := rc.Apply(opt.UseTarget)
+		if err != nil {
+			return err
+		}
 		v := connect(false)
 
 		type status struct {
@@ -727,7 +744,9 @@ The following options are recognized:
 				statuses = append(statuses, status{addr, state == "sealed"})
 			}
 		} else {
-			v.SetURL(cfg.URL())
+			if err := v.SetURL(cfg.URL()); err != nil {
+				return err
+			}
 			isSealed, err := v.Sealed()
 			if err != nil {
 				return err
@@ -871,7 +890,10 @@ listener "tcp" {
 			os.Exit(1)
 		}
 
-		cfg := rc.Apply("")
+		cfg, err := rc.Apply("")
+		if err != nil {
+			return err
+		}
 		name := opt.Local.As
 		if name == "" {
 			name = RandomName()
@@ -899,7 +921,9 @@ listener "tcp" {
 		})
 		_ = cfg.Write()
 
-		rc.Apply("")
+		if _, err := rc.Apply(""); err != nil {
+			return err
+		}
 		v := connect(false)
 
 		const maxStartupWait = 5 * time.Second
@@ -970,7 +994,13 @@ listener "tcp" {
 
 		err = <-echan
 		fmt.Fprintf(os.Stderr, "Vault terminated normally, cleaning up...\n")
-		cfg = rc.Apply("")
+		{
+			var applyErr error
+			cfg, applyErr = rc.Apply("")
+			if applyErr != nil {
+				return applyErr
+			}
+		}
 		if cfg.Current == name {
 			cfg.Current = ""
 			if _, found, _ := cfg.Find(previous); found {
@@ -1033,7 +1063,10 @@ Vault will remain sealed).
 `,
 		Type: AdministrativeCommand,
 	}, func(command string, args ...string) error {
-		cfg := rc.Apply(opt.UseTarget)
+		cfg, err := rc.Apply(opt.UseTarget)
+		if err != nil {
+			return err
+		}
 		v := connect(false)
 
 		if opt.Init.NKeys == 0 {
@@ -1059,7 +1092,7 @@ Vault will remain sealed).
 		}
 
 		if token == "" {
-			panic("token was nil")
+			return fmt.Errorf("initialization error: token was nil")
 		}
 
 		/* auth with the new root token, transparently */
@@ -1136,7 +1169,9 @@ Vault will remain sealed).
 			}
 
 			for _, addr := range addrs {
-				v.SetURL(addr)
+				if err := v.SetURL(addr); err != nil {
+					return fmt.Errorf("invalid vault address %s: %s", addr, err)
+				}
 				if err := v.Unseal(keys); err != nil {
 					fmt.Fprintf(os.Stderr, "!!! unable to unseal newly-initialized vault (at %s): %s\n", addr, err)
 				}
@@ -1151,7 +1186,9 @@ Vault will remain sealed).
 		waitMaster:
 			for currentAttempt < maxAttempts {
 				for _, addr := range addrs {
-					v.SetURL(addr)
+					if err := v.SetURL(addr); err != nil {
+						return fmt.Errorf("invalid vault address %s: %s", addr, err)
+					}
 					if err := v.Client().Client.Health(false); err == nil {
 						break waitMaster
 					}
@@ -1216,7 +1253,10 @@ Vault will remain sealed).
 		Usage:   "safe unseal",
 		Type:    AdministrativeCommand,
 	}, func(command string, args ...string) error {
-		cfg := rc.Apply(opt.UseTarget)
+		cfg, err := rc.Apply(opt.UseTarget)
+		if err != nil {
+			return err
+		}
 		v := connect(false)
 
 		var addrs []string
@@ -1232,7 +1272,9 @@ Vault will remain sealed).
 				}
 			}
 		} else {
-			v.SetURL(cfg.URL())
+			if err := v.SetURL(cfg.URL()); err != nil {
+				return err
+			}
 			isSealed, err := v.Sealed()
 			if err != nil {
 				return err
@@ -1248,7 +1290,9 @@ Vault will remain sealed).
 			return nil
 		}
 
-		v.SetURL(addrs[0])
+		if err := v.SetURL(addrs[0]); err != nil {
+			return err
+		}
 		nkeys, err := v.SealKeys()
 		if err != nil {
 			return err
@@ -1263,7 +1307,9 @@ Vault will remain sealed).
 
 		for _, addr := range addrs {
 			fmt.Printf("unsealing @G{%s}...\n", addr)
-			v.SetURL(addr)
+			if err := v.SetURL(addr); err != nil {
+				return err
+			}
 			err = v.Unseal(keys)
 			if err != nil {
 				return err
@@ -1278,7 +1324,10 @@ Vault will remain sealed).
 		Usage:   "safe seal",
 		Type:    AdministrativeCommand,
 	}, func(command string, args ...string) error {
-		cfg := rc.Apply(opt.UseTarget)
+		cfg, err := rc.Apply(opt.UseTarget)
+		if err != nil {
+			return err
+		}
 		v := connect(true)
 
 		var toSeal []string
@@ -1294,7 +1343,9 @@ Vault will remain sealed).
 				}
 			}
 		} else {
-			v.SetURL(cfg.URL())
+			if err := v.SetURL(cfg.URL()); err != nil {
+				return err
+			}
 			isSealed, err := v.Sealed()
 			if err != nil {
 				return nil
@@ -1314,7 +1365,9 @@ Vault will remain sealed).
 
 		for len(toSeal) > 0 {
 			for i, addr := range toSeal {
-				v.SetURL(addr)
+				if err := v.SetURL(addr); err != nil {
+					return err
+				}
 				err := v.Client().Client.Health(false)
 				if err != nil {
 					if vaultkv.IsErrStandby(err) {
@@ -1367,7 +1420,9 @@ written to STDOUT instead of STDERR to make it easier to consume.
 		`,
 		Type: AdministrativeCommand,
 	}, func(command string, args ...string) error {
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 		if opt.Env.ForBash && opt.Env.ForFish && opt.Env.ForJSON {
 			r.Help(os.Stderr, "env")
 			fmt.Fprintf(os.Stderr, "@R{Only specify one of --json, --bash OR --fish.}\n")
@@ -1452,7 +1507,10 @@ Flags:
 `,
 		Type: AdministrativeCommand,
 	}, func(command string, args ...string) error {
-		cfg := rc.Apply(opt.UseTarget)
+		cfg, err := rc.Apply(opt.UseTarget)
+		if err != nil {
+			return err
+		}
 		v := connect(false)
 		v.Client().Client.SetAuthToken("")
 
@@ -1462,7 +1520,6 @@ Flags:
 		}
 
 		var token string
-		var err error
 		url := os.Getenv("VAULT_ADDR")
 		target := cfg.Current
 		if opt.UseTarget != "" {
@@ -1556,7 +1613,7 @@ Flags:
 			if opt.Auth.JSON {
 				outputBytes, err := json.MarshalIndent(tokenObj, "", "  ")
 				if err != nil {
-					panic("Could not marshal json from TokenStatus object")
+					return fmt.Errorf("could not marshal JSON from TokenStatus object: %s", err)
 				}
 
 				output = string(append(outputBytes, '\n'))
@@ -1588,9 +1645,12 @@ Flags:
 		Usage:   "safe logout\n",
 		Type:    AdministrativeCommand,
 	}, func(command string, args ...string) error {
-		cfg := rc.Apply(opt.UseTarget)
+		cfg, err := rc.Apply(opt.UseTarget)
+		if err != nil {
+			return err
+		}
 		_ = cfg.SetToken("")
-		err := cfg.Write()
+		err = cfg.Write()
 		if err != nil {
 			return err
 		}
@@ -1612,10 +1672,17 @@ Flags:
 			if len(args) != 1 || args[0] != "all" {
 				r.ExitWithUsage("renew")
 			}
-			cfg := rc.Apply("")
+			cfg, err := rc.Apply("")
+			if err != nil {
+				return err
+			}
 			failed := 0
 			for vault := range cfg.Vaults {
-				rc.Apply(vault)
+				if _, err := rc.Apply(vault); err != nil {
+					fmt.Fprintf(os.Stderr, "@R{failed to apply config for %s: %s}\n", vault, err)
+					failed++
+					continue
+				}
 				if os.Getenv("VAULT_TOKEN") == "" {
 					fmt.Printf("skipping @C{%s} - no token found.\n", vault)
 					continue
@@ -1633,7 +1700,9 @@ Flags:
 			return nil
 		}
 
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 		v := connect(true)
 		if err := v.RenewLease(); err != nil {
 			return err
@@ -1642,7 +1711,9 @@ Flags:
 	})
 
 	writeHelper := func(prompt bool, insecure bool, command string, args ...string) error {
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 		if len(args) < 2 {
 			r.ExitWithUsage(command)
 		}
@@ -1775,7 +1846,9 @@ Otherwise, it will exit 1 (one).  If unrelated errors, like network timeouts,
 certificate validation failure, etc. occur, they will be printed as well.
 `,
 	}, func(command string, args ...string) error {
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 		if len(args) != 1 {
 			r.ExitWithUsage("exists")
 		}
@@ -1828,7 +1901,9 @@ paths/keys.
 `,
 		Type: NonDestructiveCommand,
 	}, func(command string, args ...string) error {
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 		if len(args) < 1 {
 			r.ExitWithUsage("get")
 		}
@@ -1944,7 +2019,9 @@ paths/keys.
 		Usage:   "safe versions PATH [PATHS...]",
 		Type:    NonDestructiveCommand,
 	}, func(command string, args ...string) error {
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 		v := connect(true)
 
 		if len(args) == 0 {
@@ -2014,7 +2091,9 @@ paths/keys.
 	Specifying the -q flag will show secrets which have been marked as deleted.
 `,
 	}, func(command string, args ...string) error {
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 		v := connect(true)
 		display := func(paths []string) {
 			if opt.List.Single {
@@ -2119,7 +2198,9 @@ secret will be displayed inline with the secret name in the format:
 <secret-name>: key1, key2, key3
 `,
 	}, func(command string, args ...string) error {
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 		if opt.Tree.HideLeaves && opt.Tree.ShowKeys {
 			return fmt.Errorf("Cannot specify both -d and --keys at the same time")
 		}
@@ -2167,7 +2248,9 @@ marked as deleted. This may cause keys which would 404 in an attempt to read
 them to appear in the tree, but is often considerably quicker for larger
 vaults. This flag does nothing for kv v1 mounts.
 `}, func(command string, args ...string) error {
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 		if len(args) < 1 {
 			args = append(args, "secret")
 		}
@@ -2198,7 +2281,9 @@ being marked as deleted. For KV v1 backends, this would do nothing.
 -a (--all) will delete (or destroy) all versions of the secret instead
 of just the specified (or latest if unspecified) version.
 `}, func(command string, args ...string) error {
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 
 		if len(args) < 1 {
 			r.ExitWithUsage("delete")
@@ -2248,7 +2333,9 @@ been irrevocably destroyed. An error also occurs if a key is specified.
 
 -a (--all) undeletes all versions of the given secret.
 `}, func(command string, args ...string) error {
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 
 		if len(args) < 1 {
 			r.ExitWithUsage("undelete")
@@ -2297,7 +2384,9 @@ been irrevocably destroyed. An error also occurs if a key is specified.
 -d (--deleted) will handle deleted versions by undeleting them, reading them, and then
 redeleting them.
 `}, func(command string, args ...string) error {
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 		if len(args) != 2 {
 			r.ExitWithUsage("revert")
 		}
@@ -2395,7 +2484,9 @@ incompatible with versions of safe prior to v1.0.0
 -d (--deleted) will cause safe to undelete, read, and then redelete deleted secrets in order to encode them in the
 backup. Without this, deleted versions will be ignored.
 `}, func(command string, args ...string) error {
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 		if len(args) < 1 {
 			args = append(args, "secret")
 		}
@@ -2532,7 +2623,9 @@ rting garbage data and then destroying it (which is originally done to preserve 
 -i (--ignore-deleted) will ignore deleted versions from being written during the import.
 -s (--shallow) will write only the latest version for each secret.
 `}, func(command string, args ...string) error {
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 		b, err := io.ReadAll(os.Stdin)
 		if err != nil {
 			return err
@@ -2689,7 +2782,9 @@ rting garbage data and then destroying it (which is originally done to preserve 
 Specifying the --deep (-d) flag will cause versions to be grabbed from the source
 and overwrite all versions of the secret at the destination.
 `}, func(command string, args ...string) error {
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 		if len(args) != 2 {
 			r.ExitWithUsage("move")
 		}
@@ -2740,7 +2835,9 @@ and overwrite all versions of the secret at the destination.
 Specifying the --deep (-d) flag will cause all living versions to be grabbed from the source
 and overwrite all versions of the secret at the destination.
 `}, func(command string, args ...string) error {
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 
 		if len(args) != 2 {
 			r.ExitWithUsage("copy")
@@ -2808,7 +2905,9 @@ The following options are recognized:
 	              to generate the password (e.g --policy a-z0-9)
 `,
 	}, func(command string, args ...string) error {
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 
 		if len(args) == 0 {
 			r.ExitWithUsage("gen")
@@ -2871,7 +2970,9 @@ The following options are recognized:
 		Type:        DestructiveCommand,
 		Description: ``,
 	}, func(command string, args ...string) error {
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 
 		if len(args) != 1 {
 			r.ExitWithUsage("uuid")
@@ -2931,7 +3032,10 @@ Currently available options are:
                       updated.
 `,
 	}, func(command string, args ...string) error {
-		cfg := rc.Apply(opt.UseTarget)
+		cfg, err := rc.Apply(opt.UseTarget)
+		if err != nil {
+			return err
+		}
 
 		optLookup := []struct {
 			opt string
@@ -3006,7 +3110,9 @@ be stored under the 'private' name, as a PEM-encoded RSA private key, and the
 public key, formatted for use in an SSH authorized_keys file, under 'public'.
 `,
 	}, func(command string, args ...string) error {
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 		bits := 2048
 		if len(args) > 0 {
 			if u, err := strconv.ParseUint(args[0], 10, 16); err == nil {
@@ -3053,7 +3159,9 @@ under the 'private' name, and the public key under the 'public' name.  Both will
 be PEM-encoded.
 `,
 	}, func(command string, args ...string) error {
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 		bits := 2048
 		if len(args) > 0 {
 			if u, err := strconv.ParseUint(args[0], 10, 16); err == nil {
@@ -3097,7 +3205,9 @@ be PEM-encoded.
 NBITS defaults to 2048.
 `,
 	}, func(command string, args ...string) error {
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 		bits := 2048
 
 		if len(args) > 0 {
@@ -3148,7 +3258,9 @@ NBITS defaults to 2048.
 		Usage:   "safe vault ...",
 		Type:    DestructiveCommand,
 	}, func(command string, args ...string) error {
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 
 		if opt.SkipIfExists {
 			fmt.Fprintf(os.Stderr, "@C{--no-clobber} @Y{specified, but is ignored for} @C{safe vault}\n")
@@ -3159,7 +3271,7 @@ NBITS defaults to 2048.
 			return err
 		}
 
-		cmd := exec.Command("vault", args...)
+		cmd := exec.Command("vault", args...) // #nosec G204,G702 -- passthrough to vault binary with user-supplied args is the intended behavior
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -3232,7 +3344,9 @@ unless you specify the --no-persist flag.  They will be written to
 secret/vault/seal/keys, as key1, key2, ... keyN.
 `,
 	}, func(command string, args ...string) error {
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 
 		unsealKeys := 5 // default to 5
 		var gpgKeys []string
@@ -3316,7 +3430,9 @@ Supported formats:
 
 `,
 	}, func(command string, args ...string) error {
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 
 		if len(args) != 4 {
 			r.ExitWithUsage("fmt")
@@ -3371,7 +3487,9 @@ Query string parameters should be appended to REL-URI, instead of being
 sent as DATA.
 `,
 	}, func(command string, args ...string) error {
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 
 		var (
 			url, method string
@@ -3538,7 +3656,9 @@ The following options are recognized:
 			r.ExitWithUsage("x509 validate")
 		}
 
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 		v := connect(true)
 
 		var ca *vault.X509
@@ -3677,7 +3797,9 @@ The following options are recognized:
                       to sha512-rsa.
 `,
 	}, func(command string, args ...string) error {
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 
 		var ca *vault.X509
 
@@ -3830,7 +3952,9 @@ The following options are recognized:
                       to sha512-rsa.
 `,
 	}, func(command string, args ...string) error {
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 
 		if len(args) != 1 {
 			r.ExitWithUsage("x509 reissue")
@@ -4003,7 +4127,9 @@ The following options are recognized:
                       to sha512-rsa.
 `,
 	}, func(command string, args ...string) error {
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 
 		if len(args) != 1 {
 			r.ExitWithUsage("x509 renew")
@@ -4117,7 +4243,9 @@ The following options are recognized:
 			r.ExitWithUsage("x509 revoke")
 		}
 
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 		v := connect(true)
 
 		/* find the CA */
@@ -4176,7 +4304,9 @@ prints out information about a certificate, including:
 			r.ExitWithUsage("x509 show")
 		}
 
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 		v := connect(true)
 
 		for _, path := range args {
@@ -4376,7 +4506,9 @@ Currently, only the --renew option is supported, and it is required:
 			r.ExitWithUsage("x509 crl")
 		}
 
-		rc.Apply(opt.UseTarget)
+		if _, err := rc.Apply(opt.UseTarget); err != nil {
+			return err
+		}
 		v := connect(true)
 
 		s, err := v.Read(args[0])

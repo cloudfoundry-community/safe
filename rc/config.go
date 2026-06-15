@@ -13,6 +13,7 @@ import (
 
 var toCleanup []string
 var cleanupLock sync.Mutex
+var cleanupSignalOnce sync.Once
 
 type Config struct {
 	Version int               `yaml:"version"`
@@ -83,37 +84,38 @@ func (legacy *oldConfig) convert() Config {
 	return c
 }
 
-func Read() Config {
+func Read() (Config, error) {
 	var c Config
 
 	b, err := os.ReadFile(saferc())
 	if err != nil {
-		return Config{Version: 1}
+		return Config{Version: 1}, nil
 	}
 
 	if err = yaml.Unmarshal(b, &c); err != nil {
-		return Config{Version: 1}
+		return Config{Version: 1}, nil
 	}
 	if c.Version == 0 {
 		var legacy oldConfig
 		if err = yaml.Unmarshal(b, &legacy); err != nil {
-			fmt.Fprintf(os.Stderr, "@R{!!! %s}\n", err)
-			os.Exit(1)
+			return Config{}, fmt.Errorf("could not parse legacy config: %w", err)
 		}
 		c = legacy.convert()
 	}
 
-	return c
+	return c, nil
 }
 
-func Apply(use string) Config {
-	c := Read()
+func Apply(use string) (Config, error) {
+	c, err := Read()
+	if err != nil {
+		return Config{}, err
+	}
 
 	if err := c.Apply(use); err != nil {
-		fmt.Fprintf(os.Stderr, "@R{!!! %s}\n", err)
-		os.Exit(1)
+		return Config{}, err
 	}
-	return c
+	return c, nil
 }
 
 func (c *Config) Write() error {
@@ -167,25 +169,31 @@ func writeTempCACerts(certs []string) (string, error) {
 
 	caFile, err := os.CreateTemp("", "safe-ca-cert")
 	if err != nil {
-		return "", fmt.Errorf("Could not write CAs to a temp file: %s", err.Error())
+		return "", fmt.Errorf("Could not write CAs to a temp file: %w", err)
 	}
 	defer caFile.Close()
 
 	toWrite := strings.Join(certs, "\n")
 	_, err = caFile.WriteString(toWrite)
 	if err != nil {
-		return "", fmt.Errorf("Could not write CA certs into temporary file: %s", err.Error())
+		return "", fmt.Errorf("Could not write CA certs into temporary file: %w", err)
 	}
 
 	toCleanup = append(toCleanup, caFile.Name())
 
-	go func() {
+	// Install the interrupt handler exactly once, regardless of how many
+	// targets write CA certs, so we don't accumulate a goroutine and signal
+	// channel per call. On interrupt, remove every temp file then terminate.
+	cleanupSignalOnce.Do(func() {
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, os.Interrupt)
-		<-sigChan
-		Cleanup()
-		os.Exit(1)
-	}()
+		go func() {
+			if _, ok := <-sigChan; ok {
+				Cleanup()
+				os.Exit(1)
+			}
+		}()
+	})
 
 	return caFile.Name(), nil
 }
@@ -193,8 +201,7 @@ func writeTempCACerts(certs []string) (string, error) {
 func (c *Config) Apply(use string) error {
 	v, err := c.Vault(use)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "@R{!!! %s}\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	if v != nil {
@@ -216,7 +223,7 @@ func (c *Config) Apply(use string) error {
 	} else {
 		if os.Getenv("VAULT_TOKEN") == "" {
 			tokenFile := fmt.Sprintf("%s/.vault-token", os.Getenv("HOME"))
-			b, err := os.ReadFile(tokenFile) // #nosec G304 - Reading user's vault token from standard location
+			b, err := os.ReadFile(tokenFile) // #nosec G304,G703 - Reading user's vault token from standard location
 			if err == nil {
 				_ = os.Setenv("VAULT_TOKEN", strings.TrimSpace(string(b)))
 			}

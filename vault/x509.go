@@ -22,7 +22,7 @@ type X509 struct {
 	Certificate    *x509.Certificate
 	PrivateKey     *rsa.PrivateKey
 	Serial         *big.Int
-	CRL            *pkix.CertificateList
+	CRL            *x509.RevocationList
 
 	KeyUsage    x509.KeyUsage
 	ExtKeyUsage []x509.ExtKeyUsage
@@ -47,7 +47,7 @@ func (s Secret) X509(requireKey bool) (*X509, error) {
 
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return nil, fmt.Errorf("not a valid certificate (%s)", err)
+		return nil, fmt.Errorf("not a valid certificate (%w)", err)
 	}
 
 	var (
@@ -74,7 +74,7 @@ func (s Secret) X509(requireKey bool) (*X509, error) {
 
 		c, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {
-			return nil, fmt.Errorf("intermediary #%d: not a valid certificate (%s)", n, err)
+			return nil, fmt.Errorf("intermediary #%d: not a valid certificate (%w)", n, err)
 		}
 
 		intermediaries = append(intermediaries, c)
@@ -98,7 +98,7 @@ func (s Secret) X509(requireKey bool) (*X509, error) {
 		if err != nil {
 			pkcs8TmpKey, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 			if err != nil {
-				return nil, fmt.Errorf("not a valid private key (%s)", err)
+				return nil, fmt.Errorf("not a valid private key (%w)", err)
 			}
 			var isRSAEncoded bool
 			key, isRSAEncoded = pkcs8TmpKey.(*rsa.PrivateKey)
@@ -127,10 +127,16 @@ func (s Secret) X509(requireKey bool) (*X509, error) {
 
 	if s.Has("crl") {
 		v := s.Get("crl")
-		// TODO: Migrate to x509.ParseRevocationList when refactoring CRL handling
-		crl, err := x509.ParseCRL([]byte(v))
+		block, _ := pem.Decode([]byte(v))
+		var crlDER []byte
+		if block != nil {
+			crlDER = block.Bytes
+		} else {
+			crlDER = []byte(v)
+		}
+		crl, err := x509.ParseRevocationList(crlDER)
 		if err != nil {
-			return nil, fmt.Errorf("not a valid CA certificate (CRL parsing failed: %s)", err)
+			return nil, fmt.Errorf("not a valid CA certificate (CRL parsing failed: %w)", err)
 		}
 		o.CRL = crl
 	}
@@ -556,8 +562,10 @@ func (x *X509) MakeCA() {
 	x.Certificate.IsCA = true
 	x.Certificate.MaxPathLen = 1
 	x.Serial = big.NewInt(1)
-	x.CRL = &pkix.CertificateList{}
-	x.CRL.TBSCertList.RevokedCertificates = make([]pkix.RevokedCertificate, 0)
+	x.CRL = &x509.RevocationList{
+		RevokedCertificateEntries: make([]x509.RevocationListEntry, 0),
+		Number:                    big.NewInt(1),
+	}
 }
 
 func (x X509) Secret(skipIfExists bool) (*Secret, error) {
@@ -596,13 +604,31 @@ func (x X509) Secret(skipIfExists bool) (*Secret, error) {
 		}
 
 		if x.CRL == nil {
-			x.CRL = &pkix.CertificateList{}
+			x.CRL = &x509.RevocationList{
+				RevokedCertificateEntries: make([]x509.RevocationListEntry, 0),
+				Number:                    big.NewInt(1),
+			}
 		}
-		if x.CRL.TBSCertList.RevokedCertificates == nil {
-			x.CRL.TBSCertList.RevokedCertificates = make([]pkix.RevokedCertificate, 0)
+		if x.CRL.RevokedCertificateEntries == nil {
+			x.CRL.RevokedCertificateEntries = make([]x509.RevocationListEntry, 0)
 		}
-		// TODO: Migrate to x509.CreateRevocationList when refactoring CRL handling
-		b, err := x.Certificate.CreateCRL(rand.Reader, x.PrivateKey, x.CRL.TBSCertList.RevokedCertificates, time.Now(), time.Now().Add(10*365*24*time.Hour))
+		// Ensure issuer has SubjectKeyId populated, required by CreateRevocationList.
+		if len(x.Certificate.SubjectKeyId) == 0 {
+			if kid, kidErr := getKeyIDFromPublicKey(x.PrivateKey.Public()); kidErr == nil {
+				x.Certificate.SubjectKeyId = kid
+			}
+		}
+		now := time.Now()
+		template := &x509.RevocationList{
+			RevokedCertificateEntries: x.CRL.RevokedCertificateEntries,
+			Number:                    x.CRL.Number,
+			ThisUpdate:                now,
+			NextUpdate:                now.Add(10 * 365 * 24 * time.Hour),
+		}
+		if template.Number == nil {
+			template.Number = big.NewInt(1)
+		}
+		b, err := x509.CreateRevocationList(rand.Reader, template, x.Certificate, x.PrivateKey)
 		if err != nil {
 			return s, err
 		}
@@ -689,14 +715,14 @@ func (ca *X509) Revoke(cert *X509) {
 		return
 	}
 
-	ca.CRL.TBSCertList.RevokedCertificates = append(ca.CRL.TBSCertList.RevokedCertificates, pkix.RevokedCertificate{
+	ca.CRL.RevokedCertificateEntries = append(ca.CRL.RevokedCertificateEntries, x509.RevocationListEntry{
 		SerialNumber:   cert.Certificate.SerialNumber,
 		RevocationTime: time.Now(),
 	})
 }
 
 func (ca *X509) HasRevoked(cert *X509) bool {
-	for _, rvk := range ca.CRL.TBSCertList.RevokedCertificates {
+	for _, rvk := range ca.CRL.RevokedCertificateEntries {
 		if rvk.SerialNumber.Cmp(cert.Certificate.SerialNumber) == 0 {
 			return true
 		}

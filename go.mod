@@ -14,8 +14,9 @@ require (
 	github.com/onsi/gomega v1.10.1
 	github.com/pborman/uuid v1.2.1
 	github.com/tredoe/osutil v0.0.0-20161130133508-7d3ee1afa71c
-	golang.org/x/crypto v0.36.0
-	golang.org/x/net v0.38.0
+	golang.org/x/crypto v0.52.0
+	golang.org/x/net v0.55.0
+	golang.org/x/term v0.43.0
 	gopkg.in/yaml.v2 v2.3.0
 )
 
@@ -30,9 +31,8 @@ require (
 	github.com/jhunt/go-snapshot v0.0.0-20170309042712-92984e0ad8d8 // indirect
 	github.com/niemeyer/pretty v0.0.0-20200227124842-a10e7caefd8e // indirect
 	github.com/nxadm/tail v1.4.8 // indirect
-	golang.org/x/sys v0.31.0 // indirect
-	golang.org/x/term v0.30.0 // indirect
-	golang.org/x/text v0.23.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
 	gopkg.in/check.v1 v1.0.0-20200227125254-8fa46927fb4f // indirect
 	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7 // indirect

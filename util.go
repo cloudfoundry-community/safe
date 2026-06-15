@@ -2,22 +2,26 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"time"
 )
 
+var durationRegexp = regexp.MustCompile(`^(\d+)([HhDdMmYy])$`)
+
 func duration(s string) (time.Duration, error) {
-	re := regexp.MustCompile(`^(\d+)([HhDdMmYy])$`)
+	re := durationRegexp
 	if m := re.FindStringSubmatch(s); m != nil {
 		v, err := strconv.ParseUint(m[1], 10, 64)
 		if err != nil {
 			return 0, err
 		}
 
-		// Check for overflow before multiplication
-		const maxDuration = time.Duration(^time.Duration(0) >> 1)
-		
+		// Check for overflow before multiplication.
+		// maxDuration is the largest positive time.Duration (math.MaxInt64 ns).
+		const maxDuration = time.Duration(math.MaxInt64)
+
 		switch m[2] {
 		case "H", "h":
 			if v > uint64(maxDuration/time.Hour) {

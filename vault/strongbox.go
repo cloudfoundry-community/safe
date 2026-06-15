@@ -11,6 +11,8 @@ import (
 	"regexp"
 )
 
+var strongboxPortRegexp = regexp.MustCompile(`:[0-9]+$`)
+
 func (v *Vault) Strongbox() (map[string]string, error) {
 	m := make(map[string]string)
 
@@ -60,6 +62,5 @@ func (v *Vault) Strongbox() (map[string]string, error) {
 }
 
 func StrongboxURL(vaultURL *url.URL) string {
-	re := regexp.MustCompile(`:[0-9]+$`)
-	return "http://" + re.ReplaceAllString(vaultURL.Host, "") + ":8484/strongbox"
+	return "http://" + strongboxPortRegexp.ReplaceAllString(vaultURL.Host, "") + ":8484/strongbox"
 }

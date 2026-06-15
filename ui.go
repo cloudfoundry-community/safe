@@ -12,6 +12,8 @@ import (
 	"github.com/jhunt/go-ansi"
 )
 
+var ansiColorRegexp = regexp.MustCompile("\033\\[\\d+(;\\d+)?m")
+
 func parseKeyVal(key string, quiet bool) (string, string, bool, error) {
 	if strings.Contains(key, "=") {
 		l := strings.SplitN(key, "=", 2)
@@ -39,7 +41,7 @@ func parseKeyVal(key string, quiet bool) (string, string, bool, error) {
 			return l[0], string(b), false, nil
 		}
 
-		b, err := os.ReadFile(l[1])
+		b, err := os.ReadFile(l[1]) // #nosec G703 - user intentionally supplies file path via key@file CLI syntax
 		if err != nil {
 			return l[0], "", true, fmt.Errorf("failed to read contents of %s: %s", l[1], err)
 		}
@@ -223,5 +225,5 @@ func (t *table) _sprintf(f string, args ...interface{}) string {
 }
 
 func (t *table) _stripColor(s string) string {
-	return regexp.MustCompile("\033\\[\\d+(;\\d+)?m").ReplaceAllString(s, "")
+	return ansiColorRegexp.ReplaceAllString(s, "")
 }

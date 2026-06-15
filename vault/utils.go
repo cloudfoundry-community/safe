@@ -8,6 +8,7 @@ import (
 
 var keyColonRegexp = regexp.MustCompile(`[^\\](:)`)
 var versionCaretRegexp = regexp.MustCompile(`[^\\](\^)`)
+var canonicalizeSlashRe = regexp.MustCompile("//+")
 
 // ParsePath splits the given path string into its respective secret path
 // and contained key parts
@@ -88,9 +89,7 @@ func Canonicalize(p string) string {
 	p = strings.TrimSuffix(p, "/")
 	p = strings.TrimPrefix(p, "/")
 
-	re := regexp.MustCompile("//+")
-	p = re.ReplaceAllString(p, "/")
+	p = canonicalizeSlashRe.ReplaceAllString(p, "/")
 
 	return p
 }
-

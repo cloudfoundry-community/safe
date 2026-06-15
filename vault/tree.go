@@ -485,7 +485,7 @@ func (s SecretEntry) Copy(v *Vault, dst string, opts TreeCopyOpts) error {
 	if opts.Clear {
 		err := v.Client().DestroyAll(dst)
 		if err != nil {
-			return fmt.Errorf("could not wipe existing secret at path `%s': %s", dst, err)
+			return fmt.Errorf("could not wipe existing secret at path `%s': %w", dst, err)
 		}
 	}
 
@@ -495,7 +495,7 @@ func (s SecretEntry) Copy(v *Vault, dst string, opts TreeCopyOpts) error {
 		for i := uint(1); i < s.Versions[0].Number; i++ {
 			setMeta, err := v.Client().Set(dst, map[string]string{"TO_DESTROY": "TO_DESTROY"}, nil)
 			if err != nil {
-				return fmt.Errorf("could not write secret to path `%s': %s", dst, err)
+				return fmt.Errorf("could not write secret to path `%s': %w", dst, err)
 			}
 
 			toDestroy = append(toDestroy, setMeta.Version)
@@ -512,7 +512,7 @@ func (s SecretEntry) Copy(v *Vault, dst string, opts TreeCopyOpts) error {
 
 		setMeta, err := v.Client().Set(dst, toWrite, nil)
 		if err != nil {
-			return fmt.Errorf("could not write secret to path `%s': %s", dst, err)
+			return fmt.Errorf("could not write secret to path `%s': %w", dst, err)
 		}
 
 		if version.State == SecretStateDestroyed {
@@ -525,13 +525,13 @@ func (s SecretEntry) Copy(v *Vault, dst string, opts TreeCopyOpts) error {
 	if len(toDestroy) > 0 {
 		err := v.Client().Destroy(dst, toDestroy)
 		if err != nil {
-			return fmt.Errorf("could not destroy versions %+v at path `%s': %s", toDestroy, dst, err)
+			return fmt.Errorf("could not destroy versions %+v at path `%s': %w", toDestroy, dst, err)
 		}
 	}
 	if len(toDelete) > 0 {
 		err := v.DeleteVersions(dst, toDelete)
 		if err != nil {
-			return fmt.Errorf("could not delete versions %+v at path `%s': %s", toDelete, dst, err)
+			return fmt.Errorf("could not delete versions %+v at path `%s': %w", toDelete, dst, err)
 		}
 	}
 

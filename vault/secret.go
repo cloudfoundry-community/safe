@@ -171,7 +171,7 @@ func crypt_md5(pass string) (string, error) {
 	}
 	md5, err := c.Generate([]byte(pass), []byte("$1$"+salt))
 	if err != nil {
-		return "", fmt.Errorf("error generating MD5 crypt for password: %s", err)
+		return "", fmt.Errorf("error generating MD5 crypt for password: %w", err)
 	}
 	return md5, err
 }
@@ -184,7 +184,7 @@ func crypt_sha256(pass string) (string, error) {
 	}
 	sha, err := c.Generate([]byte(pass), []byte("$5$"+salt))
 	if err != nil {
-		return "", fmt.Errorf("error generating SHA-256 crypt for password: %s", err)
+		return "", fmt.Errorf("error generating SHA-256 crypt for password: %w", err)
 	}
 	return sha, err
 }
@@ -197,7 +197,7 @@ func crypt_sha512(pass string) (string, error) {
 	}
 	sha, err := c.Generate([]byte(pass), []byte("$6$"+salt))
 	if err != nil {
-		return "", fmt.Errorf("error generating SHA-512 crypt for password: %s", err)
+		return "", fmt.Errorf("error generating SHA-512 crypt for password: %w", err)
 	}
 	return sha, err
 }

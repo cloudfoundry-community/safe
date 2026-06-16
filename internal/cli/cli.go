@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"crypto/x509"
@@ -26,7 +26,7 @@ import (
 
 	"github.com/cloudfoundry-community/vaultkv"
 	fmt "github.com/jhunt/go-ansi"
-	"github.com/jhunt/go-cli"
+	gocli "github.com/jhunt/go-cli"
 	env "github.com/jhunt/go-envirotron"
 	"gopkg.in/yaml.v2"
 
@@ -322,7 +322,9 @@ type Options struct {
 	} `cli:"x509"`
 }
 
-func main() {
+func Main(version string) {
+	Version = version
+
 	var opt Options
 	opt.Gen.Policy = "a-zA-Z0-9"
 
@@ -4609,7 +4611,7 @@ Currently, only the --renew option is supported, and it is required:
 	})
 
 	env.Override(&opt)
-	p, err := cli.NewParser(&opt, os.Args[1:])
+	p, err := gocli.NewParser(&opt, os.Args[1:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "@R{!! %s}\n", err)
 		os.Exit(1)

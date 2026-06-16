@@ -32,37 +32,37 @@ help: ## Display this help message
 .PHONY: build
 build: ## Build the safe binary for current OS/architecture
 	@echo "$(GREEN)Building $(BINARY_NAME)...$(RESET)"
-	@go build -ldflags="$(LDFLAGS)" -o $(BINARY_NAME) .
+	@go build -ldflags="$(LDFLAGS)" -o $(BINARY_NAME) ./cmd/safe
 	@echo "$(GREEN)✓ Build complete$(RESET)"
 
 .PHONY: linux
 linux: ## Build the safe binary for Linux AMD64
 	@echo "$(GREEN)Building $(BINARY_NAME) for Linux AMD64...$(RESET)"
-	@env GOOS=linux GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(BINARY_NAME)-linux-amd64 .
+	@env GOOS=linux GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(BINARY_NAME)-linux-amd64 ./cmd/safe
 	@echo "$(GREEN)✓ Linux build complete$(RESET)"
 
 .PHONY: linux-arm64
 linux-arm64: ## Build the safe binary for Linux ARM64
 	@echo "$(GREEN)Building $(BINARY_NAME) for Linux ARM64...$(RESET)"
-	@env GOOS=linux GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o $(BINARY_NAME)-linux-arm64 .
+	@env GOOS=linux GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o $(BINARY_NAME)-linux-arm64 ./cmd/safe
 	@echo "$(GREEN)✓ Linux ARM64 build complete$(RESET)"
 
 .PHONY: darwin
 darwin: ## Build the safe binary for macOS AMD64
 	@echo "$(GREEN)Building $(BINARY_NAME) for macOS AMD64...$(RESET)"
-	@env GOOS=darwin GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(BINARY_NAME)-darwin-amd64 .
+	@env GOOS=darwin GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(BINARY_NAME)-darwin-amd64 ./cmd/safe
 	@echo "$(GREEN)✓ macOS AMD64 build complete$(RESET)"
 
 .PHONY: darwin-arm64
 darwin-arm64: ## Build the safe binary for macOS ARM64 (Apple Silicon)
 	@echo "$(GREEN)Building $(BINARY_NAME) for macOS ARM64...$(RESET)"
-	@env GOOS=darwin GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o $(BINARY_NAME)-darwin-arm64 .
+	@env GOOS=darwin GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o $(BINARY_NAME)-darwin-arm64 ./cmd/safe
 	@echo "$(GREEN)✓ macOS ARM64 build complete$(RESET)"
 
 .PHONY: windows
 windows: ## Build the safe binary for Windows AMD64
 	@echo "$(GREEN)Building $(BINARY_NAME) for Windows AMD64...$(RESET)"
-	@env GOOS=windows GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(BINARY_NAME)-windows-amd64.exe .
+	@env GOOS=windows GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(BINARY_NAME)-windows-amd64.exe ./cmd/safe
 	@echo "$(GREEN)✓ Windows build complete$(RESET)"
 
 .PHONY: build-all
@@ -204,11 +204,11 @@ shipit: ## Build release artifacts (requires VERSION env var)
 	@echo "$(GREEN)Compiling safe binaries...$(RESET)"
 	@rm -rf artifacts
 	@mkdir artifacts
-	@GOOS=linux  GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o artifacts/safe-linux-amd64  .
-	@GOOS=linux  GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o artifacts/safe-linux-arm64  .
-	@GOOS=darwin GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o artifacts/safe-darwin-amd64 .
-	@GOOS=darwin GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o artifacts/safe-darwin-arm64 .
-	@GOOS=windows GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o artifacts/safe-windows-amd64.exe .
+	@GOOS=linux  GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o artifacts/safe-linux-amd64 ./cmd/safe
+	@GOOS=linux  GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o artifacts/safe-linux-arm64 ./cmd/safe
+	@GOOS=darwin GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o artifacts/safe-darwin-amd64 ./cmd/safe
+	@GOOS=darwin GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o artifacts/safe-darwin-arm64 ./cmd/safe
+	@GOOS=windows GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o artifacts/safe-windows-amd64.exe ./cmd/safe
 
 	@echo "$(GREEN)Assembling Distribution with platform binaries...$(RESET)"
 	@rm -f artifacts/*.tar.gz artifacts/*.tar.bz2

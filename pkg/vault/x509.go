@@ -431,6 +431,10 @@ func ParseSubject(subj string) (pkix.Name, error) {
 		name  pkix.Name
 	)
 
+	if len(subj) == 0 {
+		return name, fmt.Errorf("subject string cannot be empty")
+	}
+
 	if subj[0] == '/' {
 		pairs = strings.Split(subj[1:], "/")
 	} else {
@@ -479,6 +483,9 @@ func CategorizeSANs(in []string) (ips []net.IP, domains, emails []string) {
 			continue
 		}
 
+		// Note: strings.Index(s, "@") > 0 (not strings.Contains) is intentional —
+		// an "@" at position 0 (e.g. "@foo") has an empty local-part and is
+		// treated as a domain, not an email. See TestCategorizeSANs.
 		if strings.Index(s, "@") > 0 {
 			emails = append(emails, s)
 		} else {

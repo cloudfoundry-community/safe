@@ -12,9 +12,7 @@ import (
 	"golang.org/x/term"
 )
 
-var termState *term.State
-
-func (v *Vault) cancelRekey() {
+func (v *Vault) cancelRekey(termState *term.State) {
 	if termState != nil {
 		_ = term.Restore(int(os.Stdin.Fd()), termState)
 	}
@@ -44,11 +42,13 @@ func (v *Vault) ReKey(unsealKeyCount, numToUnseal int, pgpKeys []string) ([]stri
 		return nil, fmt.Errorf("an error occurred when starting a new rekey operation: %w", err)
 	}
 
+	var termState *term.State
+
 	// we successfully started a rekey, we should now cancel on failure, unless we finish rekeying
 	var shouldCancelRekey = true
 	defer func() {
 		if shouldCancelRekey {
-			v.cancelRekey()
+			v.cancelRekey(termState)
 		}
 	}()
 	// Catch interrupts during the interactive unseal-key prompts: cancel the
@@ -59,7 +59,7 @@ func (v *Vault) ReKey(unsealKeyCount, numToUnseal int, pgpKeys []string) ([]stri
 	signal.Notify(sighandler, os.Interrupt, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		if _, ok := <-sighandler; ok {
-			v.cancelRekey()
+			v.cancelRekey(termState)
 			os.Exit(1)
 		}
 	}()

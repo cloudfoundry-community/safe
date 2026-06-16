@@ -12,6 +12,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/cloudfoundry-community/vaultkv"
 	"github.com/jhunt/go-ansi"
@@ -70,6 +71,7 @@ func NewVault(conf VaultConfig) (*Vault, error) {
 			AuthToken: conf.Token,
 			Namespace: conf.Namespace,
 			Client: &http.Client{
+				Timeout: 30 * time.Second,
 				Transport: &http.Transport{
 					Proxy: proxyRouter.Proxy,
 					TLSClientConfig: &tls.Config{
@@ -287,7 +289,7 @@ func (v *Vault) verifySecretState(path string, opts verifyOpts) error {
 			}
 		} else {
 			for i := range versions {
-				if !(versions[i].Deleted || versions[i].Destroyed) || (opts.State == verifyStateAliveOrDeleted && !versions[i].Destroyed) {
+				if (!versions[i].Deleted && !versions[i].Destroyed) || (opts.State == verifyStateAliveOrDeleted && !versions[i].Destroyed) {
 					return nil
 				}
 			}
@@ -520,10 +522,6 @@ func (v *Vault) Undelete(path string) error {
 		return destroyedErr
 	}
 
-	// G115: Perform safe conversion with bounds checking
-	if version < uint64(firstVersion) {
-		return fmt.Errorf("version %d is less than first version %d", version, firstVersion)
-	}
 	diff := version - uint64(firstVersion)
 	const maxInt = int(^uint(0) >> 1)
 	if diff > uint64(maxInt) {
@@ -773,9 +771,6 @@ func (v *Vault) Move(oldpath, newpath string, opts MoveCopyOpts) error {
 	if err != nil {
 		return fmt.Errorf("can't move `%s': %s. Did you mean cp?", oldpath, err)
 	}
-	if err != nil {
-		return err
-	}
 
 	err = v.Copy(oldpath, newpath, opts)
 	if err != nil {
@@ -854,6 +849,7 @@ func (v *Vault) Mount(typ, path string, params map[string]interface{}) error {
 		if err != nil {
 			return err
 		}
+		defer func() { _ = res.Body.Close() }()
 
 		if res.StatusCode != 204 {
 			body, err := io.ReadAll(res.Body)
@@ -873,6 +869,7 @@ func (v *Vault) Mount(typ, path string, params map[string]interface{}) error {
 		if err != nil {
 			return err
 		}
+		defer func() { _ = res.Body.Close() }()
 
 		if res.StatusCode != 204 {
 			body, err := io.ReadAll(res.Body)
@@ -895,6 +892,7 @@ func (v *Vault) RetrievePem(backend, path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = res.Body.Close() }()
 
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
@@ -1050,6 +1048,7 @@ func (v *Vault) RevokeCertificate(backend, serial string) error {
 	if err != nil {
 		return err
 	}
+	defer func() { _ = res.Body.Close() }()
 
 	if res.StatusCode >= 400 {
 		body, err := io.ReadAll(res.Body)
@@ -1062,7 +1061,11 @@ func (v *Vault) RevokeCertificate(backend, serial string) error {
 }
 
 func (v *Vault) CheckPKIBackend(backend string) error {
-	if mounted, _ := v.IsMounted("pki", backend); !mounted {
+	mounted, err := v.IsMounted("pki", backend)
+	if err != nil {
+		return fmt.Errorf("could not check PKI backend: %w", err)
+	}
+	if !mounted {
 		return fmt.Errorf("the PKI backend `%s` has not been configured. Try running `safe pki init --backend %s`", backend, backend)
 	}
 	return nil
@@ -1110,13 +1113,15 @@ func (v *Vault) FindSigningCA(cert *X509, certPath string, signPath string) (*X5
 	}
 }
 
-func (v *Vault) SaveSealKeys(keys []string) {
+func (v *Vault) SaveSealKeys(keys []string) error {
 	path := "secret/vault/seal/keys"
 	s := NewSecret()
 	for i, key := range keys {
-		_ = s.Set(fmt.Sprintf("key%d", i+1), key, false)
+		if err := s.Set(fmt.Sprintf("key%d", i+1), key, false); err != nil {
+			return err
+		}
 	}
-	_ = v.Write(path, s)
+	return v.Write(path, s)
 }
 
 func (v *Vault) SetURL(u string) error {

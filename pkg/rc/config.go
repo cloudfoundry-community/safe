@@ -171,12 +171,26 @@ func writeTempCACerts(certs []string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("Could not write CAs to a temp file: %w", err)
 	}
-	defer caFile.Close()
+	// Best-effort close guard for early-return error paths below.
+	// The success path uses an explicit checked close instead.
+	closed := false
+	defer func() {
+		if !closed {
+			_ = caFile.Close()
+		}
+	}()
 
 	toWrite := strings.Join(certs, "\n")
 	_, err = caFile.WriteString(toWrite)
 	if err != nil {
 		return "", fmt.Errorf("Could not write CA certs into temporary file: %w", err)
+	}
+
+	// Explicit close with error check on the success path so a flush failure
+	// is not silently dropped (errcheck baseline; also catches Windows quirks).
+	closed = true
+	if err = caFile.Close(); err != nil {
+		return "", fmt.Errorf("could not close CA cert temp file: %w", err)
 	}
 
 	toCleanup = append(toCleanup, caFile.Name())

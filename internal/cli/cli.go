@@ -46,7 +46,7 @@ func connectOrErr(auth bool) (*vault.Vault, error) {
 	if os.Getenv("VAULT_CACERT") != "" {
 		contents, err := os.ReadFile(os.Getenv("VAULT_CACERT")) // #nosec G703 -- VAULT_CACERT is a standard Vault environment variable controlled by the user
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "@R{!! Could not read CA certificates: %s}", err.Error())
+			return nil, fmt.Errorf("could not read CA certificates from %s: %w", os.Getenv("VAULT_CACERT"), err)
 		}
 
 		caCertPool = x509.NewCertPool()
@@ -88,20 +88,20 @@ func connect(auth bool) *vault.Vault {
 
 	switch {
 	case errors.Is(err, errNoVaultTarget):
-		fmt.Fprintf(os.Stderr, "@R{You are not targeting a Vault.}\n")
-		fmt.Fprintf(os.Stderr, "Try @C{safe target https://your-vault alias}\n")
-		fmt.Fprintf(os.Stderr, " or @C{safe target alias}\n")
+		_, _ = fmt.Fprintf(os.Stderr, "@R{You are not targeting a Vault.}\n")
+		_, _ = fmt.Fprintf(os.Stderr, "Try @C{safe target https://your-vault alias}\n")
+		_, _ = fmt.Fprintf(os.Stderr, " or @C{safe target alias}\n")
 	case errors.Is(err, errNotAuthenticated):
-		fmt.Fprintf(os.Stderr, "@R{You are not authenticated to a Vault.}\n")
-		fmt.Fprintf(os.Stderr, "Try @C{safe auth ldap}\n")
-		fmt.Fprintf(os.Stderr, " or @C{safe auth github}\n")
-		fmt.Fprintf(os.Stderr, " or @C{safe auth okta}\n")
-		fmt.Fprintf(os.Stderr, " or @C{safe auth oidc}\n")
-		fmt.Fprintf(os.Stderr, " or @C{safe auth token}\n")
-		fmt.Fprintf(os.Stderr, " or @C{safe auth userpass}\n")
-		fmt.Fprintf(os.Stderr, " or @C{safe auth approle}\n")
+		_, _ = fmt.Fprintf(os.Stderr, "@R{You are not authenticated to a Vault.}\n")
+		_, _ = fmt.Fprintf(os.Stderr, "Try @C{safe auth ldap}\n")
+		_, _ = fmt.Fprintf(os.Stderr, " or @C{safe auth github}\n")
+		_, _ = fmt.Fprintf(os.Stderr, " or @C{safe auth okta}\n")
+		_, _ = fmt.Fprintf(os.Stderr, " or @C{safe auth oidc}\n")
+		_, _ = fmt.Fprintf(os.Stderr, " or @C{safe auth token}\n")
+		_, _ = fmt.Fprintf(os.Stderr, " or @C{safe auth userpass}\n")
+		_, _ = fmt.Fprintf(os.Stderr, " or @C{safe auth approle}\n")
 	default:
-		fmt.Fprintf(os.Stderr, "@R{!! %s}\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "@R{!! %s}\n", err)
 	}
 	os.Exit(1)
 	return nil
@@ -1345,7 +1345,7 @@ Currently, only the --renew option is supported, and it is required:
 	env.Override(&opt)
 	p, err := gocli.NewParser(&opt, os.Args[1:])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "@R{!! %s}\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "@R{!! %s}\n", err)
 		os.Exit(1)
 	}
 
@@ -1376,23 +1376,23 @@ Currently, only the --renew option is supported, and it is required:
 			continue
 		}
 
-		os.Unsetenv("VAULT_SKIP_VERIFY")
-		os.Unsetenv("SAFE_SKIP_VERIFY")
+		_ = os.Unsetenv("VAULT_SKIP_VERIFY")
+		_ = os.Unsetenv("SAFE_SKIP_VERIFY")
 		if opt.Insecure {
 			_ = os.Setenv("VAULT_SKIP_VERIFY", "1")
 			_ = os.Setenv("SAFE_SKIP_VERIFY", "1")
 		}
 
-		defer rc.Cleanup()
 		err = r.Execute(p.Command, p.Args...)
+		rc.Cleanup()
 		if err != nil {
 			var usageErr *UsageError
 			if errors.As(err, &usageErr) {
 				r.PrintUsage(os.Stderr, usageErr.Topic)
 			} else if strings.HasPrefix(err.Error(), "USAGE") {
-				fmt.Fprintf(os.Stderr, "@Y{%s}\n", err)
+				_, _ = fmt.Fprintf(os.Stderr, "@Y{%s}\n", err)
 			} else {
-				fmt.Fprintf(os.Stderr, "@R{!! %s}\n", err)
+				_, _ = fmt.Fprintf(os.Stderr, "@R{!! %s}\n", err)
 			}
 			os.Exit(1)
 		}
@@ -1405,7 +1405,7 @@ Currently, only the --renew option is supported, and it is required:
 	}
 
 	if err = p.Error(); err != nil {
-		fmt.Fprintf(os.Stderr, "@R{!! %s}\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "@R{!! %s}\n", err)
 		os.Exit(1)
 	}
 }

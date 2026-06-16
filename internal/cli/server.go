@@ -21,6 +21,26 @@ import (
 	"github.com/cloudfoundry-community/safe/pkg/vault"
 )
 
+// parseVaultVersion extracts the major and minor version numbers from the
+// output of `vault version`. Returns (major, minor, true) on success, or
+// (0, 0, false) when the version string cannot be parsed (non-fatal; the
+// caller falls back to the default storageKey).
+func parseVaultVersion(output []byte) (major, minor uint64, ok bool) {
+	matches := regexp.MustCompile(`v([0-9]+)\.([0-9]+)`).FindSubmatch(output)
+	if len(matches) < 3 {
+		return 0, 0, false
+	}
+	maj, err := strconv.ParseUint(string(matches[1]), 10, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	min, err := strconv.ParseUint(string(matches[2]), 10, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	return maj, min, true
+}
+
 func (c *CLI) cmdLocal(command string, args ...string) error {
 	opt := c.opt
 
@@ -48,27 +68,12 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 	storageKey := "storage"
 	cmd := exec.Command("vault", "version")
 	versionOutput, err := cmd.CombinedOutput()
-	if err == nil {
-		matches := regexp.MustCompile(`v([0-9]+)\.([0-9]+)`).FindSubmatch(versionOutput)
-		if len(matches) >= 3 {
-			major, err := strconv.ParseUint(string(matches[1]), 10, 64)
-			if err != nil {
-				goto doneVersionCheck
-			}
-			minor, err := strconv.ParseUint(string(matches[2]), 10, 64)
-			if err != nil {
-				goto doneVersionCheck
-			}
-
-			//if version < 0.8.0
-			if major == 0 && minor < 8 {
-				storageKey = "backend"
-			}
-		}
-	} else {
+	if err != nil {
 		return fmt.Errorf("@R{Vault is not currently installed or located in $PATH}")
 	}
-doneVersionCheck:
+	if major, minor, ok := parseVaultVersion(versionOutput); ok && major == 0 && minor < 8 {
+		storageKey = "backend"
+	}
 
 	keys := make([]string, 0)
 	if !opt.Local.Memory {
@@ -111,7 +116,9 @@ doneVersionCheck:
 	cmd = exec.Command("vault", "server", "-config", f.Name()) // #nosec G204 - f.Name() is a temp file we created
 	cmd.Stdout = &vaultOutput
 	cmd.Stderr = &vaultOutput
-	_ = cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start vault server: %w", err)
+	}
 	go func() {
 		echan <- cmd.Wait()
 	}()
@@ -119,13 +126,13 @@ doneVersionCheck:
 
 	die := func(err error) {
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "@R{!! %s}\n", err)
+			_, _ = fmt.Fprintf(os.Stderr, "@R{!! %s}\n", err)
 		}
-		fmt.Fprintf(os.Stderr, "@Y{shutting down the Vault...}\n")
+		_, _ = fmt.Fprintf(os.Stderr, "@Y{shutting down the Vault...}\n")
 		if err := cmd.Process.Kill(); err != nil {
-			fmt.Fprintf(os.Stderr, "@R{NOTE: Unable to terminate the Vault process.}\n")
-			fmt.Fprintf(os.Stderr, "@R{      You may have some environmental cleanup to do.}\n")
-			fmt.Fprintf(os.Stderr, "@R{      Apologies.}\n")
+			_, _ = fmt.Fprintf(os.Stderr, "@R{NOTE: Unable to terminate the Vault process.}\n")
+			_, _ = fmt.Fprintf(os.Stderr, "@R{      You may have some environmental cleanup to do.}\n")
+			_, _ = fmt.Fprintf(os.Stderr, "@R{      Apologies.}\n")
 		}
 		os.Exit(1)
 	}
@@ -224,7 +231,7 @@ doneVersionCheck:
 		if err != nil {
 			return fmt.Errorf("Could not add `secret' mount: %s", err)
 		}
-		fmt.Printf("safe has mounted the @C{secret} backend\n\n")
+		_, _ = fmt.Printf("safe has mounted the @C{secret} backend\n\n")
 	}
 
 	s := vault.NewSecret()
@@ -232,19 +239,19 @@ doneVersionCheck:
 	_ = v.Write("secret/handshake", s)
 
 	if !opt.Quiet {
-		fmt.Fprintf(os.Stderr, "Now targeting (temporary) @Y{%s} at @C{%s}\n", cfg.Current, cfg.URL())
+		_, _ = fmt.Fprintf(os.Stderr, "Now targeting (temporary) @Y{%s} at @C{%s}\n", cfg.Current, cfg.URL())
 		if opt.Local.Memory {
-			fmt.Fprintf(os.Stderr, "@R{This Vault is MEMORY-BACKED!}\n")
-			fmt.Fprintf(os.Stderr, "If you want to @Y{retain your secrets} be sure to @C{safe export}.\n")
+			_, _ = fmt.Fprintf(os.Stderr, "@R{This Vault is MEMORY-BACKED!}\n")
+			_, _ = fmt.Fprintf(os.Stderr, "If you want to @Y{retain your secrets} be sure to @C{safe export}.\n")
 		} else {
-			fmt.Fprintf(os.Stderr, "Storing data (encrypted) in @G{%s}\n", opt.Local.File)
-			fmt.Fprintf(os.Stderr, "Your Vault Seal Key is @M{%s}\n", keys[0])
+			_, _ = fmt.Fprintf(os.Stderr, "Storing data (encrypted) in @G{%s}\n", opt.Local.File)
+			_, _ = fmt.Fprintf(os.Stderr, "Your Vault Seal Key is @M{%s}\n", keys[0])
 		}
-		fmt.Fprintf(os.Stderr, "Ctrl-C to shut down the Vault\n")
+		_, _ = fmt.Fprintf(os.Stderr, "Ctrl-C to shut down the Vault\n")
 	}
 
 	err = <-echan
-	fmt.Fprintf(os.Stderr, "Vault terminated normally, cleaning up...\n")
+	_, _ = fmt.Fprintf(os.Stderr, "Vault terminated normally, cleaning up...\n")
 	{
 		var applyErr error
 		cfg, applyErr = rc.Apply("")
@@ -320,40 +327,40 @@ func (c *CLI) cmdInit(command string, args ...string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("%s\n", string(b))
+		_, _ = fmt.Printf("%s\n", string(b))
 	} else {
 		for i, key := range keys {
-			fmt.Printf("Unseal Key #%d: @G{%s}\n", i+1, key)
+			_, _ = fmt.Printf("Unseal Key #%d: @G{%s}\n", i+1, key)
 		}
-		fmt.Printf("Initial Root Token: @M{%s}\n", token)
-		fmt.Printf("\n")
+		_, _ = fmt.Printf("Initial Root Token: @M{%s}\n", token)
+		_, _ = fmt.Printf("\n")
 		if opt.Init.NKeys == 1 {
-			fmt.Printf("Vault initialized with a single key. Please securely distribute it.\n")
-			fmt.Printf("When the Vault is re-sealed, restarted, or stopped, you must provide\n")
-			fmt.Printf("this key to unseal it again.\n")
-			fmt.Printf("\n")
-			fmt.Printf("Vault does not store the master key. Without the above unseal key,\n")
-			fmt.Printf("your Vault will remain permanently sealed.\n")
+			_, _ = fmt.Printf("Vault initialized with a single key. Please securely distribute it.\n")
+			_, _ = fmt.Printf("When the Vault is re-sealed, restarted, or stopped, you must provide\n")
+			_, _ = fmt.Printf("this key to unseal it again.\n")
+			_, _ = fmt.Printf("\n")
+			_, _ = fmt.Printf("Vault does not store the master key. Without the above unseal key,\n")
+			_, _ = fmt.Printf("your Vault will remain permanently sealed.\n")
 
 		} else if opt.Init.NKeys == opt.Init.Threshold {
-			fmt.Printf("Vault initialized with %d keys. Please securely distribute the\n", opt.Init.NKeys)
-			fmt.Printf("above keys. When the Vault is re-sealed, restarted, or stopped,\n")
-			fmt.Printf("you must provide all of these keys to unseal it again.\n")
-			fmt.Printf("\n")
-			fmt.Printf("Vault does not store the master key. Without all %d of the keys,\n", opt.Init.Threshold)
-			fmt.Printf("your Vault will remain permanently sealed.\n")
+			_, _ = fmt.Printf("Vault initialized with %d keys. Please securely distribute the\n", opt.Init.NKeys)
+			_, _ = fmt.Printf("above keys. When the Vault is re-sealed, restarted, or stopped,\n")
+			_, _ = fmt.Printf("you must provide all of these keys to unseal it again.\n")
+			_, _ = fmt.Printf("\n")
+			_, _ = fmt.Printf("Vault does not store the master key. Without all %d of the keys,\n", opt.Init.Threshold)
+			_, _ = fmt.Printf("your Vault will remain permanently sealed.\n")
 
 		} else {
-			fmt.Printf("Vault initialized with %d keys and a key threshold of %d. Please\n", opt.Init.NKeys, opt.Init.Threshold)
-			fmt.Printf("securely distribute the above keys. When the Vault is re-sealed,\n")
-			fmt.Printf("restarted, or stopped, you must provide at least %d of these keys\n", opt.Init.Threshold)
-			fmt.Printf("to unseal it again.\n")
-			fmt.Printf("\n")
-			fmt.Printf("Vault does not store the master key. Without at least %d keys,\n", opt.Init.Threshold)
-			fmt.Printf("your Vault will remain permanently sealed.\n")
+			_, _ = fmt.Printf("Vault initialized with %d keys and a key threshold of %d. Please\n", opt.Init.NKeys, opt.Init.Threshold)
+			_, _ = fmt.Printf("securely distribute the above keys. When the Vault is re-sealed,\n")
+			_, _ = fmt.Printf("restarted, or stopped, you must provide at least %d of these keys\n", opt.Init.Threshold)
+			_, _ = fmt.Printf("to unseal it again.\n")
+			_, _ = fmt.Printf("\n")
+			_, _ = fmt.Printf("Vault does not store the master key. Without at least %d keys,\n", opt.Init.Threshold)
+			_, _ = fmt.Printf("your Vault will remain permanently sealed.\n")
 		}
 
-		fmt.Printf("\n")
+		_, _ = fmt.Printf("\n")
 	}
 
 	if !opt.Init.Sealed {
@@ -376,7 +383,7 @@ func (c *CLI) cmdInit(command string, args ...string) error {
 				return fmt.Errorf("invalid vault address %s: %s", addr, err)
 			}
 			if err := v.Unseal(keys); err != nil {
-				fmt.Fprintf(os.Stderr, "!!! unable to unseal newly-initialized vault (at %s): %s\n", addr, err)
+				_, _ = fmt.Fprintf(os.Stderr, "!!! unable to unseal newly-initialized vault (at %s): %s\n", addr, err)
 			}
 		}
 
@@ -413,7 +420,7 @@ func (c *CLI) cmdInit(command string, args ...string) error {
 				}
 
 				if !opt.Init.JSON {
-					fmt.Printf("safe has mounted the @C{secret} backend\n")
+					_, _ = fmt.Printf("safe has mounted the @C{secret} backend\n")
 				}
 			}
 		}
@@ -424,28 +431,30 @@ func (c *CLI) cmdInit(command string, args ...string) error {
 		_ = v.Write("secret/handshake", s)
 
 		if !opt.Init.JSON {
-			fmt.Printf("safe has unsealed the Vault for you, and written a test value\n")
-			fmt.Printf("at @C{secret/handshake}.\n\n")
+			_, _ = fmt.Printf("safe has unsealed the Vault for you, and written a test value\n")
+			_, _ = fmt.Printf("at @C{secret/handshake}.\n\n")
 		}
 
 		/* write seal keys to the vault */
 		if opt.Init.Persist {
-			v.SaveSealKeys(keys)
+			if err := v.SaveSealKeys(keys); err != nil {
+				return fmt.Errorf("failed to save seal keys: %w", err)
+			}
 			if !opt.Init.JSON {
-				fmt.Printf("safe has written the unseal keys at @C{secret/vault/seal/keys}\n")
+				_, _ = fmt.Printf("safe has written the unseal keys at @C{secret/vault/seal/keys}\n")
 			}
 		}
 	} else {
 		if !opt.Init.JSON {
-			fmt.Printf("Your Vault has been left sealed.\n")
+			_, _ = fmt.Printf("Your Vault has been left sealed.\n")
 		}
 	}
 
 	if !opt.Init.JSON {
-		fmt.Printf("\n")
-		fmt.Printf("You have been automatically authenticated to the Vault with the\n")
-		fmt.Printf("initial root token.  Be safe out there!\n")
-		fmt.Printf("\n")
+		_, _ = fmt.Printf("\n")
+		_, _ = fmt.Printf("You have been automatically authenticated to the Vault with the\n")
+		_, _ = fmt.Printf("initial root token.  Be safe out there!\n")
+		_, _ = fmt.Printf("\n")
 	}
 
 	return nil
@@ -487,7 +496,7 @@ func (c *CLI) cmdUnseal(command string, args ...string) error {
 	}
 
 	if len(addrs) == 0 {
-		fmt.Printf("@C{all vaults are already unsealed!}\n")
+		_, _ = fmt.Printf("@C{all vaults are already unsealed!}\n")
 		return nil
 	}
 
@@ -499,7 +508,7 @@ func (c *CLI) cmdUnseal(command string, args ...string) error {
 		return err
 	}
 
-	fmt.Printf("You need %d key(s) to unseal the vaults.\n\n", nkeys)
+	_, _ = fmt.Printf("You need %d key(s) to unseal the vaults.\n\n", nkeys)
 	keys := make([]string, nkeys)
 
 	for i := 0; i < nkeys; i++ {
@@ -507,7 +516,7 @@ func (c *CLI) cmdUnseal(command string, args ...string) error {
 	}
 
 	for _, addr := range addrs {
-		fmt.Printf("unsealing @G{%s}...\n", addr)
+		_, _ = fmt.Printf("unsealing @G{%s}...\n", addr)
 		if err := v.SetURL(addr); err != nil {
 			return err
 		}
@@ -555,7 +564,7 @@ func (c *CLI) cmdSeal(command string, args ...string) error {
 	}
 
 	if len(toSeal) == 0 {
-		fmt.Printf("@C{all vaults are already sealed!}\n")
+		_, _ = fmt.Printf("@C{all vaults are already sealed!}\n")
 	}
 
 	consecutiveFailures := 0
@@ -582,7 +591,7 @@ func (c *CLI) cmdSeal(command string, args ...string) error {
 			}
 
 			if sealed {
-				fmt.Printf("sealed @G{%s}...\n", addr)
+				_, _ = fmt.Printf("sealed @G{%s}...\n", addr)
 				//Remove sealed Vault from list
 				toSeal[i], toSeal[len(toSeal)-1] = toSeal[len(toSeal)-1], toSeal[i]
 				toSeal = toSeal[:len(toSeal)-1]
@@ -610,7 +619,7 @@ func (c *CLI) cmdVault(command string, args ...string) error {
 	}
 
 	if opt.SkipIfExists {
-		fmt.Fprintf(os.Stderr, "@C{--no-clobber} @Y{specified, but is ignored for} @C{safe vault}\n")
+		_, _ = fmt.Fprintf(os.Stderr, "@C{--no-clobber} @Y{specified, but is ignored for} @C{safe vault}\n")
 	}
 
 	proxy, err := vault.NewProxyRouter()
@@ -627,7 +636,7 @@ func (c *CLI) cmdVault(command string, args ...string) error {
 	for _, arg := range args {
 		if !strings.HasPrefix(arg, "-") {
 			if arg == "status" {
-				os.Unsetenv("VAULT_NAMESPACE")
+				_ = os.Unsetenv("VAULT_NAMESPACE")
 			}
 			break
 		}
@@ -718,15 +727,17 @@ func (c *CLI) cmdRekey(command string, args ...string) error {
 	}
 
 	if opt.Rekey.Persist {
-		v.SaveSealKeys(keys)
+		if err := v.SaveSealKeys(keys); err != nil {
+			return fmt.Errorf("failed to save seal keys: %w", err)
+		}
 	}
 
-	fmt.Printf("@G{Your Vault has been re-keyed.} Please take note of your new unseal keys and @R{store them safely!}\n")
+	_, _ = fmt.Printf("@G{Your Vault has been re-keyed.} Please take note of your new unseal keys and @R{store them safely!}\n")
 	for i, key := range keys {
 		if len(opt.Rekey.GPG) == len(keys) {
-			fmt.Printf("Unseal key for @c{%s}:\n@y{%s}\n", opt.Rekey.GPG[i], key)
+			_, _ = fmt.Printf("Unseal key for @c{%s}:\n@y{%s}\n", opt.Rekey.GPG[i], key)
 		} else {
-			fmt.Printf("Unseal key %d: @y{%s}\n", i+1, key)
+			_, _ = fmt.Printf("Unseal key %d: @y{%s}\n", i+1, key)
 		}
 	}
 

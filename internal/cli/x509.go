@@ -111,7 +111,7 @@ func (c *CLI) cmdX509Validate(command string, args ...string) error {
 			}
 		}
 
-		fmt.Printf("@G{%s} checks out.\n", path)
+		_, _ = fmt.Printf("@G{%s} checks out.\n", path)
 	}
 
 	return nil
@@ -139,7 +139,7 @@ func (c *CLI) cmdX509Issue(command string, args ...string) error {
 	if opt.SkipIfExists {
 		if _, err := v.Read(args[0]); err == nil {
 			if !opt.Quiet {
-				fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to create a new certificate in} @C{%s} @R{as it is already present in Vault}\n", args[0])
+				_, _ = fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to create a new certificate in} @C{%s} @R{as it is already present in Vault}\n", args[0])
 			}
 			return nil
 		} else if err != nil && !vault.IsNotFound(err) {
@@ -227,7 +227,7 @@ func (c *CLI) cmdX509Reissue(command string, args ...string) error {
 		return r.Usage("x509 reissue")
 	}
 	if opt.SkipIfExists {
-		fmt.Fprintf(os.Stderr, "@R{!!} @C{--no-clobber} @R{is incompatible with} @C{safe x509 reissue}\n")
+		_, _ = fmt.Fprintf(os.Stderr, "@R{!!} @C{--no-clobber} @R{is incompatible with} @C{safe x509 reissue}\n")
 		return r.Usage("x509 reissue")
 	}
 
@@ -312,7 +312,7 @@ func (c *CLI) cmdX509Reissue(command string, args ...string) error {
 	}
 
 	// Generate new key per the resolved spec.
-	fmt.Printf("\nGenerating new %s key...\n", spec.Describe())
+	_, _ = fmt.Printf("\nGenerating new %s key...\n", spec.Describe())
 	newKey, err := vault.GenerateKey(spec)
 	if err != nil {
 		return err
@@ -334,7 +334,7 @@ func (c *CLI) cmdX509Reissue(command string, args ...string) error {
 		return err
 	}
 
-	fmt.Printf("Reissued x509 certificate at %s - expiry set to %s\n\n", args[0], cert.ExpiryString())
+	_, _ = fmt.Printf("Reissued x509 certificate at %s - expiry set to %s\n\n", args[0], cert.ExpiryString())
 
 	return nil
 }
@@ -351,7 +351,7 @@ func (c *CLI) cmdX509Renew(command string, args ...string) error {
 		return r.Usage("x509 renew")
 	}
 	if opt.SkipIfExists {
-		fmt.Fprintf(os.Stderr, "@R{!!} @C{--no-clobber} @R{is incompatible with} @C{safe x509 renew}\n")
+		_, _ = fmt.Fprintf(os.Stderr, "@R{!!} @C{--no-clobber} @R{is incompatible with} @C{safe x509 renew}\n")
 		return r.Usage("x509 renew")
 	}
 
@@ -438,7 +438,7 @@ func (c *CLI) cmdX509Renew(command string, args ...string) error {
 		return err
 	}
 
-	fmt.Printf("\nRenewed x509 certificate at %s - expiry set to %s\n\n", args[0], cert.ExpiryString())
+	_, _ = fmt.Printf("\nRenewed x509 certificate at %s - expiry set to %s\n\n", args[0], cert.ExpiryString())
 	return nil
 }
 
@@ -505,15 +505,15 @@ func (c *CLI) cmdX509Show(command string, args ...string) error {
 	v := connect(true)
 
 	for _, path := range args {
-		s, err := v.Read(args[0])
+		s, err := v.Read(path)
 		if err != nil {
 			return err
 		}
 
-		fmt.Printf("%s:\n", path)
+		_, _ = fmt.Printf("%s:\n", path)
 		cert, err := s.X509(false)
 		if err != nil {
-			fmt.Printf("  !! %s\n\n", err)
+			_, _ = fmt.Printf("  !! %s\n\n", err)
 			continue
 		}
 
@@ -527,14 +527,14 @@ func (c *CLI) cmdX509Show(command string, args ...string) error {
 // certificate to w. Output is identical to the original inline
 // rendering in cmdX509Show (go-ansi Printf is Fprintf to os.Stdout).
 func printX509(w io.Writer, cert *vault.X509) {
-	fmt.Fprintf(w, "  @G{%s}\n\n", cert.Subject())
+	_, _ = fmt.Fprintf(w, "  @G{%s}\n\n", cert.Subject())
 	if cert.Subject() != cert.Issuer() {
-		fmt.Fprintf(w, "  issued by: @C{%s}\n", cert.Issuer())
+		_, _ = fmt.Fprintf(w, "  issued by: @C{%s}\n", cert.Issuer())
 		for i := range cert.Intermediaries {
-			fmt.Fprintf(w, "        via: @C{%s}\n", cert.IntermediarySubject(i))
+			_, _ = fmt.Fprintf(w, "        via: @C{%s}\n", cert.IntermediarySubject(i))
 		}
 	} else {
-		fmt.Fprintf(w, "  @C{self-signed}\n")
+		_, _ = fmt.Fprintf(w, "  @C{self-signed}\n")
 	}
 
 	toStart := time.Until(cert.Certificate.NotBefore)
@@ -542,79 +542,79 @@ func printX509(w io.Writer, cert *vault.X509) {
 
 	days := int(toStart.Hours() / 24)
 	if days == 1 {
-		fmt.Fprintf(w, "  @Y{not valid for another day}\n")
+		_, _ = fmt.Fprintf(w, "  @Y{not valid for another day}\n")
 	} else if days > 1 {
-		fmt.Fprintf(w, "  @Y{not valid for another %d days}\n", days)
+		_, _ = fmt.Fprintf(w, "  @Y{not valid for another %d days}\n", days)
 	}
 
 	days = int(toEnd.Hours() / 24)
 	if days < -1 {
-		fmt.Fprintf(w, "  @R{EXPIRED %d days ago}\n", -1*days)
+		_, _ = fmt.Fprintf(w, "  @R{EXPIRED %d days ago}\n", -1*days)
 	} else if days < 0 {
-		fmt.Fprintf(w, "  @R{EXPIRED a day ago}\n")
+		_, _ = fmt.Fprintf(w, "  @R{EXPIRED a day ago}\n")
 	} else if days < 1 {
-		fmt.Fprintf(w, "  @R{EXPIRED}\n")
+		_, _ = fmt.Fprintf(w, "  @R{EXPIRED}\n")
 	} else if days == 1 {
-		fmt.Fprintf(w, "  @Y{expires in a day}\n")
+		_, _ = fmt.Fprintf(w, "  @Y{expires in a day}\n")
 	} else if days < 30 {
-		fmt.Fprintf(w, "  @Y{expires in %d days}\n", days)
+		_, _ = fmt.Fprintf(w, "  @Y{expires in %d days}\n", days)
 	} else {
-		fmt.Fprintf(w, "  expires in @G{%d days}\n", days)
+		_, _ = fmt.Fprintf(w, "  expires in @G{%d days}\n", days)
 	}
-	fmt.Fprintf(w, "  valid from @C{%s} - @C{%s}", cert.Certificate.NotBefore.Format("Jan 2 2006"), cert.Certificate.NotAfter.Format("Jan 2 2006"))
+	_, _ = fmt.Fprintf(w, "  valid from @C{%s} - @C{%s}", cert.Certificate.NotBefore.Format("Jan 2 2006"), cert.Certificate.NotAfter.Format("Jan 2 2006"))
 
 	life := int(cert.Certificate.NotAfter.Sub(cert.Certificate.NotBefore).Hours())
 	if life < 360*24 {
-		fmt.Fprintf(w, " (@M{~%d days})\n", life/24)
+		_, _ = fmt.Fprintf(w, " (@M{~%d days})\n", life/24)
 	} else {
-		fmt.Fprintf(w, " (@M{~%d years})\n", life/365/24)
+		_, _ = fmt.Fprintf(w, " (@M{~%d years})\n", life/365/24)
 	}
-	fmt.Fprintf(w, "\n")
+	_, _ = fmt.Fprintf(w, "\n")
 
 	n := 0
-	fmt.Fprintf(w, "  for the following purposes:\n")
+	_, _ = fmt.Fprintf(w, "  for the following purposes:\n")
 	if cert.KeyUsage&x509.KeyUsageDigitalSignature != 0 {
 		n++
-		fmt.Fprintf(w, "    - @C{digital-signature}  can be used to verify digital signatures.\n")
+		_, _ = fmt.Fprintf(w, "    - @C{digital-signature}  can be used to verify digital signatures.\n")
 	}
 	if cert.KeyUsage&x509.KeyUsageContentCommitment != 0 {
 		n++
-		fmt.Fprintf(w, "    - @C{non-repudiation}    can be used for non-repudiation / content commitment.\n")
+		_, _ = fmt.Fprintf(w, "    - @C{non-repudiation}    can be used for non-repudiation / content commitment.\n")
 	}
 	if cert.KeyUsage&x509.KeyUsageKeyEncipherment != 0 {
 		n++
-		fmt.Fprintf(w, "    - @C{key-encipherment}   can be used encrypt other keys, for transport.\n")
+		_, _ = fmt.Fprintf(w, "    - @C{key-encipherment}   can be used encrypt other keys, for transport.\n")
 	}
 	if cert.KeyUsage&x509.KeyUsageDataEncipherment != 0 {
 		n++
-		fmt.Fprintf(w, "    - @C{data-encipherment}  can be used to encrypt user data directly.\n")
+		_, _ = fmt.Fprintf(w, "    - @C{data-encipherment}  can be used to encrypt user data directly.\n")
 	}
 	if cert.KeyUsage&x509.KeyUsageKeyAgreement != 0 {
 		n++
-		fmt.Fprintf(w, "    - @C{key-agreement}      can be used in key exchange, a la Diffie-Hellman key exchange.\n")
+		_, _ = fmt.Fprintf(w, "    - @C{key-agreement}      can be used in key exchange, a la Diffie-Hellman key exchange.\n")
 	}
 	if cert.KeyUsage&x509.KeyUsageCertSign != 0 {
 		n++
-		fmt.Fprintf(w, "    - @C{key-cert-sign}      can be used to verify digital signatures on public key certificates.\n")
+		_, _ = fmt.Fprintf(w, "    - @C{key-cert-sign}      can be used to verify digital signatures on public key certificates.\n")
 	}
 	if cert.KeyUsage&x509.KeyUsageCRLSign != 0 {
 		n++
-		fmt.Fprintf(w, "    - @C{crl-sign}           can be used to verify digital signatures on certificate revocation lists.\n")
+		_, _ = fmt.Fprintf(w, "    - @C{crl-sign}           can be used to verify digital signatures on certificate revocation lists.\n")
 	}
 	if cert.KeyUsage&x509.KeyUsageEncipherOnly != 0 {
 		n++
 		if cert.KeyUsage&x509.KeyUsageKeyAgreement != 0 {
-			fmt.Fprintf(w, "    - @C{encipher-only}      can only be used to encrypt data in a key exchange.\n")
+			_, _ = fmt.Fprintf(w, "    - @C{encipher-only}      can only be used to encrypt data in a key exchange.\n")
 		} else {
-			fmt.Fprintf(w, "    - @C{encipher-only}      this key-usage is undefined if key-agreement is not set (which it isn't).\n")
+			_, _ = fmt.Fprintf(w, "    - @C{encipher-only}      this key-usage is undefined if key-agreement is not set (which it isn't).\n")
 		}
 	}
 	if cert.KeyUsage&x509.KeyUsageDecipherOnly != 0 {
 		n++
 		if cert.KeyUsage&x509.KeyUsageKeyAgreement != 0 {
-			fmt.Fprintf(w, "    - @C{decipher-only}      can only be used to decrypt data in a key exchange.\n")
+			_, _ = fmt.Fprintf(w, "    - @C{decipher-only}      can only be used to decrypt data in a key exchange.\n")
 		} else {
-			fmt.Fprintf(w, "    - @C{decipher-only}      this key-usage is undefined if key-agreement is not set (which it isn't).\n")
+			_, _ = fmt.Fprintf(w, "    - @C{decipher-only}      this key-usage is undefined if key-agreement is not set (which it isn't).\n")
 		}
 	}
 	for _, ku := range cert.ExtKeyUsage {
@@ -623,25 +623,25 @@ func printX509(w io.Writer, cert *vault.X509) {
 		default:
 			n--
 		case x509.ExtKeyUsageClientAuth:
-			fmt.Fprintf(w, "    - @C{client-auth}*       can be used by a TLS client for authentication.\n")
+			_, _ = fmt.Fprintf(w, "    - @C{client-auth}*       can be used by a TLS client for authentication.\n")
 		case x509.ExtKeyUsageServerAuth:
-			fmt.Fprintf(w, "    - @C{server-auth}*       can be used by a TLS server for authentication.\n")
+			_, _ = fmt.Fprintf(w, "    - @C{server-auth}*       can be used by a TLS server for authentication.\n")
 		case x509.ExtKeyUsageCodeSigning:
-			fmt.Fprintf(w, "    - @C{code-signing}*      can be used to sign software packages to prove source.\n")
+			_, _ = fmt.Fprintf(w, "    - @C{code-signing}*      can be used to sign software packages to prove source.\n")
 		case x509.ExtKeyUsageEmailProtection:
-			fmt.Fprintf(w, "    - @C{email-protection}*  can be used to protect email (signing, encryption, and key exchange).\n")
+			_, _ = fmt.Fprintf(w, "    - @C{email-protection}*  can be used to protect email (signing, encryption, and key exchange).\n")
 		case x509.ExtKeyUsageTimeStamping:
-			fmt.Fprintf(w, "    - @C{timestamping}*      can be used to generate trusted timestamps.\n")
+			_, _ = fmt.Fprintf(w, "    - @C{timestamping}*      can be used to generate trusted timestamps.\n")
 		}
 	}
 	if n == 0 {
-		fmt.Fprintf(w, "    (no special key usage constraints present)\n")
+		_, _ = fmt.Fprintf(w, "    (no special key usage constraints present)\n")
 	}
-	fmt.Fprintf(w, "\n")
+	_, _ = fmt.Fprintf(w, "\n")
 
-	fmt.Fprintf(w, "  key: @G{%s}\n\n", cert.KeyDescription())
+	_, _ = fmt.Fprintf(w, "  key: @G{%s}\n\n", cert.KeyDescription())
 
-	fmt.Fprintf(w, "  signed with the algorithm ")
+	_, _ = fmt.Fprintf(w, "  signed with the algorithm ")
 	sigView := map[x509.SignatureAlgorithm]string{
 		x509.UnknownSignatureAlgorithm: "Unknown",
 		x509.MD2WithRSA:                "MD2 With RSA",
@@ -661,34 +661,34 @@ func printX509(w io.Writer, cert *vault.X509) {
 		x509.SHA512WithRSAPSS:          "SHA512 With RSAPSS",
 	}
 	sigAlgo := sigView[cert.Certificate.SignatureAlgorithm]
-	fmt.Fprintf(w, "@G{%s}\n", sigAlgo)
-	fmt.Fprintf(w, "\n")
+	_, _ = fmt.Fprintf(w, "@G{%s}\n", sigAlgo)
+	_, _ = fmt.Fprintf(w, "\n")
 
-	fmt.Fprintf(w, "  for the following names:\n")
+	_, _ = fmt.Fprintf(w, "  for the following names:\n")
 	for _, s := range cert.Certificate.DNSNames {
-		fmt.Fprintf(w, "    - @G{%s} (DNS)\n", s)
+		_, _ = fmt.Fprintf(w, "    - @G{%s} (DNS)\n", s)
 	}
 	for _, s := range cert.Certificate.EmailAddresses {
-		fmt.Fprintf(w, "    - @G{%s} (email)\n", s)
+		_, _ = fmt.Fprintf(w, "    - @G{%s} (email)\n", s)
 	}
 	for _, s := range cert.Certificate.IPAddresses {
-		fmt.Fprintf(w, "    - @G{%s} (IP)\n", s)
+		_, _ = fmt.Fprintf(w, "    - @G{%s} (IP)\n", s)
 	}
-	fmt.Fprintf(w, "\n")
+	_, _ = fmt.Fprintf(w, "\n")
 
 	serialString := fmt.Sprintf("@M{%[1]d} (@M{%#[1]x})", cert.Certificate.SerialNumber)
 	if cert.Certificate.SerialNumber.Cmp(big.NewInt(1000)) == 1 {
 		serialString = fmt.Sprintf("@M{%s}", cert.FormatSerial())
 	}
-	fmt.Fprintf(w, "  serial: %s\n", serialString)
-	fmt.Fprintf(w, "  ")
+	_, _ = fmt.Fprintf(w, "  serial: %s\n", serialString)
+	_, _ = fmt.Fprintf(w, "  ")
 	if cert.IsCA() {
-		fmt.Fprintf(w, "@G{is}")
+		_, _ = fmt.Fprintf(w, "@G{is}")
 	} else {
-		fmt.Fprintf(w, "@Y{is not}")
+		_, _ = fmt.Fprintf(w, "@Y{is not}")
 	}
-	fmt.Fprintf(w, " a CA\n")
-	fmt.Fprintf(w, "\n")
+	_, _ = fmt.Fprintf(w, " a CA\n")
+	_, _ = fmt.Fprintf(w, "\n")
 }
 
 func (c *CLI) cmdX509Crl(command string, args ...string) error {

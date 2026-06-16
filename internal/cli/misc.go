@@ -15,15 +15,15 @@ import (
 func (c *CLI) cmdVersion(command string, args ...string) error {
 
 	if Version != "" {
-		fmt.Fprintf(os.Stderr, "safe v%s\n", Version)
+		_, _ = fmt.Fprintf(os.Stderr, "safe v%s\n", Version)
 	} else {
-		fmt.Fprintf(os.Stderr, "safe (development build)\n")
+		_, _ = fmt.Fprintf(os.Stderr, "safe (development build)\n")
 	}
 	if GitCommit != "" {
-		fmt.Fprintf(os.Stderr, "  commit %s\n", GitCommit)
+		_, _ = fmt.Fprintf(os.Stderr, "  commit %s\n", GitCommit)
 	}
 	if BuildTime != "" {
-		fmt.Fprintf(os.Stderr, "  built  %s\n", BuildTime)
+		_, _ = fmt.Fprintf(os.Stderr, "  built  %s\n", BuildTime)
 	}
 	os.Exit(0)
 	return nil
@@ -42,7 +42,7 @@ func (c *CLI) cmdHelp(command string, args ...string) error {
 
 func (c *CLI) cmdEnvvars(command string, args ...string) error {
 
-	fmt.Printf(`@G{[SCRIPTING]}
+	_, _ = fmt.Printf(`@G{[SCRIPTING]}
   @B{SAFE_TARGET}    The vault alias which requests are sent to.
 
 @G{[PROXYING]}
@@ -91,7 +91,7 @@ func (c *CLI) cmdPrompt(command string, args ...string) error {
 	// about to be writing after a prompt, so not sure if we should or shouldn't prompt
 	// if you need to write something and prompt, but only if it isnt already present
 	// in vault, see the `ask` subcommand
-	fmt.Fprintf(os.Stderr, "%s\n", strings.Join(args, " "))
+	_, _ = fmt.Fprintf(os.Stderr, "%s\n", strings.Join(args, " "))
 	return nil
 }
 
@@ -119,7 +119,7 @@ func (c *CLI) cmdFmt(command string, args ...string) error {
 	}
 	if opt.SkipIfExists && s.Has(newKey) {
 		if !opt.Quiet {
-			fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to reformat} @C{%s:%s} @R{to} @C{%s} @R{as it is already present in Vault}\n", path, oldKey, newKey)
+			_, _ = fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to reformat} @C{%s:%s} @R{to} @C{%s} @R{as it is already present in Vault}\n", path, oldKey, newKey)
 		}
 		return nil
 	}
@@ -162,17 +162,18 @@ func (c *CLI) cmdCurl(command string, args ...string) error {
 	if err != nil {
 		return err
 	}
+	defer func() { _ = res.Body.Close() }()
 
 	if opt.Curl.DataOnly {
 		b, err := io.ReadAll(res.Body)
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(os.Stdout, "%s\n", string(b))
+		_, _ = fmt.Fprintf(os.Stdout, "%s\n", string(b))
 
 	} else {
 		r, _ := httputil.DumpResponse(res, true)
-		fmt.Fprintf(os.Stdout, "%s\n", r)
+		_, _ = fmt.Fprintf(os.Stdout, "%s\n", r)
 	}
 	return nil
 }

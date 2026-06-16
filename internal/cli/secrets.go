@@ -64,7 +64,7 @@ func (c *CLI) writeHelper(prompt bool, insecure bool, command string, args ...st
 	}
 	if len(clobberKeys) > 0 {
 		if !opt.Quiet {
-			fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to update} @C{%s}@R{, as the following keys would be clobbered:} @C{%s}\n",
+			_, _ = fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to update} @C{%s}@R{, as the following keys would be clobbered:} @C{%s}\n",
 				path, strings.Join(clobberKeys, ", "))
 		}
 		return nil
@@ -133,16 +133,16 @@ func (c *CLI) cmdGet(command string, args ...string) error {
 		if opt.Get.KeysOnly {
 			keys := s.Keys()
 			for _, key := range keys {
-				fmt.Printf("%s\n", key)
+				_, _ = fmt.Printf("%s\n", key)
 			}
 		} else if _, key, _ := vault.ParsePath(args[0]); key != "" {
 			value, err := s.SingleValue()
 			if err != nil {
 				return err
 			}
-			fmt.Printf("%s\n", value)
+			_, _ = fmt.Printf("%s\n", value)
 		} else {
-			fmt.Printf("--- # %s\n%s\n", args[0], s.YAML())
+			_, _ = fmt.Printf("--- # %s\n%s\n", args[0], s.YAML())
 		}
 		return nil
 	}
@@ -189,14 +189,14 @@ func (c *CLI) cmdGet(command string, args ...string) error {
 	}
 	if numErrs > 0 {
 		if opt.Get.KeysOnly {
-			fmt.Fprintf(os.Stderr, "@y{WARNING:} %s\n", err)
+			_, _ = fmt.Fprintf(os.Stderr, "@y{WARNING:} %s\n", err)
 		} else {
 			return err
 		}
 	}
 
 	// Now that we've collected/collated all the data, format and print it
-	fmt.Printf("---\n")
+	_, _ = fmt.Printf("---\n")
 	if opt.Get.KeysOnly {
 		printedPaths := make(map[string]bool, 0)
 		for _, path := range args {
@@ -207,8 +207,11 @@ func (c *CLI) cmdGet(command string, args ...string) error {
 			printedPaths[p] = true
 			result, ok := results[p]
 			if !ok {
-				yml, _ := yaml.Marshal(map[string][]string{p: []string{}})
-				fmt.Printf("%s", string(yml))
+				yml, err := yaml.Marshal(map[string][]string{p: []string{}})
+				if err != nil {
+					return fmt.Errorf("failed to marshal output: %w", err)
+				}
+				_, _ = fmt.Printf("%s", string(yml))
 			} else {
 				foundKeys := reflect.ValueOf(result).MapKeys()
 				strKeys := make([]string, len(foundKeys))
@@ -216,13 +219,19 @@ func (c *CLI) cmdGet(command string, args ...string) error {
 					strKeys[i] = foundKeys[i].String()
 				}
 				sort.Strings(strKeys)
-				yml, _ := yaml.Marshal(map[string][]string{p: strKeys})
-				fmt.Printf("%s\n", string(yml))
+				yml, err := yaml.Marshal(map[string][]string{p: strKeys})
+				if err != nil {
+					return fmt.Errorf("failed to marshal output: %w", err)
+				}
+				_, _ = fmt.Printf("%s\n", string(yml))
 			}
 		}
 	} else {
-		yml, _ := yaml.Marshal(results)
-		fmt.Printf("%s\n", string(yml))
+		yml, err := yaml.Marshal(results)
+		if err != nil {
+			return fmt.Errorf("failed to marshal output: %w", err)
+		}
+		_, _ = fmt.Printf("%s\n", string(yml))
 	}
 	return nil
 }
@@ -253,7 +262,7 @@ func (c *CLI) cmdVersions(command string, args ...string) error {
 		}
 
 		if len(args) > 1 {
-			fmt.Printf("@B{%s}:\n", args[i])
+			_, _ = fmt.Printf("@B{%s}:\n", args[i])
 		}
 
 		table := table{}
@@ -286,7 +295,7 @@ func (c *CLI) cmdVersions(command string, args ...string) error {
 		table.print()
 
 		if len(args) > 1 && i != len(args)-1 {
-			fmt.Printf("\n")
+			_, _ = fmt.Printf("\n")
 		}
 	}
 
@@ -304,20 +313,20 @@ func (c *CLI) cmdLs(command string, args ...string) error {
 		if opt.List.Single {
 			for _, s := range paths {
 				if strings.HasSuffix(s, "/") {
-					fmt.Printf("@B{%s}\n", s)
+					_, _ = fmt.Printf("@B{%s}\n", s)
 				} else {
-					fmt.Printf("@G{%s}\n", s)
+					_, _ = fmt.Printf("@G{%s}\n", s)
 				}
 			}
 		} else {
 			for _, s := range paths {
 				if strings.HasSuffix(s, "/") {
-					fmt.Printf("@B{%s}  ", s)
+					_, _ = fmt.Printf("@B{%s}  ", s)
 				} else {
-					fmt.Printf("@G{%s}  ", s)
+					_, _ = fmt.Printf("@G{%s}  ", s)
 				}
 			}
-			fmt.Printf("\n")
+			_, _ = fmt.Printf("\n")
 		}
 	}
 
@@ -376,11 +385,11 @@ func (c *CLI) cmdLs(command string, args ...string) error {
 		sort.Strings(filteredPaths)
 
 		if len(args) != 1 {
-			fmt.Printf("@C{%s}:\n", path)
+			_, _ = fmt.Printf("@C{%s}:\n", path)
 		}
 		display(filteredPaths)
 		if len(args) != 1 {
-			fmt.Printf("\n")
+			_, _ = fmt.Printf("\n")
 		}
 	}
 	return nil
@@ -421,7 +430,7 @@ func (c *CLI) cmdTree(command string, args ...string) error {
 			if i < len(args)-1 {
 				line = r1.ReplaceAllString(r2.ReplaceAllString(line, "├"), "│")
 			}
-			fmt.Printf("%s\n", line)
+			_, _ = fmt.Printf("%s\n", line)
 		}
 	}
 	return nil
@@ -447,8 +456,8 @@ func (c *CLI) cmdPaths(command string, args ...string) error {
 			return err
 		}
 
-		fmt.Printf(strings.Join(secrets.Paths(), "\n"))
-		fmt.Printf("\n")
+		_, _ = fmt.Printf(strings.Join(secrets.Paths(), "\n"))
+		_, _ = fmt.Printf("\n")
 	}
 	return nil
 }
@@ -482,14 +491,14 @@ func (c *CLI) cmdDelete(command string, args ...string) error {
 			if err := v.DeleteTree(path, vault.DeleteOpts{
 				Destroy: opt.Delete.Destroy,
 				All:     opt.Delete.All,
-			}); err != nil && !(vault.IsNotFound(err) && opt.Delete.Force) {
+			}); err != nil && (!vault.IsNotFound(err) || !opt.Delete.Force) {
 				return err
 			}
 		} else {
 			if err := v.Delete(path, vault.DeleteOpts{
 				Destroy: opt.Delete.Destroy,
 				All:     opt.Delete.All,
-			}); err != nil && !(vault.IsNotFound(err) && opt.Delete.Force) {
+			}); err != nil && (!vault.IsNotFound(err) || !opt.Delete.Force) {
 				return err
 			}
 		}
@@ -763,7 +772,7 @@ func (c *CLI) cmdExport(command string, args ...string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s\n", string(b))
+	_, _ = fmt.Printf("%s\n", string(b))
 
 	return nil
 }
@@ -784,7 +793,7 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 	}
 
 	if opt.SkipIfExists {
-		fmt.Fprintf(os.Stderr, "@R{!!} @C{--no-clobber} @R{is incompatible with} @C{safe import}\n")
+		_, _ = fmt.Fprintf(os.Stderr, "@R{!!} @C{--no-clobber} @R{is incompatible with} @C{safe import}\n")
 		return r.Usage("import")
 	}
 
@@ -803,7 +812,7 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(os.Stderr, "wrote %s\n", path)
+			_, _ = fmt.Fprintf(os.Stderr, "wrote %s\n", path)
 		}
 		return nil
 	}
@@ -876,7 +885,7 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 				// Safe conversion: i is bounded by len(secret.Versions)
 				// Check if adding i to firstVersion would overflow
 				if i < 0 || uint(i) > ^uint(0)-firstVersion {
-					fmt.Fprintf(os.Stderr, "@R{Version number overflow detected for secret}\n")
+					_, _ = fmt.Fprintf(os.Stderr, "@R{Version number overflow detected for secret}\n")
 					return fmt.Errorf("version number overflow detected")
 				}
 				s.Versions = append(s.Versions, vault.SecretVersion{
@@ -888,7 +897,7 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 
 			err := s.Copy(v, s.Path, vault.TreeCopyOpts{
 				Clear: true,
-				Pad:   !(opt.Import.IgnoreDestroyed || opt.Import.Shallow),
+				Pad:   !opt.Import.IgnoreDestroyed && !opt.Import.Shallow,
 			})
 			if err != nil {
 				return err
@@ -967,17 +976,17 @@ func (c *CLI) moveCopy(v *vault.Vault, args []string, p moveCopyParams) error {
 
 	//Don't try to recurse if operating on a key
 	// args[0] is the source path. args[1] is the destination path.
-	if p.recurse && !(vault.PathHasKey(args[0]) || vault.PathHasKey(args[1])) {
+	if p.recurse && !vault.PathHasKey(args[0]) && !vault.PathHasKey(args[1]) {
 		if !p.force && !recursively(p.verb, args...) {
 			return nil /* skip this command, process the next */
 		}
 		err := v.MoveCopyTree(args[0], args[1], p.op, opts)
-		if err != nil && !(vault.IsNotFound(err) && p.force) {
+		if err != nil && (!vault.IsNotFound(err) || !p.force) {
 			return err
 		}
 	} else {
 		err := p.op(args[0], args[1], opts)
-		if err != nil && !(vault.IsNotFound(err) && p.force) {
+		if err != nil && (!vault.IsNotFound(err) || !p.force) {
 			return err
 		}
 	}
@@ -1085,7 +1094,7 @@ func (c *CLI) cmdOption(command string, args ...string) error {
 			if opt.opt == optionKey {
 				found = true
 				*opt.val = optionVal
-				fmt.Printf("updated @G{%s}\n", opt.opt)
+				_, _ = fmt.Printf("updated @G{%s}\n", opt.opt)
 				break
 			}
 		}

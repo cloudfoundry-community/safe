@@ -26,7 +26,7 @@ func (c *CLI) cmdTargets(command string, args ...string) error {
 	}
 
 	if opt.UseTarget != "" {
-		fmt.Fprintf(os.Stderr, "@Y{Specifying --target to the targets command makes no sense; ignoring...}\n")
+		_, _ = fmt.Fprintf(os.Stderr, "@Y{Specifying --target to the targets command makes no sense; ignoring...}\n")
 	}
 
 	cfg, err := rc.Apply(opt.UseTarget)
@@ -56,7 +56,7 @@ func (c *CLI) cmdTargets(command string, args ...string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("%s\n", string(b))
+		_, _ = fmt.Printf("%s\n", string(b))
 		return nil
 	}
 
@@ -76,7 +76,7 @@ func (c *CLI) cmdTargets(command string, args ...string) error {
 		hasCurrent = " - current target indicated with a (*)"
 	}
 
-	fmt.Fprintf(os.Stderr, "\nKnown Vault targets%s:\n", hasCurrent)
+	_, _ = fmt.Fprintf(os.Stderr, "\nKnown Vault targets%s:\n", hasCurrent)
 	sort.Strings(keys)
 	for _, name := range keys {
 		t := cfg.Vaults[name]
@@ -90,9 +90,9 @@ func (c *CLI) cmdTargets(command string, args ...string) error {
 		if name == cfg.Current {
 			format = currentFmt
 		}
-		fmt.Fprintf(os.Stderr, format, name, skip, t.URL)
+		_, _ = fmt.Fprintf(os.Stderr, format, name, skip, t.URL)
 	}
-	fmt.Fprintf(os.Stderr, "\n")
+	_, _ = fmt.Fprintf(os.Stderr, "\n")
 	return nil
 }
 
@@ -114,55 +114,52 @@ func (c *CLI) cmdTarget(command string, args ...string) error {
 			return err
 		}
 	}
-	skipverify := false
-	if os.Getenv("SAFE_SKIP_VERIFY") == "1" {
-		skipverify = true
-	}
+	skipverify := os.Getenv("SAFE_SKIP_VERIFY") == "1"
 
 	if opt.UseTarget != "" {
-		fmt.Fprintf(os.Stderr, "@Y{Specifying --target to the target command makes no sense; ignoring...}\n")
+		_, _ = fmt.Fprintf(os.Stderr, "@Y{Specifying --target to the target command makes no sense; ignoring...}\n")
 	}
 
 	printTarget := func() {
 		u := cfg.URL()
-		fmt.Fprintf(os.Stderr, "Currently targeting @C{%s} at @C{%s}\n", cfg.Current, u)
+		_, _ = fmt.Fprintf(os.Stderr, "Currently targeting @C{%s} at @C{%s}\n", cfg.Current, u)
 		if !cfg.Verified() {
-			fmt.Fprintf(os.Stderr, "@R{Skipping TLS certificate validation}\n")
+			_, _ = fmt.Fprintf(os.Stderr, "@R{Skipping TLS certificate validation}\n")
 		}
 		if cfg.Namespace() != "" {
-			fmt.Fprintf(os.Stderr, "Using namespace @C{%s}\n", cfg.Namespace())
+			_, _ = fmt.Fprintf(os.Stderr, "Using namespace @C{%s}\n", cfg.Namespace())
 		}
 		if cfg.HasStrongbox() {
 			urlAsURL, err := url.Parse(u)
-			fmt.Fprintf(os.Stderr, "Uses Strongbox")
+			_, _ = fmt.Fprintf(os.Stderr, "Uses Strongbox")
 			if err == nil {
-				fmt.Fprintf(os.Stderr, " at @C{%s}", vault.StrongboxURL(urlAsURL))
+				_, _ = fmt.Fprintf(os.Stderr, " at @C{%s}", vault.StrongboxURL(urlAsURL))
 			}
-			fmt.Fprintf(os.Stderr, "\n")
+			_, _ = fmt.Fprintf(os.Stderr, "\n")
 		} else {
-			fmt.Fprintf(os.Stderr, "Does not use Strongbox\n")
+			_, _ = fmt.Fprintf(os.Stderr, "Does not use Strongbox\n")
 		}
-		fmt.Fprintf(os.Stderr, "\n")
+		_, _ = fmt.Fprintf(os.Stderr, "\n")
 	}
 
 	if opt.Target.Interactive {
 		for {
 			if len(cfg.Vaults) == 0 {
-				fmt.Fprintf(os.Stderr, "@R{No Vaults have been targeted yet.}\n\n")
-				fmt.Fprintf(os.Stderr, "You will need to target a Vault manually first.\n\n")
-				fmt.Fprintf(os.Stderr, "Try something like this:\n")
-				fmt.Fprintf(os.Stderr, "     @C{safe target ops https://address.of.your.vault}\n")
-				fmt.Fprintf(os.Stderr, "     @C{safe auth (github|token|ldap|okta|userpass)}\n")
-				fmt.Fprintf(os.Stderr, "\n")
+				_, _ = fmt.Fprintf(os.Stderr, "@R{No Vaults have been targeted yet.}\n\n")
+				_, _ = fmt.Fprintf(os.Stderr, "You will need to target a Vault manually first.\n\n")
+				_, _ = fmt.Fprintf(os.Stderr, "Try something like this:\n")
+				_, _ = fmt.Fprintf(os.Stderr, "     @C{safe target ops https://address.of.your.vault}\n")
+				_, _ = fmt.Fprintf(os.Stderr, "     @C{safe auth (github|token|ldap|okta|userpass)}\n")
+				_, _ = fmt.Fprintf(os.Stderr, "\n")
 				os.Exit(1)
 			}
 			_ = r.Execute("targets")
 
-			fmt.Fprintf(os.Stderr, "Which Vault would you like to target?\n")
+			_, _ = fmt.Fprintf(os.Stderr, "Which Vault would you like to target?\n")
 			t := prompt.Normal("@G{> }")
 			err := cfg.SetCurrent(t, skipverify)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "@R{%s}\n", err)
+				_, _ = fmt.Fprintf(os.Stderr, "@R{%s}\n", err)
 				continue
 			}
 			err = cfg.Write()
@@ -174,7 +171,7 @@ func (c *CLI) cmdTarget(command string, args ...string) error {
 				if !cfg.Verified() {
 					skip = " (skipping TLS certificate verification)"
 				}
-				fmt.Fprintf(os.Stderr, "Now targeting @C{%s} at @C{%s}@R{%s}\n\n", cfg.Current, cfg.URL(), skip)
+				_, _ = fmt.Fprintf(os.Stderr, "Now targeting @C{%s} at @C{%s}@R{%s}\n\n", cfg.Current, cfg.URL(), skip)
 			}
 			return nil
 		}
@@ -198,12 +195,12 @@ func (c *CLI) cmdTarget(command string, args ...string) error {
 				if err != nil {
 					return err
 				}
-				fmt.Printf("%s\n", string(b))
+				_, _ = fmt.Printf("%s\n", string(b))
 				return nil
 			}
 
 			if cfg.Current == "" {
-				fmt.Fprintf(os.Stderr, "@R{No Vault currently targeted}\n")
+				_, _ = fmt.Fprintf(os.Stderr, "@R{No Vault currently targeted}\n")
 			} else {
 				printTarget()
 			}
@@ -224,8 +221,8 @@ func (c *CLI) cmdTarget(command string, args ...string) error {
 	if len(args) == 2 {
 		var err error
 		alias, url := args[0], args[1]
-		if !(strings.HasPrefix(args[1], "http://") ||
-			strings.HasPrefix(args[1], "https://")) {
+		if !strings.HasPrefix(args[1], "http://") &&
+			!strings.HasPrefix(args[1], "https://") {
 			alias, url = url, alias
 		}
 
@@ -337,9 +334,9 @@ func (c *CLI) cmdStatus(command string, args ...string) error {
 	for _, s := range statuses {
 		if s.sealed {
 			hasSealed = true
-			fmt.Printf("@R{%s is sealed}\n", s.addr)
+			_, _ = fmt.Printf("@R{%s is sealed}\n", s.addr)
 		} else {
-			fmt.Printf("@G{%s is unsealed}\n", s.addr)
+			_, _ = fmt.Printf("@G{%s is unsealed}\n", s.addr)
 		}
 	}
 
@@ -359,7 +356,7 @@ func (c *CLI) cmdEnv(command string, args ...string) error {
 	}
 	if opt.Env.ForBash && opt.Env.ForFish && opt.Env.ForJSON {
 		r.Help(os.Stderr, "env")
-		fmt.Fprintf(os.Stderr, "@R{Only specify one of --json, --bash OR --fish.}\n")
+		_, _ = fmt.Fprintf(os.Stderr, "@R{Only specify one of --json, --bash OR --fish.}\n")
 		os.Exit(1)
 	}
 	vars := map[string]string{
@@ -373,17 +370,17 @@ func (c *CLI) cmdEnv(command string, args ...string) error {
 	case opt.Env.ForBash:
 		for name, value := range vars {
 			if value != "" {
-				fmt.Fprintf(os.Stdout, "\\export %s=%s;\n", name, value)
+				_, _ = fmt.Fprintf(os.Stdout, "\\export %s=%s;\n", name, value)
 			} else {
-				fmt.Fprintf(os.Stdout, "\\unset %s;\n", name)
+				_, _ = fmt.Fprintf(os.Stdout, "\\unset %s;\n", name)
 			}
 		}
 	case opt.Env.ForFish:
 		for name, value := range vars {
 			if value == "" {
-				fmt.Fprintf(os.Stdout, "set -u %s;\n", name)
+				_, _ = fmt.Fprintf(os.Stdout, "set -u %s;\n", name)
 			} else {
-				fmt.Fprintf(os.Stdout, "set -x %s %s;\n", name, value)
+				_, _ = fmt.Fprintf(os.Stdout, "set -x %s %s;\n", name, value)
 			}
 		}
 	case opt.Env.ForJSON:
@@ -402,13 +399,13 @@ func (c *CLI) cmdEnv(command string, args ...string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("%s\n", string(b))
+		_, _ = fmt.Printf("%s\n", string(b))
 		return nil
 
 	default:
 		for name, value := range vars {
 			if value != "" {
-				fmt.Fprintf(os.Stderr, "  @B{%s}  @G{%s}\n", name, value)
+				_, _ = fmt.Fprintf(os.Stderr, "  @B{%s}  @G{%s}\n", name, value)
 			}
 		}
 	}
@@ -436,7 +433,7 @@ func (c *CLI) cmdAuth(command string, args ...string) error {
 	if opt.UseTarget != "" {
 		target = opt.UseTarget
 	}
-	fmt.Fprintf(os.Stderr, "Authenticating against @C{%s} at @C{%s}\n", target, url)
+	_, _ = fmt.Fprintf(os.Stderr, "Authenticating against @C{%s} at @C{%s}\n", target, url)
 
 	authMount := method
 	if opt.Auth.Path != "" {
@@ -510,9 +507,9 @@ func (c *CLI) cmdAuth(command string, args ...string) error {
 		tokenInfo, err := v.Client().Client.TokenInfoSelf()
 		var tokenObj TokenStatus
 		if err != nil {
-			if !(vaultkv.IsForbidden(err) ||
-				vaultkv.IsNotFound(err) ||
-				vaultkv.IsBadRequest(err)) {
+			if !vaultkv.IsForbidden(err) &&
+				!vaultkv.IsNotFound(err) &&
+				!vaultkv.IsBadRequest(err) {
 				return err
 			}
 		} else {
@@ -532,7 +529,7 @@ func (c *CLI) cmdAuth(command string, args ...string) error {
 			output = tokenObj.String()
 		}
 
-		fmt.Printf(output)
+		_, _ = fmt.Printf(output)
 		return nil
 
 	default:
@@ -544,7 +541,7 @@ func (c *CLI) cmdAuth(command string, args ...string) error {
 	currentTarget := cfg.Current
 	err = cfg.SetCurrent(target, false)
 	if err != nil {
-		return fmt.Errorf("Could not find target with name `%s'")
+		return fmt.Errorf("Could not find target with name `%s'", target)
 	}
 	_ = cfg.SetToken(token)
 	_ = cfg.SetCurrent(currentTarget, false)
@@ -568,7 +565,7 @@ func (c *CLI) cmdLogout(command string, args ...string) error {
 	if opt.UseTarget != "" {
 		target = opt.UseTarget
 	}
-	fmt.Fprintf(os.Stderr, "Successfully logged out of @C{%s}\n", target)
+	_, _ = fmt.Fprintf(os.Stderr, "Successfully logged out of @C{%s}\n", target)
 	return nil
 }
 
@@ -587,18 +584,18 @@ func (c *CLI) cmdRenew(command string, args ...string) error {
 		failed := 0
 		for vault := range cfg.Vaults {
 			if _, err := rc.Apply(vault); err != nil {
-				fmt.Fprintf(os.Stderr, "@R{failed to apply config for %s: %s}\n", vault, err)
+				_, _ = fmt.Fprintf(os.Stderr, "@R{failed to apply config for %s: %s}\n", vault, err)
 				failed++
 				continue
 			}
 			if os.Getenv("VAULT_TOKEN") == "" {
-				fmt.Printf("skipping @C{%s} - no token found.\n", vault)
+				_, _ = fmt.Printf("skipping @C{%s} - no token found.\n", vault)
 				continue
 			}
-			fmt.Printf("renewing token against @C{%s}...\n", vault)
+			_, _ = fmt.Printf("renewing token against @C{%s}...\n", vault)
 			v := connect(true)
 			if err := v.RenewLease(); err != nil {
-				fmt.Fprintf(os.Stderr, "@R{failed to renew token against %s: %s}\n", vault, err)
+				_, _ = fmt.Fprintf(os.Stderr, "@R{failed to renew token against %s: %s}\n", vault, err)
 				failed++
 			}
 		}

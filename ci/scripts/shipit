@@ -65,7 +65,7 @@ LDFLAGS="-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitC
 
 pushd $REPO_ROOT
 mkdir artifacts
-gox -osarch="${TARGETS}" --output="artifacts/${BINARY}-{{.OS}}-{{.Arch}}" -ldflags="${LDFLAGS}" ./...
+gox -osarch="${TARGETS}" --output="artifacts/${BINARY}-{{.OS}}-{{.Arch}}" -ldflags="${LDFLAGS}" ./cmd/safe
 go build -o "${BINARY}" -ldflags="${LDFLAGS}" ${CMD_PKG:-./cmd/safe}
 ./${BINARY} -v
 popd

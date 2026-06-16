@@ -2,6 +2,9 @@ package prompt
 
 import (
 	"bufio"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -17,8 +20,29 @@ func readline() string {
 		in = bufio.NewReader(os.Stdin)
 	}
 
-	s, _ := in.ReadString('\n')
-	return strings.TrimSuffix(strings.TrimSuffix(s, "\r\n"), "\n")
+	s, err := in.ReadString('\n')
+	// ReadString returns any data read before the error, so a final line
+	// without a trailing newline arrives together with io.EOF. Trim and
+	// return that value; only treat EOF as end-of-input when no data remains.
+	line := strings.TrimSuffix(strings.TrimSuffix(s, "\r\n"), "\n")
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			if line != "" {
+				return line
+			}
+			// stdin closed or pipe ended with no further input; print a
+			// newline so the terminal is left on a clean line, then exit.
+			// Without this the caller loops forever prompting for input
+			// that will never arrive.
+			fmt.Fprintln(os.Stderr, "")
+			os.Exit(1)
+		}
+		// Non-EOF read error: surface it and exit rather than silently
+		// returning empty input that could be mistaken for a valid value.
+		fmt.Fprintf(os.Stderr, "error reading input: %s\n", err)
+		os.Exit(1)
+	}
+	return line
 }
 
 func Normal(label string, args ...interface{}) string {

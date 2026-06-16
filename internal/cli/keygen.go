@@ -21,7 +21,7 @@ func (c *CLI) cmdGen(command string, args ...string) error {
 	}
 
 	if len(args) == 0 {
-		r.ExitWithUsage("gen")
+		return r.Usage("gen")
 	}
 
 	length := 64
@@ -42,7 +42,7 @@ func (c *CLI) cmdGen(command string, args ...string) error {
 			args = args[1:]
 		} else {
 			if len(args) < 2 {
-				r.ExitWithUsage("gen")
+				return r.Usage("gen")
 			}
 			path, key = args[0], args[1]
 			//If the key looks like a full path with a :key at the end, then the user
@@ -84,7 +84,7 @@ func (c *CLI) cmdUuid(command string, args ...string) error {
 	}
 
 	if len(args) != 1 {
-		r.ExitWithUsage("uuid")
+		return r.Usage("uuid")
 	}
 
 	u := uuid.NewRandom()
@@ -145,7 +145,7 @@ func (c *CLI) cmdSsh(command string, args ...string) error {
 	}
 
 	if len(args) < 1 {
-		r.ExitWithUsage("ssh")
+		return r.Usage("ssh")
 	}
 
 	v := connect(true)
@@ -187,7 +187,7 @@ func (c *CLI) cmdRsa(command string, args ...string) error {
 	}
 
 	if len(args) < 1 {
-		r.ExitWithUsage("rsa")
+		return r.Usage("rsa")
 	}
 
 	v := connect(true)
@@ -230,7 +230,7 @@ func (c *CLI) cmdDhparam(command string, args ...string) error {
 	}
 
 	if len(args) < 1 {
-		r.ExitWithUsage("dhparam")
+		return r.Usage("dhparam")
 	}
 
 	path := args[0]

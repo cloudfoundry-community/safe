@@ -98,7 +98,7 @@ func (c *CLI) cmdFmt(command string, args ...string) error {
 	}
 
 	if len(args) != 4 {
-		r.ExitWithUsage("fmt")
+		return r.Usage("fmt")
 	}
 
 	fmtType := args[0]
@@ -142,7 +142,7 @@ func (c *CLI) cmdCurl(command string, args ...string) error {
 
 	method = "GET"
 	if len(args) < 1 {
-		r.ExitWithUsage("curl")
+		return r.Usage("curl")
 	} else if len(args) == 1 {
 		url = args[0]
 	} else {

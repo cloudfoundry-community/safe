@@ -102,17 +102,34 @@ func (r *Runner) Help(out io.Writer, topic string) {
 	os.Exit(1)
 }
 
-func (r *Runner) ExitWithUsage(topic string) {
+// UsageError signals a command was invoked incorrectly. Handlers return it
+// instead of exiting; the CLI renders the topic's usage block via PrintUsage
+// and exits non-zero. Returning rather than calling os.Exit keeps the dispatch
+// layer testable.
+type UsageError struct {
+	Topic string
+}
+
+func (e *UsageError) Error() string {
+	return fmt.Sprintf("usage error: %s", e.Topic)
+}
+
+// Usage returns a UsageError for topic.
+func (r *Runner) Usage(topic string) error {
+	return &UsageError{Topic: topic}
+}
+
+// PrintUsage writes the usage block for topic to w. It does not exit.
+func (r *Runner) PrintUsage(w io.Writer, topic string) {
 	if help, ok := r.Topics[topic]; ok && help != nil {
 		if help.Summary != "" {
 			/* this is a command, print it like one */
-			_, _ = ansi.Fprintf(os.Stderr, "safe @G{%s} - @C{%s}\n", topic, help.Summary)
+			_, _ = ansi.Fprintf(w, "safe @G{%s} - @C{%s}\n", topic, help.Summary)
 			if help.Usage != "" {
-				_, _ = ansi.Fprintf(os.Stderr, "USAGE: "+help.Usage+"\n")
+				_, _ = ansi.Fprintf(w, "USAGE: "+help.Usage+"\n")
 			}
 		}
 	}
-	os.Exit(1)
 }
 
 func (r *Runner) Execute(command string, args ...string) error {

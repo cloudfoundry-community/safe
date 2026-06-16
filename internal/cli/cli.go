@@ -2,6 +2,7 @@ package cli
 
 import (
 	"crypto/x509"
+	"errors"
 	"os"
 	"strings"
 
@@ -23,7 +24,18 @@ type CLI struct {
 	r   *Runner
 }
 
-func connect(auth bool) *vault.Vault {
+// Sentinel errors returned by connectOrErr so the CLI layer can render the
+// matching guidance. connect maps these to the user-facing messages.
+var (
+	errNoVaultTarget    = errors.New("not targeting a Vault")
+	errNotAuthenticated = errors.New("not authenticated to a Vault")
+)
+
+// connectOrErr builds a Vault client from the standard VAULT_* environment.
+// It returns a sentinel error (errNoVaultTarget or errNotAuthenticated) or the
+// underlying vault.NewVault error instead of exiting, so the connection logic
+// is unit testable. The CLI wrapper connect renders guidance and exits.
+func connectOrErr(auth bool) (*vault.Vault, error) {
 	var caCertPool *x509.CertPool
 	if os.Getenv("VAULT_CACERT") != "" {
 		contents, err := os.ReadFile(os.Getenv("VAULT_CACERT")) // #nosec G703 -- VAULT_CACERT is a standard Vault environment variable controlled by the user
@@ -35,23 +47,45 @@ func connect(auth bool) *vault.Vault {
 		caCertPool.AppendCertsFromPEM(contents)
 	}
 
-	shouldSkipVerify := func() bool {
-		skipVerifyVal := os.Getenv("VAULT_SKIP_VERIFY")
-		if skipVerifyVal != "" && skipVerifyVal != "false" {
-			return true
-		}
-		return false
+	url := os.Getenv("VAULT_ADDR")
+	if url == "" {
+		return nil, errNoVaultTarget
 	}
 
+	skipVerify := os.Getenv("VAULT_SKIP_VERIFY")
 	conf := vault.VaultConfig{
-		URL:        getVaultURL(),
+		URL:        url,
 		Token:      os.Getenv("VAULT_TOKEN"),
 		Namespace:  os.Getenv("VAULT_NAMESPACE"),
-		SkipVerify: shouldSkipVerify(),
+		SkipVerify: skipVerify != "" && skipVerify != "false",
 		CACerts:    caCertPool,
 	}
 
 	if auth && conf.Token == "" {
+		return nil, errNotAuthenticated
+	}
+
+	v, err := vault.NewVault(conf)
+	if err != nil {
+		return nil, err
+	}
+	return v, nil
+}
+
+// connect builds a Vault client, printing guidance and exiting on failure. It
+// preserves the original CLI behavior; the testable core is connectOrErr.
+func connect(auth bool) *vault.Vault {
+	v, err := connectOrErr(auth)
+	if err == nil {
+		return v
+	}
+
+	switch {
+	case errors.Is(err, errNoVaultTarget):
+		fmt.Fprintf(os.Stderr, "@R{You are not targeting a Vault.}\n")
+		fmt.Fprintf(os.Stderr, "Try @C{safe target https://your-vault alias}\n")
+		fmt.Fprintf(os.Stderr, " or @C{safe target alias}\n")
+	case errors.Is(err, errNotAuthenticated):
 		fmt.Fprintf(os.Stderr, "@R{You are not authenticated to a Vault.}\n")
 		fmt.Fprintf(os.Stderr, "Try @C{safe auth ldap}\n")
 		fmt.Fprintf(os.Stderr, " or @C{safe auth github}\n")
@@ -60,27 +94,11 @@ func connect(auth bool) *vault.Vault {
 		fmt.Fprintf(os.Stderr, " or @C{safe auth token}\n")
 		fmt.Fprintf(os.Stderr, " or @C{safe auth userpass}\n")
 		fmt.Fprintf(os.Stderr, " or @C{safe auth approle}\n")
-		os.Exit(1)
-	}
-
-	v, err := vault.NewVault(conf)
-	if err != nil {
+	default:
 		fmt.Fprintf(os.Stderr, "@R{!! %s}\n", err)
-		os.Exit(1)
 	}
-	return v
-}
-
-// Exits program with error if no Vault targeted
-func getVaultURL() string {
-	ret := os.Getenv("VAULT_ADDR")
-	if ret == "" {
-		fmt.Fprintf(os.Stderr, "@R{You are not targeting a Vault.}\n")
-		fmt.Fprintf(os.Stderr, "Try @C{safe target https://your-vault alias}\n")
-		fmt.Fprintf(os.Stderr, " or @C{safe target alias}\n")
-		os.Exit(1)
-	}
-	return ret
+	os.Exit(1)
+	return nil
 }
 
 type Options struct {
@@ -1360,7 +1378,10 @@ Currently, only the --renew option is supported, and it is required:
 		defer rc.Cleanup()
 		err = r.Execute(p.Command, p.Args...)
 		if err != nil {
-			if strings.HasPrefix(err.Error(), "USAGE") {
+			var usageErr *UsageError
+			if errors.As(err, &usageErr) {
+				r.PrintUsage(os.Stderr, usageErr.Topic)
+			} else if strings.HasPrefix(err.Error(), "USAGE") {
 				fmt.Fprintf(os.Stderr, "@Y{%s}\n", err)
 			} else {
 				fmt.Fprintf(os.Stderr, "@R{!! %s}\n", err)

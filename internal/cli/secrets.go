@@ -28,7 +28,7 @@ func (c *CLI) writeHelper(prompt bool, insecure bool, command string, args ...st
 		return err
 	}
 	if len(args) < 2 {
-		r.ExitWithUsage(command)
+		return r.Usage(command)
 	}
 	v := connect(true)
 	path, args := args[0], args[1:]
@@ -96,7 +96,7 @@ func (c *CLI) cmdExists(command string, args ...string) error {
 		return err
 	}
 	if len(args) != 1 {
-		r.ExitWithUsage("exists")
+		return r.Usage("exists")
 	}
 	v := connect(true)
 	_, err := v.Read(args[0])
@@ -118,7 +118,7 @@ func (c *CLI) cmdGet(command string, args ...string) error {
 		return err
 	}
 	if len(args) < 1 {
-		r.ExitWithUsage("get")
+		return r.Usage("get")
 	}
 
 	v := connect(true)
@@ -462,7 +462,7 @@ func (c *CLI) cmdDelete(command string, args ...string) error {
 	}
 
 	if len(args) < 1 {
-		r.ExitWithUsage("delete")
+		return r.Usage("delete")
 	}
 	v := connect(true)
 
@@ -506,7 +506,7 @@ func (c *CLI) cmdUndelete(command string, args ...string) error {
 	}
 
 	if len(args) < 1 {
-		r.ExitWithUsage("undelete")
+		return r.Usage("undelete")
 	}
 	v := connect(true)
 
@@ -552,7 +552,7 @@ func (c *CLI) cmdRevert(command string, args ...string) error {
 		return err
 	}
 	if len(args) != 2 {
-		r.ExitWithUsage("revert")
+		return r.Usage("revert")
 	}
 	v := connect(true)
 
@@ -785,7 +785,7 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 
 	if opt.SkipIfExists {
 		fmt.Fprintf(os.Stderr, "@R{!!} @C{--no-clobber} @R{is incompatible with} @C{safe import}\n")
-		r.ExitWithUsage("import")
+		return r.Usage("import")
 	}
 
 	v := connect(true)
@@ -931,7 +931,7 @@ func (c *CLI) cmdMove(command string, args ...string) error {
 		return err
 	}
 	if len(args) != 2 {
-		r.ExitWithUsage("move")
+		return r.Usage("move")
 	}
 
 	v := connect(true)
@@ -981,7 +981,7 @@ func (c *CLI) cmdCopy(command string, args ...string) error {
 	}
 
 	if len(args) != 2 {
-		r.ExitWithUsage("copy")
+		return r.Usage("copy")
 	}
 	v := connect(true)
 

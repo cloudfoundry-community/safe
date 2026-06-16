@@ -22,7 +22,7 @@ func (c *CLI) cmdTargets(command string, args ...string) error {
 	r := c.r
 
 	if len(args) != 0 {
-		r.ExitWithUsage("targets")
+		return r.Usage("targets")
 	}
 
 	if opt.UseTarget != "" {
@@ -272,8 +272,7 @@ func (c *CLI) cmdTarget(command string, args ...string) error {
 		return cfg.Write()
 	}
 
-	r.ExitWithUsage("target")
-	return nil
+	return r.Usage("target")
 }
 
 func (c *CLI) cmdTargetDelete(command string, args ...string) error {
@@ -285,7 +284,7 @@ func (c *CLI) cmdTargetDelete(command string, args ...string) error {
 		return err
 	}
 	if len(args) != 1 {
-		r.ExitWithUsage("target delete")
+		return r.Usage("target delete")
 	}
 
 	delete(cfg.Vaults, args[0])
@@ -579,7 +578,7 @@ func (c *CLI) cmdRenew(command string, args ...string) error {
 
 	if len(args) > 0 {
 		if len(args) != 1 || args[0] != "all" {
-			r.ExitWithUsage("renew")
+			return r.Usage("renew")
 		}
 		cfg, err := rc.Apply("")
 		if err != nil {

@@ -25,13 +25,13 @@ func (c *CLI) cmdX509Validate(command string, args ...string) error {
 	r := c.r
 
 	if len(args) < 1 {
-		r.ExitWithUsage("x509 validate")
+		return r.Usage("x509 validate")
 	}
 	if opt.X509.Validate.SignedBy == "" && opt.X509.Validate.Revoked {
-		r.ExitWithUsage("x509 validate")
+		return r.Usage("x509 validate")
 	}
 	if opt.X509.Validate.SignedBy == "" && opt.X509.Validate.NotRevoked {
-		r.ExitWithUsage("x509 validate")
+		return r.Usage("x509 validate")
 	}
 
 	if _, err := rc.Apply(opt.UseTarget); err != nil {
@@ -127,7 +127,7 @@ func (c *CLI) cmdX509Issue(command string, args ...string) error {
 	var ca *vault.X509
 
 	if len(args) != 1 || len(opt.X509.Issue.Name) == 0 {
-		r.ExitWithUsage("x509 issue")
+		return r.Usage("x509 issue")
 	}
 
 	if opt.X509.Issue.Subject == "" {
@@ -223,11 +223,11 @@ func (c *CLI) cmdX509Reissue(command string, args ...string) error {
 	}
 
 	if len(args) != 1 {
-		r.ExitWithUsage("x509 reissue")
+		return r.Usage("x509 reissue")
 	}
 	if opt.SkipIfExists {
 		fmt.Fprintf(os.Stderr, "@R{!!} @C{--no-clobber} @R{is incompatible with} @C{safe x509 reissue}\n")
-		r.ExitWithUsage("x509 reissue")
+		return r.Usage("x509 reissue")
 	}
 
 	v := connect(true)
@@ -347,11 +347,11 @@ func (c *CLI) cmdX509Renew(command string, args ...string) error {
 	}
 
 	if len(args) != 1 {
-		r.ExitWithUsage("x509 renew")
+		return r.Usage("x509 renew")
 	}
 	if opt.SkipIfExists {
 		fmt.Fprintf(os.Stderr, "@R{!!} @C{--no-clobber} @R{is incompatible with} @C{safe x509 renew}\n")
-		r.ExitWithUsage("x509 renew")
+		return r.Usage("x509 renew")
 	}
 
 	v := connect(true)
@@ -446,7 +446,7 @@ func (c *CLI) cmdX509Revoke(command string, args ...string) error {
 	r := c.r
 
 	if opt.X509.Revoke.SignedBy == "" || len(args) != 1 {
-		r.ExitWithUsage("x509 revoke")
+		return r.Usage("x509 revoke")
 	}
 
 	if _, err := rc.Apply(opt.UseTarget); err != nil {
@@ -495,7 +495,7 @@ func (c *CLI) cmdX509Show(command string, args ...string) error {
 	r := c.r
 
 	if len(args) == 0 {
-		r.ExitWithUsage("x509 show")
+		return r.Usage("x509 show")
 	}
 
 	if _, err := rc.Apply(opt.UseTarget); err != nil {
@@ -688,7 +688,7 @@ func (c *CLI) cmdX509Crl(command string, args ...string) error {
 	r := c.r
 
 	if !opt.X509.CRL.Renew || len(args) != 1 {
-		r.ExitWithUsage("x509 crl")
+		return r.Usage("x509 crl")
 	}
 
 	if _, err := rc.Apply(opt.UseTarget); err != nil {

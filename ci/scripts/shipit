@@ -59,10 +59,14 @@ if [[ -n ${STATIC_BINARY} && ${STATIC_BINARY} != "false" ]]; then
 	export CGO_ENABLED=0
 fi
 
+GIT_COMMIT=$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+BUILD_TIME=$(date -u '+%Y-%m-%d_%H:%M:%S')
+LDFLAGS="-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}"
+
 pushd $REPO_ROOT
 mkdir artifacts
-gox -osarch="${TARGETS}" --output="artifacts/${BINARY}-{{.OS}}-{{.Arch}}" -ldflags="-X main.Version=${VERSION}" ./...
-go build -o "${BINARY}" -ldflags="-X main.Version=${VERSION}" ${CMD_PKG:-./cmd/safe}
+gox -osarch="${TARGETS}" --output="artifacts/${BINARY}-{{.OS}}-{{.Arch}}" -ldflags="${LDFLAGS}" ./...
+go build -o "${BINARY}" -ldflags="${LDFLAGS}" ${CMD_PKG:-./cmd/safe}
 ./${BINARY} -v
 popd
 

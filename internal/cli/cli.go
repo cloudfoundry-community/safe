@@ -15,7 +15,13 @@ import (
 	"github.com/cloudfoundry-community/safe/pkg/vault"
 )
 
-var Version string
+// Build metadata, populated by Main from values the main package receives
+// via -ldflags. Empty in plain `go build` and `go test` runs.
+var (
+	Version   string
+	BuildTime string
+	GitCommit string
+)
 
 // CLI carries the parsed options and command runner shared by all command
 // handlers. Each handler is a method on *CLI.
@@ -324,8 +330,10 @@ type Options struct {
 	} `cli:"x509"`
 }
 
-func Main(version string) {
+func Main(version, buildTime, gitCommit string) {
 	Version = version
+	BuildTime = buildTime
+	GitCommit = gitCommit
 
 	var opt Options
 	opt.Gen.Policy = "a-zA-Z0-9"

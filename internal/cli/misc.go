@@ -19,6 +19,12 @@ func (c *CLI) cmdVersion(command string, args ...string) error {
 	} else {
 		fmt.Fprintf(os.Stderr, "safe (development build)\n")
 	}
+	if GitCommit != "" {
+		fmt.Fprintf(os.Stderr, "  commit %s\n", GitCommit)
+	}
+	if BuildTime != "" {
+		fmt.Fprintf(os.Stderr, "  built  %s\n", BuildTime)
+	}
 	os.Exit(0)
 	return nil
 }

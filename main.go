@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/rand"
-	"crypto/rsa"
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/base64"
@@ -278,7 +276,9 @@ type Options struct {
 		Issue struct {
 			CA           bool     `cli:"-A, --ca"`
 			Subject      string   `cli:"-s, --subj, --subject"`
+			Type         string   `cli:"--type"`
 			Bits         int      `cli:"-b, --bits"`
+			Curve        string   `cli:"--curve"`
 			SignedBy     string   `cli:"-i, --signed-by"`
 			Name         []string `cli:"-n, --name"`
 			TTL          string   `cli:"-t, --ttl"`
@@ -302,7 +302,9 @@ type Options struct {
 		Reissue struct {
 			Subject      string   `cli:"-s, --subj, --subject"`
 			Name         []string `cli:"-n, --name"`
+			Type         string   `cli:"--type"`
 			Bits         int      `cli:"-b, --bits"`
+			Curve        string   `cli:"--curve"`
 			SignedBy     string   `cli:"-i, --signed-by"`
 			TTL          string   `cli:"-t, --ttl"`
 			KeyUsage     []string `cli:"-u, --key-usage"`
@@ -323,8 +325,6 @@ func main() {
 	opt.Gen.Policy = "a-zA-Z0-9"
 
 	opt.Clobber = true
-
-	opt.X509.Issue.Bits = 4096
 
 	opt.Init.Persist = true
 	opt.Rekey.Persist = true
@@ -3640,10 +3640,12 @@ The following options are recognized:
                       This can be specified multiple times, in which case
                       all checks must pass for safe to exit zero.
 
-  -b, --bits N        Check that the RSA private key for this certificate
+  -b, --bits N        Check that the private key for this certificate
                       has the specified key size (in bits).  This can be
                       specified more than once, in which case any match
-                      will pass validation.
+                      will pass validation.  For ECDSA keys this is the
+                      curve size (256, 384, or 521); for Ed25519 it is
+                      always 256.
 `,
 	}, func(command string, args ...string) error {
 		if len(args) < 1 {
@@ -3767,9 +3769,16 @@ The following options are recognized:
                       Can (and probably should) be specified
                       more than once.
 
+      --type          The key algorithm: 'rsa' (default), 'ec'
+                      (ECDSA), or 'ed25519'.
+
   -b, --bits N        RSA key strength, in bits.  The only valid
                       arguments are 1024 (highly discouraged),
-                      2048 and 4096.  Defaults to 4096.
+                      2048 and 4096.  Defaults to 4096.  Only
+                      applies to '--type rsa'.
+
+      --curve         The ECDSA curve: 'p256' (default), 'p384',
+                      or 'p521'.  Only applies to '--type ec'.
 
   -t, --ttl           How long the new certificate will be valid
                       for.  Specified in units h (hours), m (months)
@@ -3842,9 +3851,14 @@ The following options are recognized:
 			}
 		}
 
+		spec, err := vault.ResolveKeySpec(opt.X509.Issue.Type, opt.X509.Issue.Bits, opt.X509.Issue.Curve, nil)
+		if err != nil {
+			return err
+		}
+
 		cert, err := vault.NewCertificate(opt.X509.Issue.Subject,
 			uniq(opt.X509.Issue.Name), opt.X509.Issue.KeyUsage,
-			opt.X509.Issue.SigAlgorithm, opt.X509.Issue.Bits)
+			opt.X509.Issue.SigAlgorithm, spec)
 		if err != nil {
 			return err
 		}
@@ -3913,10 +3927,19 @@ The following options are recognized:
 											it will act as an exhaustive list in the same way that
                       it would for a new issue command.
 
+      --type          The key algorithm: 'rsa', 'ec' (ECDSA), or
+                      'ed25519'.  Defaults to the existing
+                      certificate's key algorithm.
+
   -b, --bits  N       RSA key strength, in bits.  The only valid
                       arguments are 1024 (highly discouraged),
                       2048 and 4096.  Defaults to the last value used
-                      to (re)issue the certificate.
+                      to (re)issue the certificate.  Only applies to
+                      '--type rsa'.
+
+      --curve         The ECDSA curve: 'p256', 'p384', or 'p521'.
+                      Only applies to '--type ec'.  Defaults to the
+                      existing certificate's curve.
 
   -i, --signed-by     Path in the Vault where the CA certificate
                       (and signing key) can be found.  If this is not
@@ -4012,6 +4035,11 @@ The following options are recognized:
 			}
 
 			cert.Certificate.SignatureAlgorithm = sigAlgo
+		} else {
+			// Re-derive the signature algorithm from the regenerated key and
+			// signing CA at signing time, rather than preserving the previous
+			// certificate's value, which may not match the new key.
+			cert.Certificate.SignatureAlgorithm = x509.UnknownSignatureAlgorithm
 		}
 
 		/* find the CA */
@@ -4031,17 +4059,17 @@ The following options are recognized:
 			}
 		}
 
-		// Get signing key bit length
-		if opt.X509.Reissue.Bits == 0 {
-			opt.X509.Reissue.Bits = cert.PrivateKey.N.BitLen()
-		}
-		if opt.X509.Reissue.Bits != 1024 && opt.X509.Reissue.Bits != 2048 && opt.X509.Reissue.Bits != 4096 {
-			return fmt.Errorf("Bits must be one of 1024, 2048 or 4096")
+		// Determine the spec for the regenerated key. With no overriding
+		// flags this preserves the existing certificate's key type and
+		// parameters; --type/--bits/--curve override it.
+		spec, err := vault.ResolveKeySpec(opt.X509.Reissue.Type, opt.X509.Reissue.Bits, opt.X509.Reissue.Curve, cert.PrivateKey)
+		if err != nil {
+			return err
 		}
 
-		// Generate new key with same bit length.
-		fmt.Printf("\nGenerating new %d-bit key...\n", opt.X509.Reissue.Bits)
-		newKey, err := rsa.GenerateKey(rand.Reader, opt.X509.Reissue.Bits)
+		// Generate new key per the resolved spec.
+		fmt.Printf("\nGenerating new %s key...\n", spec.Describe())
+		newKey, err := vault.GenerateKey(spec)
 		if err != nil {
 			return err
 		}
@@ -4433,6 +4461,8 @@ prints out information about a certificate, including:
 				fmt.Printf("    (no special key usage constraints present)\n")
 			}
 			fmt.Printf("\n")
+
+			fmt.Printf("  key: @G{%s}\n\n", cert.KeyDescription())
 
 			fmt.Printf("  signed with the algorithm ")
 			sigView := map[x509.SignatureAlgorithm]string{

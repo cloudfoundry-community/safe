@@ -1,6 +1,10 @@
 package vault
 
 import (
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha1" // #nosec G505 - SHA1 used for certificate fingerprint calculation per RFC standard
@@ -20,12 +24,234 @@ import (
 type X509 struct {
 	Intermediaries []*x509.Certificate
 	Certificate    *x509.Certificate
-	PrivateKey     *rsa.PrivateKey
+	PrivateKey     crypto.Signer
 	Serial         *big.Int
 	CRL            *x509.RevocationList
 
 	KeyUsage    x509.KeyUsage
 	ExtKeyUsage []x509.ExtKeyUsage
+}
+
+// KeySpec describes the key algorithm and parameters to generate for a
+// certificate. Exactly one of Bits (RSA) or Curve (ECDSA) is meaningful,
+// depending on Algorithm. Ed25519 takes no parameters.
+type KeySpec struct {
+	Algorithm string         // "rsa", "ec", or "ed25519"
+	Bits      int            // RSA modulus size (rsa only)
+	Curve     elliptic.Curve // ECDSA curve (ec only)
+}
+
+// Describe returns a human-readable summary of the key spec, e.g.
+// "4096-bit RSA", "ECDSA P-256", or "Ed25519".
+func (k KeySpec) Describe() string {
+	switch k.Algorithm {
+	case "rsa":
+		return fmt.Sprintf("%d-bit RSA", k.Bits)
+	case "ec":
+		return fmt.Sprintf("ECDSA %s", curveDisplayName(k.Curve))
+	case "ed25519":
+		return "Ed25519"
+	}
+	return "unknown key"
+}
+
+// curveDisplayName maps an elliptic curve to its canonical display name.
+func curveDisplayName(c elliptic.Curve) string {
+	switch c {
+	case elliptic.P256():
+		return "P-256"
+	case elliptic.P384():
+		return "P-384"
+	case elliptic.P521():
+		return "P-521"
+	}
+	if c != nil {
+		return c.Params().Name
+	}
+	return "unknown-curve"
+}
+
+// parseCurve resolves a user-supplied curve name to an elliptic.Curve.
+// Accepts p256/p-256/256 forms, case-insensitively.
+func parseCurve(name string) (elliptic.Curve, error) {
+	n := strings.ToLower(strings.TrimSpace(name))
+	n = strings.ReplaceAll(n, "-", "")
+	n = strings.TrimPrefix(n, "p")
+	switch n {
+	case "256":
+		return elliptic.P256(), nil
+	case "384":
+		return elliptic.P384(), nil
+	case "521":
+		return elliptic.P521(), nil
+	}
+	return nil, fmt.Errorf("ECDSA curve must be p256, p384, or p521; got %q", name)
+}
+
+// ResolveKeySpec builds a KeySpec from CLI inputs. keyType is one of
+// "rsa", "ec"/"ecdsa", or "ed25519" (empty defers to the existing key's
+// type, or RSA when there is no existing key). bits and curve apply to RSA
+// and ECDSA respectively; when omitted they fall back to the existing key's
+// parameters (for reissue) or to defaults (rsa:4096, ec:p256).
+func ResolveKeySpec(keyType string, bits int, curve string, existing crypto.Signer) (KeySpec, error) {
+	algo := strings.ToLower(strings.TrimSpace(keyType))
+	if algo == "ecdsa" {
+		algo = "ec"
+	}
+
+	if algo == "" {
+		switch existing.(type) {
+		case *ecdsa.PrivateKey:
+			algo = "ec"
+		case ed25519.PrivateKey:
+			algo = "ed25519"
+		default:
+			algo = "rsa"
+		}
+	}
+
+	// Reject parameter flags that do not belong to the resolved algorithm, so a
+	// destructive reissue cannot silently ignore a requested key strength or
+	// curve (e.g. --bits on an EC certificate, or --curve on an RSA one).
+	if bits != 0 && algo != "rsa" {
+		return KeySpec{}, fmt.Errorf("--bits applies only to RSA keys, not %s keys", algo)
+	}
+	if curve != "" && algo != "ec" {
+		return KeySpec{}, fmt.Errorf("--curve applies only to EC keys, not %s keys", algo)
+	}
+
+	switch algo {
+	case "rsa":
+		if bits == 0 {
+			if k, ok := existing.(*rsa.PrivateKey); ok {
+				bits = k.N.BitLen()
+			} else {
+				bits = 4096
+			}
+		}
+		if bits != 1024 && bits != 2048 && bits != 4096 {
+			return KeySpec{}, fmt.Errorf("RSA key strength must be one of 1024, 2048, or 4096; got %d", bits)
+		}
+		return KeySpec{Algorithm: "rsa", Bits: bits}, nil
+
+	case "ec":
+		var c elliptic.Curve
+		if curve != "" {
+			var err error
+			if c, err = parseCurve(curve); err != nil {
+				return KeySpec{}, err
+			}
+		} else if k, ok := existing.(*ecdsa.PrivateKey); ok {
+			c = k.Curve
+		} else {
+			c = elliptic.P256()
+		}
+		return KeySpec{Algorithm: "ec", Curve: c}, nil
+
+	case "ed25519":
+		return KeySpec{Algorithm: "ed25519"}, nil
+	}
+
+	return KeySpec{}, fmt.Errorf("unrecognized key type %q; use rsa, ec, or ed25519", keyType)
+}
+
+// GenerateKey produces a new private key (as a crypto.Signer) per the spec.
+func GenerateKey(spec KeySpec) (crypto.Signer, error) {
+	switch spec.Algorithm {
+	case "rsa":
+		return rsa.GenerateKey(rand.Reader, spec.Bits)
+	case "ec":
+		return ecdsa.GenerateKey(spec.Curve, rand.Reader)
+	case "ed25519":
+		_, priv, err := ed25519.GenerateKey(rand.Reader)
+		return priv, err
+	}
+	return nil, fmt.Errorf("unrecognized key algorithm %q", spec.Algorithm)
+}
+
+// algoForKey returns the x509 public key algorithm and a sane default
+// signature algorithm for the given signer.
+func algoForKey(key crypto.Signer) (x509.PublicKeyAlgorithm, x509.SignatureAlgorithm, error) {
+	switch k := key.(type) {
+	case *rsa.PrivateKey:
+		return x509.RSA, x509.SHA512WithRSA, nil
+	case *ecdsa.PrivateKey:
+		switch k.Curve {
+		case elliptic.P256():
+			return x509.ECDSA, x509.ECDSAWithSHA256, nil
+		case elliptic.P384():
+			return x509.ECDSA, x509.ECDSAWithSHA384, nil
+		case elliptic.P521():
+			return x509.ECDSA, x509.ECDSAWithSHA512, nil
+		default:
+			return x509.ECDSA, x509.ECDSAWithSHA256, nil
+		}
+	case ed25519.PrivateKey:
+		return x509.Ed25519, x509.PureEd25519, nil
+	}
+	return x509.UnknownPublicKeyAlgorithm, x509.UnknownSignatureAlgorithm,
+		fmt.Errorf("unsupported key type %T", key)
+}
+
+// validateSigAlgoForKey ensures a user-requested signature algorithm is
+// compatible with the key's algorithm family.
+func validateSigAlgoForKey(key crypto.Signer, algo x509.SignatureAlgorithm) error {
+	switch key.(type) {
+	case *rsa.PrivateKey:
+		switch algo {
+		case x509.MD5WithRSA, x509.SHA1WithRSA, x509.SHA256WithRSA,
+			x509.SHA384WithRSA, x509.SHA512WithRSA,
+			x509.SHA256WithRSAPSS, x509.SHA384WithRSAPSS, x509.SHA512WithRSAPSS:
+			return nil
+		}
+		return fmt.Errorf("signature algorithm %v is not compatible with an RSA key", algo)
+	case *ecdsa.PrivateKey:
+		switch algo {
+		case x509.ECDSAWithSHA1, x509.ECDSAWithSHA256, x509.ECDSAWithSHA384, x509.ECDSAWithSHA512:
+			return nil
+		}
+		return fmt.Errorf("signature algorithm %v is not compatible with an ECDSA key", algo)
+	case ed25519.PrivateKey:
+		if algo != x509.PureEd25519 {
+			return fmt.Errorf("Ed25519 keys only support the ed25519 signature algorithm, not %v", algo)
+		}
+		return nil
+	}
+	return nil
+}
+
+// marshalPrivateKeyPEM serializes a private key to PEM. RSA keys use PKCS#1
+// ("RSA PRIVATE KEY") to preserve byte-identical output with prior versions;
+// all other key types use PKCS#8 ("PRIVATE KEY").
+func marshalPrivateKeyPEM(signer crypto.Signer) (string, error) {
+	if k, ok := signer.(*rsa.PrivateKey); ok {
+		return string(pem.EncodeToMemory(&pem.Block{
+			Type:  "RSA PRIVATE KEY",
+			Bytes: x509.MarshalPKCS1PrivateKey(k),
+		})), nil
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(signer)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal private key as PKCS#8: %w", err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{
+		Type:  "PRIVATE KEY",
+		Bytes: der,
+	})), nil
+}
+
+// KeyDescription summarizes the certificate's public key algorithm and
+// parameters for display, e.g. "RSA (4096 bit)", "ECDSA (P-256)", "Ed25519".
+func (x X509) KeyDescription() string {
+	switch pub := x.Certificate.PublicKey.(type) {
+	case *rsa.PublicKey:
+		return fmt.Sprintf("RSA (%d bit)", pub.N.BitLen())
+	case *ecdsa.PublicKey:
+		return fmt.Sprintf("ECDSA (%s)", curveDisplayName(pub.Curve))
+	case ed25519.PublicKey:
+		return "Ed25519"
+	}
+	return "unknown"
 }
 
 func (s Secret) X509(requireKey bool) (*X509, error) {
@@ -80,7 +306,7 @@ func (s Secret) X509(requireKey bool) (*X509, error) {
 		intermediaries = append(intermediaries, c)
 	}
 
-	var key *rsa.PrivateKey
+	var key crypto.Signer
 	if requireKey {
 		v := s.Get("key")
 		block, rest = pem.Decode([]byte(v))
@@ -90,21 +316,35 @@ func (s Secret) X509(requireKey bool) (*X509, error) {
 		if len(rest) > 0 {
 			return nil, fmt.Errorf("contains multiple keys (what?)")
 		}
-		if block.Type != "RSA PRIVATE KEY" && block.Type != "PRIVATE KEY" {
-			return nil, fmt.Errorf("not a valid certificate (type '%s' != 'RSA PRIVATE KEY' or 'PRIVATE KEY')", block.Type)
-		}
 
-		key, err = x509.ParsePKCS1PrivateKey(block.Bytes)
-		if err != nil {
-			pkcs8TmpKey, err := x509.ParsePKCS8PrivateKey(block.Bytes)
-			if err != nil {
-				return nil, fmt.Errorf("not a valid private key (%w)", err)
+		switch block.Type {
+		case "RSA PRIVATE KEY":
+			k, parseErr := x509.ParsePKCS1PrivateKey(block.Bytes)
+			if parseErr != nil {
+				return nil, fmt.Errorf("not a valid RSA private key (%w)", parseErr)
 			}
-			var isRSAEncoded bool
-			key, isRSAEncoded = pkcs8TmpKey.(*rsa.PrivateKey)
-			if !isRSAEncoded {
-				return nil, fmt.Errorf("private key not RSA encoded")
+			key = k
+
+		case "PRIVATE KEY":
+			raw, parseErr := x509.ParsePKCS8PrivateKey(block.Bytes)
+			if parseErr != nil {
+				return nil, fmt.Errorf("not a valid private key (%w)", parseErr)
 			}
+			signer, ok := raw.(crypto.Signer)
+			if !ok {
+				return nil, fmt.Errorf("private key type %T does not support signing", raw)
+			}
+			key = signer
+
+		case "EC PRIVATE KEY":
+			k, parseErr := x509.ParseECPrivateKey(block.Bytes)
+			if parseErr != nil {
+				return nil, fmt.Errorf("not a valid EC private key (%w)", parseErr)
+			}
+			key = k
+
+		default:
+			return nil, fmt.Errorf("not a valid certificate (unrecognized key PEM type '%s')", block.Type)
 		}
 	}
 
@@ -290,6 +530,8 @@ var signatureAlgorithmLookup = map[string]x509.SignatureAlgorithm{
 	"ecdsa-sha256":  x509.ECDSAWithSHA256,
 	"ecdsa-sha384":  x509.ECDSAWithSHA384,
 	"ecdsa-sha512":  x509.ECDSAWithSHA512,
+	"ed25519":       x509.PureEd25519,
+	"pure-ed25519":  x509.PureEd25519,
 }
 
 func isNoKeyUsage(in string) bool {
@@ -410,11 +652,7 @@ func TranslateSignatureAlgorithm(signatureAlgorithm string) (sigAlgo x509.Signat
 	return
 }
 
-func NewCertificate(subj string, names, keyUsage []string, signatureAlgorithm string, bits int) (*X509, error) {
-	if bits != 1024 && bits != 2048 && bits != 4096 {
-		return nil, fmt.Errorf("invalid RSA key strength '%d', must be one of: 1024, 2048, 4096", bits)
-	}
-
+func NewCertificate(subj string, names, keyUsage []string, signatureAlgorithm string, spec KeySpec) (*X509, error) {
 	name, err := ParseSubject(subj)
 	if err != nil {
 		return nil, err
@@ -422,9 +660,9 @@ func NewCertificate(subj string, names, keyUsage []string, signatureAlgorithm st
 
 	ips, domains, emails := CategorizeSANs(names)
 
-	key, err := rsa.GenerateKey(rand.Reader, bits)
+	key, err := GenerateKey(spec)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("key generation failed: %w", err)
 	}
 
 	ku, eku, err := HandleJointKeyUsages(keyUsage)
@@ -432,7 +670,17 @@ func NewCertificate(subj string, names, keyUsage []string, signatureAlgorithm st
 		return nil, err
 	}
 
-	translatedSigAlgo := x509.SHA512WithRSA
+	pubKeyAlgo, _, err := algoForKey(key)
+	if err != nil {
+		return nil, err
+	}
+
+	// Leave SignatureAlgorithm unset when the user did not request one: Sign()
+	// derives the correct algorithm from the signing CA key, which differs from
+	// the subject key for CA-signed certs (e.g. an RSA CA signing an ECDSA
+	// leaf). A user-supplied algorithm is recorded as-is and validated against
+	// the actual signer in Sign(), not the subject key.
+	var translatedSigAlgo x509.SignatureAlgorithm
 	if signatureAlgorithm != "" {
 		translatedSigAlgo, err = TranslateSignatureAlgorithm(signatureAlgorithm)
 		if err != nil {
@@ -444,7 +692,7 @@ func NewCertificate(subj string, names, keyUsage []string, signatureAlgorithm st
 		PrivateKey: key,
 		Certificate: &x509.Certificate{
 			SignatureAlgorithm: translatedSigAlgo,
-			PublicKeyAlgorithm: x509.RSA,
+			PublicKeyAlgorithm: pubKeyAlgo,
 			Subject:            name,
 			DNSNames:           domains,
 			EmailAddresses:     emails,
@@ -457,28 +705,52 @@ func NewCertificate(subj string, names, keyUsage []string, signatureAlgorithm st
 }
 
 func (x X509) Validate() error {
-	if x.Certificate.PublicKeyAlgorithm != x509.RSA {
-		return fmt.Errorf("invalid (non-RSA) public key algorithm found in certificate")
+	if x.PrivateKey == nil {
+		return fmt.Errorf("no private key to validate against the certificate")
 	}
 
-	pub := x.Certificate.PublicKey.(*rsa.PublicKey)
-	if pub.N.Cmp(x.PrivateKey.N) != 0 {
-		return fmt.Errorf("modulus for private key does not match modulus in certificate")
+	// Every standard public key type (*rsa.PublicKey, *ecdsa.PublicKey,
+	// ed25519.PublicKey) implements Equal, which compares both the key type
+	// and its value. This avoids reaching into deprecated raw coordinates.
+	type equatableKey interface {
+		Equal(crypto.PublicKey) bool
 	}
-	if pub.E != x.PrivateKey.E {
-		return fmt.Errorf("exponent for private key does not match exponent in certificate")
+
+	certPub, ok := x.Certificate.PublicKey.(equatableKey)
+	if !ok {
+		return fmt.Errorf("unsupported public key algorithm in certificate: %T", x.Certificate.PublicKey)
+	}
+
+	if !certPub.Equal(x.PrivateKey.Public()) {
+		return fmt.Errorf("private key does not match the certificate's public key")
 	}
 
 	return nil
 }
 
 func (x X509) CheckStrength(bits ...int) error {
+	if len(bits) == 0 {
+		return nil
+	}
+
+	var effectiveBits int
+	switch k := x.PrivateKey.(type) {
+	case *rsa.PrivateKey:
+		effectiveBits = k.N.BitLen()
+	case *ecdsa.PrivateKey:
+		effectiveBits = k.Curve.Params().BitSize
+	case ed25519.PrivateKey:
+		effectiveBits = 256
+	default:
+		return fmt.Errorf("unsupported private key type %T for strength check", x.PrivateKey)
+	}
+
 	for _, b := range bits {
-		if x.PrivateKey.N.BitLen() == b {
+		if effectiveBits == b {
 			return nil
 		}
 	}
-	return fmt.Errorf("key is a %d-bit RSA key", x.PrivateKey.N.BitLen())
+	return fmt.Errorf("key is %d bits (acceptable: %v)", effectiveBits, bits)
 }
 
 func (x X509) IsCA() bool {
@@ -575,12 +847,12 @@ func (x X509) Secret(skipIfExists bool) (*Secret, error) {
 		Type:  "CERTIFICATE",
 		Bytes: x.Certificate.Raw,
 	}))
-	key := string(pem.EncodeToMemory(&pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(x.PrivateKey),
-	}))
+	key, err := marshalPrivateKeyPEM(x.PrivateKey)
+	if err != nil {
+		return s, err
+	}
 
-	err := s.Set("certificate", cert, skipIfExists)
+	err = s.Set("certificate", cert, skipIfExists)
 	if err != nil {
 		return s, err
 	}
@@ -670,6 +942,22 @@ func (ca *X509) Sign(x *X509, ttl time.Duration) error {
 	x.Certificate.NotBefore = time.Now()
 	x.Certificate.NotAfter = time.Now().Add(ttl)
 
+	// A certificate's SignatureAlgorithm describes how its issuer (the CA)
+	// signs it, so it must be compatible with the CA's key — not the subject
+	// key. When unset, derive the CA key's default (covers the common case and
+	// cross-family signing, e.g. an RSA CA signing an ECDSA leaf). When the
+	// user explicitly requested an algorithm the CA key cannot produce, fail
+	// loudly rather than silently substituting a different one.
+	if x.Certificate.SignatureAlgorithm == x509.UnknownSignatureAlgorithm {
+		_, defaultSigAlgo, err := algoForKey(ca.PrivateKey)
+		if err != nil {
+			return err
+		}
+		x.Certificate.SignatureAlgorithm = defaultSigAlgo
+	} else if err := validateSigAlgoForKey(ca.PrivateKey, x.Certificate.SignatureAlgorithm); err != nil {
+		return fmt.Errorf("requested signature algorithm is not compatible with the signing CA key: %w", err)
+	}
+
 	x.Certificate.AuthorityKeyId = ca.getKeyID()
 	x.Certificate.SubjectKeyId, _ = getKeyIDFromPublicKey(x.PrivateKey.Public())
 	raw, err := x509.CreateCertificate(rand.Reader, x.Certificate, ca.Certificate, x.PrivateKey.Public(), ca.PrivateKey)
@@ -695,19 +983,26 @@ func (cert *X509) getKeyID() []byte {
 }
 
 func getKeyIDFromPublicKey(key interface{}) ([]byte, error) {
-	var ret []byte
-	var err error
 	switch k := key.(type) {
 	case *rsa.PublicKey:
+		// Preserved for backward compatibility: SHA1 over the PKCS#1 DER.
+		// Existing RSA certs in Vault depend on this SubjectKeyId derivation.
 		kASN1 := x509.MarshalPKCS1PublicKey(k)
-		tmpArray := sha1.Sum(kASN1) // #nosec G401 - SHA1 used for certificate fingerprint calculation per RFC standard
-		ret = tmpArray[:]
+		sum := sha1.Sum(kASN1) // #nosec G401 - SHA1 used for certificate fingerprint calculation per RFC standard
+		return sum[:], nil
+
+	case *ecdsa.PublicKey, ed25519.PublicKey:
+		// RFC 5280 method 1: SHA1 over the SubjectPublicKeyInfo DER.
+		der, err := x509.MarshalPKIXPublicKey(k)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal public key for key id: %w", err)
+		}
+		sum := sha1.Sum(der) // #nosec G401 - SHA1 used for certificate fingerprint calculation per RFC standard
+		return sum[:], nil
 
 	default:
-		err = fmt.Errorf("unsupported public key algorithm")
+		return nil, fmt.Errorf("unsupported public key algorithm")
 	}
-
-	return ret, err
 }
 
 func (ca *X509) Revoke(cert *X509) {

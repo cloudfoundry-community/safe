@@ -1,5 +1,7 @@
-safe*
+/safe
+/safe-*
 !docs/safe*
+/artifacts/
 /release
 ci/credentials.yml
 /t

@@ -328,7 +328,7 @@ func (v *Vault) constructTree(path string, opts TreeOpts) (*secretTree, error) {
 	if err != nil {
 		return nil, err
 	}
-	if opts.GetOnly && !(ret.Type == treeTypeSecret || ret.Type == treeTypeDirAndSecret) {
+	if opts.GetOnly && ret.Type != treeTypeSecret && ret.Type != treeTypeDirAndSecret {
 		return nil, fmt.Errorf("`%s' is not a secret", path)
 	}
 	operation := ret.getWorkType(opts)
@@ -441,13 +441,13 @@ func (t *secretTree) getWorkType(opts TreeOpts) uint16 {
 			ret |= opTypeVersions
 		}
 	case treeTypeVersion:
-		if opts.FetchKeys && (opts.GetDeletedVersions || !(t.Deleted || t.Destroyed)) {
+		if opts.FetchKeys && (opts.GetDeletedVersions || !t.Deleted && !t.Destroyed) {
 			ret = opTypeGet
 		}
 	}
 
 	if opts.GetOnly {
-		ret &= (opTypeList ^ 0xFFFF)
+		ret &^= opTypeList
 	}
 
 	return ret
@@ -515,9 +515,10 @@ func (s SecretEntry) Copy(v *Vault, dst string, opts TreeCopyOpts) error {
 			return fmt.Errorf("could not write secret to path `%s': %w", dst, err)
 		}
 
-		if version.State == SecretStateDestroyed {
+		switch version.State {
+		case SecretStateDestroyed:
 			toDestroy = append(toDestroy, setMeta.Version)
-		} else if version.State == SecretStateDeleted {
+		case SecretStateDeleted:
 			toDelete = append(toDelete, setMeta.Version)
 		}
 	}

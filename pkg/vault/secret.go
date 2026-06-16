@@ -47,12 +47,12 @@ func (s *Secret) Get(key string) string {
 
 func (s *Secret) Keys() []string {
 	keys := reflect.ValueOf(s.data).MapKeys()
-	str_keys := make([]string, len(keys))
+	strKeys := make([]string, len(keys))
 	for i := 0; i < len(keys); i++ {
-		str_keys[i] = keys[i].String()
+		strKeys[i] = keys[i].String()
 	}
-	sort.Strings(str_keys)
-	return str_keys
+	sort.Strings(strKeys)
+	return strKeys
 }
 
 // Set stores a value in the Secret, under the given key.
@@ -87,7 +87,7 @@ func (s *Secret) Format(oldKey, newKey, fmtType string, skipIfExists bool) error
 	oldVal := s.Get(oldKey)
 	switch fmtType {
 	case "crypt-md5":
-		newVal, err := crypt_md5(oldVal)
+		newVal, err := cryptMD5(oldVal)
 		if err != nil {
 			return err
 		}
@@ -97,7 +97,7 @@ func (s *Secret) Format(oldKey, newKey, fmtType string, skipIfExists bool) error
 		}
 
 	case "crypt-sha256":
-		newVal, err := crypt_sha256(oldVal)
+		newVal, err := cryptSHA256(oldVal)
 		if err != nil {
 			return err
 		}
@@ -107,7 +107,7 @@ func (s *Secret) Format(oldKey, newKey, fmtType string, skipIfExists bool) error
 		}
 
 	case "crypt-sha512":
-		newVal, err := crypt_sha512(oldVal)
+		newVal, err := cryptSHA512(oldVal)
 		if err != nil {
 			return err
 		}
@@ -117,7 +117,7 @@ func (s *Secret) Format(oldKey, newKey, fmtType string, skipIfExists bool) error
 		}
 
 	case "bcrypt":
-		newVal, err := crypt_bcrypt(oldVal)
+		newVal, err := cryptBcrypt(oldVal)
 		if err != nil {
 			return err
 		}
@@ -163,7 +163,7 @@ func (s *Secret) Password(key string, length int, policy string, skipIfExists bo
 	return nil
 }
 
-func crypt_md5(pass string) (string, error) {
+func cryptMD5(pass string) (string, error) {
 	c := md5_crypt.New()
 	salt, err := random(16, "a-zA-Z")
 	if err != nil {
@@ -176,7 +176,7 @@ func crypt_md5(pass string) (string, error) {
 	return md5, err
 }
 
-func crypt_sha256(pass string) (string, error) {
+func cryptSHA256(pass string) (string, error) {
 	c := sha256_crypt.New()
 	salt, err := random(16, "a-zA-Z")
 	if err != nil {
@@ -189,7 +189,7 @@ func crypt_sha256(pass string) (string, error) {
 	return sha, err
 }
 
-func crypt_sha512(pass string) (string, error) {
+func cryptSHA512(pass string) (string, error) {
 	c := sha512_crypt.New()
 	salt, err := random(16, "a-zA-Z")
 	if err != nil {
@@ -202,7 +202,7 @@ func crypt_sha512(pass string) (string, error) {
 	return sha, err
 }
 
-func crypt_bcrypt(pass string) (string, error) {
+func cryptBcrypt(pass string) (string, error) {
 	// for now, use a fixed worker cost of 12
 	hashed, err := bcrypt.GenerateFromPassword([]byte(pass), 12)
 	if err != nil {

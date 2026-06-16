@@ -7,8 +7,9 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
-	"golang.org/x/crypto/ssh"
 	"strings"
+
+	"golang.org/x/crypto/ssh"
 )
 
 func sshkey(bits int) (string, string, string, error) {

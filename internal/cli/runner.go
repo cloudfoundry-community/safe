@@ -56,7 +56,7 @@ func (r *Runner) HelpTopic(topic string, help string) {
 
 func (r *Runner) Help(out io.Writer, topic string) {
 	if topic == "commands" {
-		fmt.Fprintf(out, "Valid commands are:\n\n")
+		_, _ = fmt.Fprintf(out, "Valid commands are:\n\n")
 
 		ll := make([]string, 0)
 		for cmd := range r.Handlers {
@@ -74,8 +74,8 @@ func (r *Runner) Help(out io.Writer, topic string) {
 			}
 		}
 
-		fmt.Fprintf(out, "\nTry `safe envvars' for information on available environment variables\n")
-		fmt.Fprintf(out, "Try 'safe help <command>' for detailed information on specific commands\n")
+		_, _ = fmt.Fprintf(out, "\nTry `safe envvars' for information on available environment variables\n")
+		_, _ = fmt.Fprintf(out, "Try 'safe help <command>' for detailed information on specific commands\n")
 		return
 	}
 
@@ -97,8 +97,8 @@ func (r *Runner) Help(out io.Writer, topic string) {
 	}
 
 	_, _ = ansi.Fprintf(out, "@R{Unrecognized command or help topic '%s'}\n", topic)
-	fmt.Fprintf(out, "Try 'safe help' to get started with safe,\n")
-	fmt.Fprintf(out, " or 'safe commands' for a list of valid commands\n")
+	_, _ = fmt.Fprintf(out, "Try 'safe help' to get started with safe,\n")
+	_, _ = fmt.Fprintf(out, " or 'safe commands' for a list of valid commands\n")
 	os.Exit(1)
 }
 

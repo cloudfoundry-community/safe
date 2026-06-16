@@ -38,7 +38,7 @@ func (v *Vault) Strongbox() (map[string]string, error) {
 	if err != nil {
 		return m, err
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 
 	if v.debug {
 		dump, err := httputil.DumpResponse(res, true)

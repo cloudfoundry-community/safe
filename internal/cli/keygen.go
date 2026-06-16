@@ -59,7 +59,7 @@ func (c *CLI) cmdGen(command string, args ...string) error {
 		exists := (err == nil)
 		if opt.SkipIfExists && exists && s.Has(key) {
 			if !opt.Quiet {
-				fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to update} @C{%s:%s} @R{as it is already present in Vault}\n", path, key)
+				_, _ = fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to update} @C{%s:%s} @R{as it is already present in Vault}\n", path, key)
 			}
 			continue
 		}
@@ -113,7 +113,7 @@ func (c *CLI) cmdUuid(command string, args ...string) error {
 	exists := (err == nil)
 	if opt.SkipIfExists && exists && s.Has(key) {
 		if !opt.Quiet {
-			fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to update} @C{%s:%s} @R{as it is already present in Vault}\n", path, key)
+			_, _ = fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to update} @C{%s:%s} @R{as it is already present in Vault}\n", path, key)
 		}
 		return err
 	}
@@ -157,7 +157,7 @@ func (c *CLI) cmdSsh(command string, args ...string) error {
 		exists := (err == nil)
 		if opt.SkipIfExists && exists && (s.Has("private") || s.Has("public") || s.Has("fingerprint")) {
 			if !opt.Quiet {
-				fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to generate an SSH key at} @C{%s} @R{as it is already present in Vault}\n", path)
+				_, _ = fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to generate an SSH key at} @C{%s} @R{as it is already present in Vault}\n", path)
 			}
 			continue
 		}
@@ -199,7 +199,7 @@ func (c *CLI) cmdRsa(command string, args ...string) error {
 		exists := (err == nil)
 		if opt.SkipIfExists && exists && (s.Has("private") || s.Has("public")) {
 			if !opt.Quiet {
-				fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to generate an RSA key at} @C{%s} @R{as it is already present in Vault}\n", path)
+				_, _ = fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to generate an RSA key at} @C{%s} @R{as it is already present in Vault}\n", path)
 			}
 			continue
 		}
@@ -242,7 +242,7 @@ func (c *CLI) cmdDhparam(command string, args ...string) error {
 	exists := (err == nil)
 	if opt.SkipIfExists && exists && s.Has("dhparam-pem") {
 		if !opt.Quiet {
-			fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to generate a Diffie-Hellman key exchange parameter set at} @C{%s} @R{as it is already present in Vault}\n", path)
+			_, _ = fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to generate a Diffie-Hellman key exchange parameter set at} @C{%s} @R{as it is already present in Vault}\n", path)
 		}
 		return nil
 	}

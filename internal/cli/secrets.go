@@ -923,6 +923,67 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 	return fn(b)
 }
 
+// moveCopyParams captures the per-command differences between move and copy.
+// op is the underlying vault operation (v.Move or v.Copy); verb names the
+// command for messages and the recurse prompt; guardRecurseVersion enables the
+// copy-only check that forbids recursively copying a versioned source.
+type moveCopyParams struct {
+	verb                string
+	recurse             bool
+	force               bool
+	deep                bool
+	guardRecurseVersion bool
+	op                  func(string, string, vault.MoveCopyOpts) error
+}
+
+// moveCopy holds the shared move/copy logic: guard checks, optional recursion
+// confirmation, and force-aware error suppression. Behavior matches the two
+// original handlers exactly.
+func (c *CLI) moveCopy(v *vault.Vault, args []string, p moveCopyParams) error {
+	if vault.PathHasKey(args[0]) || vault.PathHasKey(args[1]) {
+		if p.deep {
+			return fmt.Errorf("Cannot deep copy a specific key")
+		}
+
+		if !vault.PathHasKey(args[0]) && vault.PathHasKey(args[1]) {
+			return fmt.Errorf("Cannot move from entire secret into specific key")
+		}
+	}
+
+	if vault.PathHasVersion(args[1]) {
+		return fmt.Errorf("Cannot %s to a specific destination version", p.verb)
+	}
+
+	if p.guardRecurseVersion && p.recurse && vault.PathHasVersion(args[0]) {
+		return fmt.Errorf("Cannot recursively copy a path with specific version")
+	}
+
+	opts := vault.MoveCopyOpts{
+		SkipIfExists:    c.opt.SkipIfExists,
+		Quiet:           c.opt.Quiet,
+		Deep:            p.deep,
+		DeletedVersions: p.deep,
+	}
+
+	//Don't try to recurse if operating on a key
+	// args[0] is the source path. args[1] is the destination path.
+	if p.recurse && !(vault.PathHasKey(args[0]) || vault.PathHasKey(args[1])) {
+		if !p.force && !recursively(p.verb, args...) {
+			return nil /* skip this command, process the next */
+		}
+		err := v.MoveCopyTree(args[0], args[1], p.op, opts)
+		if err != nil && !(vault.IsNotFound(err) && p.force) {
+			return err
+		}
+	} else {
+		err := p.op(args[0], args[1], opts)
+		if err != nil && !(vault.IsNotFound(err) && p.force) {
+			return err
+		}
+	}
+	return nil
+}
+
 func (c *CLI) cmdMove(command string, args ...string) error {
 	opt := c.opt
 	r := c.r
@@ -935,41 +996,13 @@ func (c *CLI) cmdMove(command string, args ...string) error {
 	}
 
 	v := connect(true)
-	if vault.PathHasKey(args[0]) || vault.PathHasKey(args[1]) {
-		if opt.Move.Deep {
-			return fmt.Errorf("Cannot deep copy a specific key")
-		}
-
-		if !vault.PathHasKey(args[0]) && vault.PathHasKey(args[1]) {
-			return fmt.Errorf("Cannot move from entire secret into specific key")
-		}
-	}
-
-	if vault.PathHasVersion(args[1]) {
-		return fmt.Errorf("Cannot move to a specific destination version")
-	}
-
-	//Don't try to recurse if operating on a key
-	// args[0] is the source path. args[1] is the destination path.
-	if opt.Move.Recurse && !(vault.PathHasKey(args[0]) || vault.PathHasKey(args[1])) {
-		if !opt.Move.Force && !recursively("move", args...) {
-			return nil /* skip this command, process the next */
-		}
-		err := v.MoveCopyTree(args[0], args[1], v.Move, vault.MoveCopyOpts{
-			SkipIfExists: opt.SkipIfExists, Quiet: opt.Quiet, Deep: opt.Move.Deep, DeletedVersions: opt.Move.Deep,
-		})
-		if err != nil && !(vault.IsNotFound(err) && opt.Move.Force) {
-			return err
-		}
-	} else {
-		err := v.Move(args[0], args[1], vault.MoveCopyOpts{
-			SkipIfExists: opt.SkipIfExists, Quiet: opt.Quiet, Deep: opt.Move.Deep, DeletedVersions: opt.Move.Deep,
-		})
-		if err != nil && !(vault.IsNotFound(err) && opt.Move.Force) {
-			return err
-		}
-	}
-	return nil
+	return c.moveCopy(v, args, moveCopyParams{
+		verb:    "move",
+		recurse: opt.Move.Recurse,
+		force:   opt.Move.Force,
+		deep:    opt.Move.Deep,
+		op:      v.Move,
+	})
 }
 
 func (c *CLI) cmdCopy(command string, args ...string) error {
@@ -985,51 +1018,14 @@ func (c *CLI) cmdCopy(command string, args ...string) error {
 	}
 	v := connect(true)
 
-	if vault.PathHasKey(args[0]) || vault.PathHasKey(args[1]) {
-		if opt.Copy.Deep {
-			return fmt.Errorf("Cannot deep copy a specific key")
-		}
-
-		if !vault.PathHasKey(args[0]) && vault.PathHasKey(args[1]) {
-			return fmt.Errorf("Cannot move from entire secret into specific key")
-		}
-	}
-
-	if vault.PathHasVersion(args[1]) {
-		return fmt.Errorf("Cannot copy to a specific destination version")
-	}
-
-	if opt.Copy.Recurse && vault.PathHasVersion(args[0]) {
-		return fmt.Errorf("Cannot recursively copy a path with specific version")
-	}
-
-	//Don't try to recurse if operating on a key
-	// args[0] is the source path. args[1] is the destination path.
-	if opt.Copy.Recurse && !(vault.PathHasKey(args[0]) || vault.PathHasKey(args[1])) {
-		if !opt.Copy.Force && !recursively("copy", args...) {
-			return nil /* skip this command, process the next */
-		}
-		err := v.MoveCopyTree(args[0], args[1], v.Copy, vault.MoveCopyOpts{
-			SkipIfExists:    opt.SkipIfExists,
-			Quiet:           opt.Quiet,
-			Deep:            opt.Copy.Deep,
-			DeletedVersions: opt.Copy.Deep,
-		})
-		if err != nil && !(vault.IsNotFound(err) && opt.Copy.Force) {
-			return err
-		}
-	} else {
-		err := v.Copy(args[0], args[1], vault.MoveCopyOpts{
-			SkipIfExists:    opt.SkipIfExists,
-			Quiet:           opt.Quiet,
-			Deep:            opt.Copy.Deep,
-			DeletedVersions: opt.Copy.Deep,
-		})
-		if err != nil && !(vault.IsNotFound(err) && opt.Copy.Force) {
-			return err
-		}
-	}
-	return nil
+	return c.moveCopy(v, args, moveCopyParams{
+		verb:                "copy",
+		recurse:             opt.Copy.Recurse,
+		force:               opt.Copy.Force,
+		deep:                opt.Copy.Deep,
+		guardRecurseVersion: true,
+		op:                  v.Copy,
+	})
 }
 
 func (c *CLI) cmdOption(command string, args ...string) error {

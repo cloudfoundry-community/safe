@@ -145,10 +145,12 @@ type Options struct {
 	Exists struct{} `cli:"exists, check"`
 
 	Local struct {
-		As     string `cli:"--as"`
-		File   string `cli:"-f, --file"`
-		Memory bool   `cli:"-m, --memory"`
-		Port   int    `cli:"-p, --port"`
+		As       string   `cli:"--as"`
+		File     string   `cli:"-f, --file"`
+		Memory   bool     `cli:"-m, --memory"`
+		Port     int      `cli:"-p, --port"`
+		Config   []string `cli:"-c, --config"`
+		Listener []string `cli:"-l, --listener"`
 	} `cli:"local"`
 
 	Init struct {
@@ -775,7 +777,7 @@ The following options are recognized:
 
 	r.Dispatch("local", &Help{
 		Summary: "Run a local vault",
-		Usage:   "safe local (--memory|--file path/to/dir) [--as name] [--port port]",
+		Usage:   "safe local (--memory|--file path/to/dir) [--as name] [--port port] [--config key=value ...] [--listener key=value ...]",
 		Description: `
 Spins up a new Vault instance.
 
@@ -796,6 +798,19 @@ spinning it down when not in use, specify the --file/-f flag, and give it
 the path to a directory to use for the file backend.  The files created
 by the mechanism will be encrypted.  You will be given the seal key for
 subsequent activations of the Vault.
+
+To tune the generated Vault configuration, pass key=value pairs:
+
+  -c/--config key=value     Set a top-level configuration option, e.g.
+                            --config max_json_string_value_length=8388608
+  -l/--listener key=value   Set an option on the tcp listener stanza, e.g.
+                            --listener proxy_protocol_behavior=use_always
+
+Both flags may be repeated.  Values that look like integers, floats, or
+booleans are written unquoted; everything else is quoted as a string.  A
+key matching a default (disable_mlock, address, tls_disable) overrides it.
+safe only checks that each pair is well-formed; Vault validates the rest,
+and its error is reported if the server refuses to start.
 `,
 		Type: AdministrativeCommand,
 	}, func(command string, args ...string) error {
@@ -818,19 +833,6 @@ subsequent activations of the Vault.
 				_ = conn.Close()
 			}
 		}
-
-		f, err := os.CreateTemp("", "kazoo")
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(f, `# safe local config
-disable_mlock = true
-
-listener "tcp" {
-  address     = "127.0.0.1:%d"
-  tls_disable = 1
-}
-`, port)
 
 		//the "storage" configuration key was once called "backend"
 		storageKey := "storage"
@@ -859,18 +861,46 @@ listener "tcp" {
 	doneVersionCheck:
 
 		keys := make([]string, 0)
-		if opt.Local.Memory {
-			fmt.Fprintf(f, "%s \"inmem\" {}\n", storageKey)
-		} else {
+		if !opt.Local.Memory {
 			opt.Local.File = filepath.ToSlash(opt.Local.File)
-			fmt.Fprintf(f, "%s \"file\" { path = \"%s\" }\n", storageKey, opt.Local.File)
 			if _, err := os.Stat(opt.Local.File); err == nil || !os.IsNotExist(err) {
 				keys = append(keys, pr("Unseal Key", false, true))
 			}
 		}
 
+		configBody, err := buildLocalConfig(localConfigParams{
+			port:       port,
+			storageKey: storageKey,
+			memory:     opt.Local.Memory,
+			filePath:   opt.Local.File,
+			global:     opt.Local.Config,
+			listener:   opt.Local.Listener,
+		})
+		if err != nil {
+			return err
+		}
+
+		f, err := os.CreateTemp("", "kazoo")
+		if err != nil {
+			return err
+		}
+		if _, err := f.WriteString(configBody); err != nil {
+			return fmt.Errorf("Unable to write the Vault config: %w", err)
+		}
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("Unable to write the Vault config: %w", err)
+		}
+
+		// Capture Vault's output so a bad config (which safe deliberately does
+		// not validate) is reported instead of surfacing as a startup timeout.
+		// Vault writes config-parse errors to stdout, so capture both streams.
+		// Pointing Stdout and Stderr at the same writer is the documented way
+		// to avoid an interleaving race (os/exec serializes the writes).
+		var vaultOutput lockedBuffer
 		echan := make(chan error)
 		cmd = exec.Command("vault", "server", "-config", f.Name()) // #nosec G204 - f.Name() is a temp file we created
+		cmd.Stdout = &vaultOutput
+		cmd.Stderr = &vaultOutput
 		_ = cmd.Start()
 		go func() {
 			echan <- cmd.Wait()
@@ -930,12 +960,23 @@ listener "tcp" {
 		const betweenChecksWait = 250 * time.Millisecond
 		startupCheckBeginTime := time.Now()
 		for {
+			// If Vault exited before becoming ready (most often a rejected
+			// config), report its own error rather than waiting out the timeout.
+			select {
+			case waitErr := <-echan:
+				die(fmt.Errorf("Vault exited before it became ready: %s", vaultStartupError(vaultOutput.String(), waitErr)))
+			default:
+			}
+
 			_, err := v.Sealed()
 			if err == nil {
 				break
 			}
 
 			if time.Since(startupCheckBeginTime) > maxStartupWait {
+				if msg := strings.TrimSpace(vaultOutput.String()); msg != "" {
+					die(fmt.Errorf("Timed out waiting for Vault to begin listening: %s\n%s", err, msg))
+				}
 				die(fmt.Errorf("Timed out waiting for Vault to begin listening: %s", err))
 			}
 

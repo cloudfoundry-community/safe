@@ -82,7 +82,7 @@ func TestConnectOrErr_Authenticated(t *testing.T) {
 // parsed back from Vault, so callers set them directly to drive printX509.
 func signedCert(t *testing.T, subject string, names []string, ca bool) *vault.X509 {
 	t.Helper()
-	spec, err := vault.ResolveKeySpec("rsa", 2048, "", nil)
+	spec, err := vault.ResolveKeySpec("ec", 0, "p256", nil)
 	if err != nil {
 		t.Fatalf("ResolveKeySpec: %s", err)
 	}

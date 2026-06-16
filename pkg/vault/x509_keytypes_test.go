@@ -203,6 +203,7 @@ func TestRoundTripAllKeyTypes(t *testing.T) {
 	for _, spec := range specs {
 		spec := spec
 		t.Run(spec.Describe(), func(t *testing.T) {
+			t.Parallel()
 			cert := issueSpec(t, spec, false)
 
 			// Serialize to a Secret then parse it back. Validate() runs on

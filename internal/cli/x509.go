@@ -244,7 +244,7 @@ func (c *CLI) cmdX509Reissue(command string, args ...string) error {
 	}
 
 	if len(opt.X509.Reissue.Name) > 0 {
-		ips, dns, email := vault.CategorizeSANs(uniq(opt.X509.Renew.Name))
+		ips, dns, email := vault.CategorizeSANs(uniq(opt.X509.Reissue.Name))
 		cert.Certificate.IPAddresses = ips
 		cert.Certificate.DNSNames = dns
 		cert.Certificate.EmailAddresses = email

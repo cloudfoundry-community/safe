@@ -6,7 +6,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/cloudfoundry-community/safe/prompt"
+	"github.com/cloudfoundry-community/safe/pkg/prompt"
 	"github.com/cloudfoundry-community/vaultkv"
 	"github.com/jhunt/go-ansi"
 	"golang.org/x/term"

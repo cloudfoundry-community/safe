@@ -8,7 +8,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/cloudfoundry-community/safe/prompt"
+	"github.com/cloudfoundry-community/safe/pkg/prompt"
 	"github.com/jhunt/go-ansi"
 )
 

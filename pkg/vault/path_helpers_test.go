@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/cloudfoundry-community/safe/vault"
+	"github.com/cloudfoundry-community/safe/pkg/vault"
 )
 
 func TestEscapePathSegment(t *testing.T) {

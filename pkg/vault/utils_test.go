@@ -1,7 +1,7 @@
 package vault_test
 
 import (
-	"github.com/cloudfoundry-community/safe/vault"
+	"github.com/cloudfoundry-community/safe/pkg/vault"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 )

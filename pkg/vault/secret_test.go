@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cloudfoundry-community/safe/vault"
+	"github.com/cloudfoundry-community/safe/pkg/vault"
 )
 
 // newTestSecret builds a Secret with the given key/value pairs.

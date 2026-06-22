@@ -40,12 +40,15 @@ func NewProxyRouter() (*ProxyRouter, error) {
 
 	knownHostsFile := getEnvironmentVariable("SAFE_KNOWN_HOSTS_FILE", "safe_known_hosts_file")
 	skipHostKeyString := getEnvironmentVariable("SAFE_SKIP_HOST_KEY_VALIDATION", "safe_skip_host_key_validation")
-	skipHostKeyValidation := true
-	for _, falseString := range []string{"", "false", "no", "0"} {
-		if skipHostKeyString == falseString {
-			skipHostKeyValidation = false
+	skipHostKeyValidation := false
+	for _, trueString := range []string{"true", "yes", "1", "on"} {
+		if strings.EqualFold(skipHostKeyString, trueString) {
+			skipHostKeyValidation = true
 			break
 		}
+	}
+	if skipHostKeyValidation {
+		fmt.Fprintf(os.Stderr, "WARNING: SSH host key validation disabled (SAFE_SKIP_HOST_KEY_VALIDATION=%s)\n", skipHostKeyString)
 	}
 
 	oldHTTPProxy := httpProxy
@@ -121,11 +124,14 @@ func openSOCKS5Helper(toOpen, knownHostsFile string, skipHostKeyValidation bool)
 		return "", fmt.Errorf("could not start SSH tunnel: %w", err)
 	}
 
-	socks5Addr, err := StartSOCKS5Server(sshClient.Dial)
+	socks5Addr, _, err := StartSOCKS5Server(sshClient.Dial)
 	if err != nil {
 		return "", fmt.Errorf("could not start SOCKS5 Server: %w", err)
 	}
 
+	// The closer is intentionally not stored here: the SOCKS5 listener must
+	// remain open for the entire duration of the CLI process. The listener is
+	// bound to a local ephemeral port and will be released when the process exits.
 	return fmt.Sprintf("socks5://%s", socks5Addr), nil
 }
 
@@ -185,20 +191,22 @@ func StartSSHTunnel(conf SOCKS5SSHConfig) (*ssh.Client, error) {
 	return ssh.Dial("tcp", conf.Host, sshConfig)
 }
 
-// StartSOCKS5SSH makes an SSH connection according to the given config, starts
+// StartSOCKS5Server makes an SSH connection according to the given config, starts
 // a local SOCKS5 server on a random port, and then returns the proxy
-// address if the connection was successful and an error if it was unsuccessful.
-func StartSOCKS5Server(dialFn func(string, string) (net.Conn, error)) (string, error) {
+// address, a closer function to shut down the listener, and an error if
+// startup was unsuccessful. Callers must call the closer when the tunnel is no
+// longer needed to release the bound port and goroutine.
+func StartSOCKS5Server(dialFn func(string, string) (net.Conn, error)) (addr string, closer func() error, err error) {
 	socks5Server, err := socks5.New(&socks5.Config{
 		Dial: noopDialContext(dialFn),
 	})
 	if err != nil {
-		return "", fmt.Errorf("error starting local SOCKS5 server: %w", err)
+		return "", nil, fmt.Errorf("error starting local SOCKS5 server: %w", err)
 	}
 
 	socks5Listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return "", fmt.Errorf("error starting local SOCKS5 server: %w", err)
+		return "", nil, fmt.Errorf("error starting local SOCKS5 server: %w", err)
 	}
 
 	go func() {
@@ -207,7 +215,7 @@ func StartSOCKS5Server(dialFn func(string, string) (net.Conn, error)) (string, e
 		}
 	}()
 
-	return socks5Listener.Addr().String(), nil
+	return socks5Listener.Addr().String(), socks5Listener.Close, nil
 }
 
 func knownHostsPromptCallback(knownHostsFile string) (ssh.HostKeyCallback, error) {
@@ -217,17 +225,17 @@ func knownHostsPromptCallback(knownHostsFile string) (ssh.HostKeyCallback, error
 	}
 
 	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
-		err = tmpCallback(hostname, remote, key)
+		callbackErr := tmpCallback(hostname, remote, key)
 		//If the base check is fine, then we just let the ssh request carry on
-		if err == nil {
+		if callbackErr == nil {
 			return nil
 		}
 
 		//If we're here, we got some sort of error
 		//Let's check if it was because the key wasn't trusted
-		errAsKeyError, isKeyError := err.(*knownhosts.KeyError)
+		errAsKeyError, isKeyError := callbackErr.(*knownhosts.KeyError)
 		if !isKeyError {
-			return err
+			return callbackErr
 		}
 
 		//If the error has hostnames listed under Want, it means that there was
@@ -262,12 +270,11 @@ Host key verification failed`
 		//Let's see if we can ask the user if they want to add it
 		if !isatty.IsTerminal(os.Stderr.Fd()) || !promptAddNewKnownHost(hostname, remote, key) {
 			//If its not a terminal or the user declined, we're rejecting it
-			return fmt.Errorf("host key verification failed: %w", err)
+			return fmt.Errorf("host key verification failed: %w", callbackErr)
 		}
 
-		err = writeKnownHosts(knownHostsFile, hostname, key)
-		if err != nil {
-			return err
+		if writeErr := writeKnownHosts(knownHostsFile, hostname, key); writeErr != nil {
+			return writeErr
 		}
 
 		return nil
@@ -334,6 +341,11 @@ func writeKnownHosts(knownHostsFile, hostname string, key ssh.PublicKey) error {
 	return nil
 }
 
+// noopDialContext adapts the ssh.Client.Dial signature (no context) to the
+// context-aware DialContext signature required by the SOCKS5 server. The
+// context is intentionally dropped because ssh.Client.Dial does not accept
+// one; cancellation and deadline enforcement rely on the lower-level TCP
+// timeout configured in the ssh.ClientConfig (30 s) and the SSH transport.
 func noopDialContext(base func(string, string) (net.Conn, error)) func(context.Context, string, string) (net.Conn, error) {
 	return func(_ context.Context, network, addr string) (net.Conn, error) {
 		return base(network, addr)

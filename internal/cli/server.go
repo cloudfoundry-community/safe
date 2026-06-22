@@ -134,6 +134,7 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 			_, _ = fmt.Fprintf(os.Stderr, "@R{      You may have some environmental cleanup to do.}\n")
 			_, _ = fmt.Fprintf(os.Stderr, "@R{      Apologies.}\n")
 		}
+		rc.Cleanup()
 		os.Exit(1)
 	}
 
@@ -204,16 +205,16 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 	if len(keys) == 0 {
 		keys, _, err = v.Init(1, 1)
 		if err != nil {
-			die(fmt.Errorf("Unable to initialize the new (temporary) Vault: %s", err))
+			die(fmt.Errorf("Unable to initialize the new (temporary) Vault: %w", err))
 		}
 	}
 
 	if err = v.Unseal(keys); err != nil {
-		die(fmt.Errorf("Unable to unseal the new (temporary) Vault: %s", err))
+		die(fmt.Errorf("Unable to unseal the new (temporary) Vault: %w", err))
 	}
 	token, err = v.NewRootToken(keys)
 	if err != nil {
-		die(fmt.Errorf("Unable to generate a new root token: %s", err))
+		die(fmt.Errorf("Unable to generate a new root token: %w", err))
 	}
 
 	_ = cfg.SetToken(token)
@@ -223,13 +224,13 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 
 	exists, err := v.MountExists("secret")
 	if err != nil {
-		return fmt.Errorf("Could not list mounts: %s", err)
+		return fmt.Errorf("Could not list mounts: %w", err)
 	}
 
 	if !exists {
 		err := v.AddMount("secret", 2)
 		if err != nil {
-			return fmt.Errorf("Could not add `secret' mount: %s", err)
+			return fmt.Errorf("Could not add `secret' mount: %w", err)
 		}
 		_, _ = fmt.Printf("safe has mounted the @C{secret} backend\n\n")
 	}
@@ -380,7 +381,7 @@ func (c *CLI) cmdInit(command string, args ...string) error {
 
 		for _, addr := range addrs {
 			if err := v.SetURL(addr); err != nil {
-				return fmt.Errorf("invalid vault address %s: %s", addr, err)
+				return fmt.Errorf("invalid vault address %s: %w", addr, err)
 			}
 			if err := v.Unseal(keys); err != nil {
 				_, _ = fmt.Fprintf(os.Stderr, "!!! unable to unseal newly-initialized vault (at %s): %s\n", addr, err)
@@ -397,7 +398,7 @@ func (c *CLI) cmdInit(command string, args ...string) error {
 		for currentAttempt < maxAttempts {
 			for _, addr := range addrs {
 				if err := v.SetURL(addr); err != nil {
-					return fmt.Errorf("invalid vault address %s: %s", addr, err)
+					return fmt.Errorf("invalid vault address %s: %w", addr, err)
 				}
 				if err := v.Client().Client.Health(false); err == nil {
 					break waitMaster
@@ -410,13 +411,13 @@ func (c *CLI) cmdInit(command string, args ...string) error {
 		if !opt.Init.NoMount {
 			exists, err := v.MountExists("secret")
 			if err != nil {
-				return fmt.Errorf("Could not list mounts: %s", err)
+				return fmt.Errorf("Could not list mounts: %w", err)
 			}
 
 			if !exists {
 				err := v.AddMount("secret", 2)
 				if err != nil {
-					return fmt.Errorf("Could not add `secret' mount: %s", err)
+					return fmt.Errorf("Could not add `secret' mount: %w", err)
 				}
 
 				if !opt.Init.JSON {
@@ -473,7 +474,7 @@ func (c *CLI) cmdUnseal(command string, args ...string) error {
 	if cfg.HasStrongbox() {
 		st, err := v.Strongbox()
 		if err != nil {
-			return fmt.Errorf("%s; are you targeting a `safe' installation?", err)
+			return fmt.Errorf("%w; are you targeting a `safe' installation?", err)
 		}
 
 		for addr, state := range st {
@@ -542,7 +543,7 @@ func (c *CLI) cmdSeal(command string, args ...string) error {
 	if cfg.HasStrongbox() {
 		st, err := v.Strongbox()
 		if err != nil {
-			return fmt.Errorf("%s; are you targeting a `safe' installation?", err)
+			return fmt.Errorf("%w; are you targeting a `safe' installation?", err)
 		}
 
 		for addr, state := range st {
@@ -556,7 +557,7 @@ func (c *CLI) cmdSeal(command string, args ...string) error {
 		}
 		isSealed, err := v.Sealed()
 		if err != nil {
-			return nil
+			return err
 		}
 		if !isSealed {
 			toSeal = append(toSeal, cfg.URL())

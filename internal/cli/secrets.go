@@ -45,17 +45,14 @@ func (c *CLI) writeHelper(prompt bool, insecure bool, command string, args ...st
 		}
 		if opt.SkipIfExists && exists && s.Has(k) {
 			clobberKeys = append(clobberKeys, k)
+			// Once a clobber key is found, only collect further clobbers; s.Set is not called.
 			continue
 		}
-		// realize that we're going to fail, and don't prompt the user for any info
 		if len(clobberKeys) > 0 {
 			continue
 		}
 		if missing {
 			v = pr(k, prompt, insecure)
-		}
-		if err != nil {
-			return err
 		}
 		err = s.Set(k, v, opt.SkipIfExists)
 		if err != nil {
@@ -102,10 +99,12 @@ func (c *CLI) cmdExists(command string, args ...string) error {
 	_, err := v.Read(args[0])
 	if err != nil {
 		if vault.IsNotFound(err) {
+			rc.Cleanup()
 			os.Exit(1)
 		}
 		return err
 	}
+	rc.Cleanup()
 	os.Exit(0)
 	return nil
 }
@@ -287,7 +286,7 @@ func (c *CLI) cmdVersions(command string, args ...string) error {
 
 			table.addRow(
 				fmt.Sprintf("%d", versions[j].Version),
-				fmt.Sprintf(statusString),
+				fmt.Sprintf("%s", statusString),
 				createdAtString,
 			)
 		}
@@ -456,8 +455,7 @@ func (c *CLI) cmdPaths(command string, args ...string) error {
 			return err
 		}
 
-		_, _ = fmt.Printf(strings.Join(secrets.Paths(), "\n"))
-		_, _ = fmt.Printf("\n")
+		_, _ = fmt.Printf("%s\n", strings.Join(secrets.Paths(), "\n"))
 	}
 	return nil
 }
@@ -589,6 +587,9 @@ func (c *CLI) cmdRevert(command string, args ...string) error {
 	allVersions, err := v.Versions(args[0])
 	if err != nil {
 		return err
+	}
+	if len(allVersions) == 0 {
+		return fmt.Errorf("no versions found for %s", args[0])
 	}
 
 	destroyedErr := fmt.Errorf("Version %d of secret `%s' is destroyed", targetVersion, secret)
@@ -788,9 +789,6 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 	if err != nil {
 		return err
 	}
-	if err != nil {
-		return err
-	}
 
 	if opt.SkipIfExists {
 		_, _ = fmt.Fprintf(os.Stderr, "@R{!!} @C{--no-clobber} @R{is incompatible with} @C{safe import}\n")
@@ -821,7 +819,7 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 		var unmarshalTarget []exportFormat
 		err := json.Unmarshal(input, &unmarshalTarget)
 		if err != nil {
-			return fmt.Errorf("Could not interpret export file: %s", err)
+			return fmt.Errorf("Could not interpret export file: %w", err)
 		}
 
 		if len(unmarshalTarget) != 1 {
@@ -839,7 +837,7 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 				if needsVersioning {
 					mountVersion, err := v.MountVersion(mount)
 					if err != nil {
-						return fmt.Errorf("Could not determine existing mount version: %s", err)
+						return fmt.Errorf("Could not determine existing mount version: %w", err)
 					}
 
 					if mountVersion != 2 {
@@ -910,7 +908,7 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 	var fn importFunc
 	//determine which version of the export format this is
 	var typeTest interface{}
-	_ = json.Unmarshal(b, &typeTest)
+	jsonParseErr := json.Unmarshal(b, &typeTest)
 	switch v := typeTest.(type) {
 	case map[string]interface{}:
 		fn = v1Import
@@ -926,6 +924,9 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 	}
 
 	if fn == nil {
+		if jsonParseErr != nil {
+			return fmt.Errorf("Unknown export file format (JSON parse error: %w)", jsonParseErr)
+		}
 		return fmt.Errorf("Unknown export file format - aborting")
 	}
 
@@ -1059,7 +1060,7 @@ func (c *CLI) cmdOption(command string, args ...string) error {
 			if *entry.val {
 				value = "@G{true}"
 			}
-			table.addRow(entry.opt, fmt.Sprintf(value))
+			table.addRow(entry.opt, fmt.Sprintf("%s", value))
 		}
 
 		table.print()

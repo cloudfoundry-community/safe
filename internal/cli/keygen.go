@@ -115,7 +115,7 @@ func (c *CLI) cmdUuid(command string, args ...string) error {
 		if !opt.Quiet {
 			_, _ = fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to update} @C{%s:%s} @R{as it is already present in Vault}\n", path, key)
 		}
-		return err
+		return nil
 	}
 	err = s.Set(key, stringuuid, opt.SkipIfExists)
 	if err != nil {

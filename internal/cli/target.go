@@ -151,6 +151,7 @@ func (c *CLI) cmdTarget(command string, args ...string) error {
 				_, _ = fmt.Fprintf(os.Stderr, "     @C{safe target ops https://address.of.your.vault}\n")
 				_, _ = fmt.Fprintf(os.Stderr, "     @C{safe auth (github|token|ldap|okta|userpass)}\n")
 				_, _ = fmt.Fprintf(os.Stderr, "\n")
+				rc.Cleanup()
 				os.Exit(1)
 			}
 			_ = r.Execute("targets")
@@ -311,7 +312,7 @@ func (c *CLI) cmdStatus(command string, args ...string) error {
 	if cfg.HasStrongbox() {
 		st, err := v.Strongbox()
 		if err != nil {
-			return fmt.Errorf("%s; are you targeting a `safe' installation?", err)
+			return fmt.Errorf("%w; are you targeting a `safe' installation?", err)
 		}
 
 		for addr, state := range st {
@@ -357,6 +358,7 @@ func (c *CLI) cmdEnv(command string, args ...string) error {
 	if opt.Env.ForBash && opt.Env.ForFish && opt.Env.ForJSON {
 		r.Help(os.Stderr, "env")
 		_, _ = fmt.Fprintf(os.Stderr, "@R{Only specify one of --json, --bash OR --fish.}\n")
+		rc.Cleanup()
 		os.Exit(1)
 	}
 	vars := map[string]string{
@@ -521,7 +523,7 @@ func (c *CLI) cmdAuth(command string, args ...string) error {
 		if opt.Auth.JSON {
 			outputBytes, err := json.MarshalIndent(tokenObj, "", "  ")
 			if err != nil {
-				return fmt.Errorf("could not marshal JSON from TokenStatus object: %s", err)
+				return fmt.Errorf("could not marshal JSON from TokenStatus object: %w", err)
 			}
 
 			output = string(append(outputBytes, '\n'))
@@ -529,7 +531,7 @@ func (c *CLI) cmdAuth(command string, args ...string) error {
 			output = tokenObj.String()
 		}
 
-		_, _ = fmt.Printf(output)
+		_, _ = fmt.Printf("%s", output)
 		return nil
 
 	default:

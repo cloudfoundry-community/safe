@@ -25,6 +25,7 @@ func (c *CLI) cmdVersion(command string, args ...string) error {
 	if BuildTime != "" {
 		_, _ = fmt.Fprintf(os.Stderr, "  built  %s\n", BuildTime)
 	}
+	rc.Cleanup()
 	os.Exit(0)
 	return nil
 }
@@ -36,6 +37,7 @@ func (c *CLI) cmdHelp(command string, args ...string) error {
 		args = append(args, "commands")
 	}
 	r.Help(os.Stderr, strings.Join(args, " "))
+	rc.Cleanup()
 	os.Exit(0)
 	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 
 	fmt "github.com/jhunt/go-ansi"
@@ -59,11 +60,17 @@ func connectOrErr(auth bool) (*vault.Vault, error) {
 	}
 
 	skipVerify := os.Getenv("VAULT_SKIP_VERIFY")
+	// Parse VAULT_SKIP_VERIFY with Go/Vault-compatible bool semantics:
+	// "false", "0", "no", "off" all disable skip; parse failure is conservative (do not skip).
+	skipVerifyBool, parseErr := strconv.ParseBool(skipVerify)
+	if parseErr != nil {
+		skipVerifyBool = false
+	}
 	conf := vault.VaultConfig{
 		URL:        url,
 		Token:      os.Getenv("VAULT_TOKEN"),
 		Namespace:  os.Getenv("VAULT_NAMESPACE"),
-		SkipVerify: skipVerify != "" && skipVerify != "false",
+		SkipVerify: skipVerifyBool,
 		CACerts:    caCertPool,
 	}
 
@@ -103,6 +110,7 @@ func connect(auth bool) *vault.Vault {
 	default:
 		_, _ = fmt.Fprintf(os.Stderr, "@R{!! %s}\n", err)
 	}
+	rc.Cleanup()
 	os.Exit(1)
 	return nil
 }

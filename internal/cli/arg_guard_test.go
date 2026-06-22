@@ -6,11 +6,13 @@ package cli
 // and rc.Apply returns an empty config with no error.
 //
 // Handlers covered (guard runs before connect()):
-//   - cmdDelete  — requires >= 1 arg
-//   - cmdRevert  — requires exactly 2 args
-//   - cmdFmt     — requires exactly 4 args
-//   - cmdMove    — requires exactly 2 args
-//   - cmdCopy    — requires exactly 2 args
+//   - cmdDelete   — requires >= 1 arg
+//   - cmdRevert   — requires exactly 2 args
+//   - cmdFmt      — requires exactly 4 args
+//   - cmdMove     — requires exactly 2 args
+//   - cmdCopy     — requires exactly 2 args
+//   - cmdExists   — requires exactly 1 arg
+//   - cmdUndelete — requires >= 1 arg
 //
 // For each handler we build a minimal *CLI with NewRunner (so r.Usage works),
 // ensure the guard fires, and assert the returned error is a *UsageError.
@@ -46,13 +48,11 @@ func newTestCLI(t *testing.T) *CLI {
 		"delete", "revert", "fmt", "move", "copy",
 		"get", "exists", "undelete",
 	} {
-		n := name // capture
-		r.Dispatch(n, &Help{
-			Summary: n,
-			Usage:   "safe " + n + " ...",
+		r.Dispatch(name, &Help{
+			Summary: name,
+			Usage:   "safe " + name + " ...",
 			Type:    NonDestructiveCommand,
 		}, func(cmd string, args ...string) error { return nil })
-		_ = n
 	}
 
 	c.r = r
@@ -202,4 +202,39 @@ func TestCmdGet_ZeroArgs_ReturnsUsageError(t *testing.T) {
 	c := newTestCLI(t)
 	err := c.cmdGet("get")
 	assertUsageError(t, err, "get")
+}
+
+// ---------------------------------------------------------------------------
+// cmdExists
+// ---------------------------------------------------------------------------
+
+// cmdExists requires exactly 1 arg; 0 or 2+ trigger the usage guard.
+// The guard fires after rc.Apply but before connect().
+
+func TestCmdExists_ZeroArgs_ReturnsUsageError(t *testing.T) {
+	isolateHome(t)
+	c := newTestCLI(t)
+	err := c.cmdExists("exists")
+	assertUsageError(t, err, "exists")
+}
+
+func TestCmdExists_TwoArgs_ReturnsUsageError(t *testing.T) {
+	isolateHome(t)
+	c := newTestCLI(t)
+	err := c.cmdExists("exists", "secret/a", "secret/b")
+	assertUsageError(t, err, "exists")
+}
+
+// ---------------------------------------------------------------------------
+// cmdUndelete
+// ---------------------------------------------------------------------------
+
+// cmdUndelete requires >= 1 arg; 0 args triggers the usage guard.
+// The guard fires after rc.Apply but before connect().
+
+func TestCmdUndelete_ZeroArgs_ReturnsUsageError(t *testing.T) {
+	isolateHome(t)
+	c := newTestCLI(t)
+	err := c.cmdUndelete("undelete")
+	assertUsageError(t, err, "undelete")
 }

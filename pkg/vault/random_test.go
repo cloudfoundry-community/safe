@@ -4,6 +4,7 @@ package vault
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // TestRandomLength verifies random(n, policy) always returns a string of
@@ -21,7 +22,10 @@ func TestRandomLength(t *testing.T) {
 				t.Fatalf("random(%d): unexpected error: %v", n, err)
 			}
 			if len(got) != n {
-				t.Errorf("random(%d) returned %d chars: %q", n, len(got), got)
+				t.Errorf("random(%d) returned %d bytes: %q", n, len(got), got)
+			}
+			if utf8.RuneCountInString(got) != n {
+				t.Errorf("random(%d) returned %d runes: %q", n, utf8.RuneCountInString(got), got)
 			}
 		})
 	}
@@ -75,7 +79,10 @@ func TestRandomCharsetFilter(t *testing.T) {
 				t.Fatalf("random(%d, %q): %v", n, tc.policy, err)
 			}
 			if len(got) != n {
-				t.Errorf("length: got %d, want %d", len(got), n)
+				t.Errorf("byte length: got %d, want %d", len(got), n)
+			}
+			if utf8.RuneCountInString(got) != n {
+				t.Errorf("rune count: got %d, want %d", utf8.RuneCountInString(got), n)
 			}
 			for i, ch := range got {
 				if !strings.ContainsRune(tc.allowed, ch) {

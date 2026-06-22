@@ -1037,7 +1037,7 @@ func (c *X509) FormatSerial() string {
 	serialHex := []byte(fmt.Sprintf("%040x", serial))
 	colonByte := []byte(":")[0]
 	ret := []byte{}
-	for i := 0; i < 40/2; i++ {
+	for i := range 40 / 2 {
 		ret = append(ret, serialHex[i*2], serialHex[(i*2)+1], colonByte)
 	}
 	//cutoff last colon

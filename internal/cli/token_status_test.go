@@ -236,7 +236,7 @@ func TestTokenStatus_String_Valid_MultiplePolicies(t *testing.T) {
 
 func TestRandomName_Format(t *testing.T) {
 	// RandomName uses crypto/rand — not deterministic. Verify format only.
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		name := RandomName()
 		parts := strings.SplitN(name, "-", 2)
 		if len(parts) != 2 {
@@ -264,7 +264,7 @@ func TestRandomName_UsesKnownWordlists(t *testing.T) {
 		nounSet[n] = true
 	}
 
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		name := RandomName()
 		parts := strings.SplitN(name, "-", 2)
 		if len(parts) != 2 {

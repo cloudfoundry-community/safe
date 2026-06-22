@@ -134,7 +134,7 @@ func (t *table) _getNumCols() int {
 
 func (t *table) _calcColWidths() []int {
 	ret := make([]int, t._getNumCols())
-	for i := 0; i < len(ret); i++ {
+	for i := range ret {
 		ret[i] = t._calcColWidth(i)
 	}
 
@@ -209,7 +209,7 @@ func (t *table) _printCell(cell string, spaces int) {
 	}
 
 	spaceBuf := make([]byte, spaces)
-	for idx := 0; idx < spaces; idx++ {
+	for idx := range spaces {
 		spaceBuf[idx] = ' '
 	}
 

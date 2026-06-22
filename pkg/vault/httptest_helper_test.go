@@ -15,6 +15,7 @@ package vault_test
 
 import (
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -72,9 +73,7 @@ func (f *fakeVault) set(path string, kv map[string]string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	cp := make(map[string]string, len(kv))
-	for k, v := range kv {
-		cp[k] = v
-	}
+	maps.Copy(cp, kv)
 	f.data[path] = cp
 }
 
@@ -87,9 +86,7 @@ func (f *fakeVault) get(path string) map[string]string {
 		return nil
 	}
 	cp := make(map[string]string, len(kv))
-	for k, v := range kv {
-		cp[k] = v
-	}
+	maps.Copy(cp, kv)
 	return cp
 }
 

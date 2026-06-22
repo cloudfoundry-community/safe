@@ -17,7 +17,7 @@ func random(n int, policy string) (string, error) {
 
 	var buffer bytes.Buffer
 
-	for i := 0; i < n; i++ {
+	for range n {
 		index, err := rand.Int(rand.Reader, big.NewInt(int64(len(keep))))
 		if err != nil {
 			return "", err

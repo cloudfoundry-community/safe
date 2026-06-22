@@ -48,7 +48,7 @@ func (s *Secret) Get(key string) string {
 func (s *Secret) Keys() []string {
 	keys := reflect.ValueOf(s.data).MapKeys()
 	strKeys := make([]string, len(keys))
-	for i := 0; i < len(keys); i++ {
+	for i := range keys {
 		strKeys[i] = keys[i].String()
 	}
 	sort.Strings(strKeys)

@@ -282,15 +282,13 @@ func TestLockedBuffer(t *testing.T) {
 	t.Run("concurrent writers are race-free", func(t *testing.T) {
 		var b lockedBuffer
 		var wg sync.WaitGroup
-		for i := 0; i < 16; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for j := 0; j < 64; j++ {
+		for range 16 {
+			wg.Go(func() {
+				for range 64 {
 					_, _ = b.Write([]byte("x"))
 					_ = b.String()
 				}
-			}()
+			})
 		}
 		wg.Wait()
 		if got := len(b.String()); got != 16*64 {

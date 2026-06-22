@@ -73,7 +73,7 @@ func (v *Vault) ReKey(unsealKeyCount, numToUnseal int, pgpKeys []string) ([]stri
 
 	givenKeys := make([]string, rekey.Remaining())
 
-	for i := 0; i < len(givenKeys); i++ {
+	for i := range givenKeys {
 		givenKeys[i] = prompt.Secure("Unseal Key %d: ", i+1)
 	}
 

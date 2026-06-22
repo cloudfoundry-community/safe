@@ -214,7 +214,7 @@ func (c *CLI) cmdGet(command string, args ...string) error {
 			} else {
 				foundKeys := reflect.ValueOf(result).MapKeys()
 				strKeys := make([]string, len(foundKeys))
-				for i := 0; i < len(foundKeys); i++ {
+				for i := range foundKeys {
 					strKeys[i] = foundKeys[i].String()
 				}
 				sort.Strings(strKeys)

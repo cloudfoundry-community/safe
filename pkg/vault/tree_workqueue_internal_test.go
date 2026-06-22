@@ -61,33 +61,31 @@ func TestWorkQueueConcurrentDrain(t *testing.T) {
 
 	q := newWorkQueue(workers)
 
-	for i := 0; i < seed; i++ {
+	for range seed {
 		// Each seed order spawns exactly one child, so the total is fixed.
 		q.Push(&workOrder{operation: 1})
 	}
 
-	var consumed int64
+	var consumed atomic.Int64
 	var wg sync.WaitGroup
-	for w := 0; w < workers; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range workers {
+		wg.Go(func() {
 			for {
 				order, done := q.Pop()
 				if done {
 					return
 				}
-				atomic.AddInt64(&consumed, 1)
+				consumed.Add(1)
 				if order.operation == 1 {
 					// Spawn exactly one child for each seed order.
 					q.Push(&workOrder{operation: 2})
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 
-	if got := atomic.LoadInt64(&consumed); got != seed*2 {
+	if got := consumed.Load(); got != seed*2 {
 		t.Fatalf("consumed %d orders, want %d", got, seed*2)
 	}
 }

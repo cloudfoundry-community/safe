@@ -512,7 +512,7 @@ func (c *CLI) cmdUnseal(command string, args ...string) error {
 	_, _ = fmt.Printf("You need %d key(s) to unseal the vaults.\n\n", nkeys)
 	keys := make([]string, nkeys)
 
-	for i := 0; i < nkeys; i++ {
+	for i := range nkeys {
 		keys[i] = pr(fmt.Sprintf("Key #%d", i+1), false, true)
 	}
 

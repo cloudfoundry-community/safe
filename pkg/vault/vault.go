@@ -143,7 +143,7 @@ func (v *Vault) Read(path string) (secret *Secret, err error) {
 
 	secret = NewSecret()
 
-	raw := map[string]interface{}{}
+	raw := map[string]any{}
 	_, err = v.client.Get(path, &raw, &vaultkv.KVGetOpts{Version: uint(version)})
 	if err != nil {
 		if vaultkv.IsNotFound(err) {
@@ -157,7 +157,7 @@ func (v *Vault) Read(path string) (secret *Secret, err error) {
 		if !found {
 			return nil, NewKeyNotFoundError(path, key)
 		}
-		raw = map[string]interface{}{key: val}
+		raw = map[string]any{key: val}
 	}
 
 	for k, v := range raw {
@@ -218,7 +218,7 @@ func (v *Vault) Write(path string, s *Secret) error {
 // errIfFolder returns an error with your provided message if the given path is a folder.
 // Can also throw an error if contacting the backend failed, in which case that error
 // is returned.
-func (v *Vault) errIfFolder(path, message string, args ...interface{}) error {
+func (v *Vault) errIfFolder(path, message string, args ...any) error {
 	path = Canonicalize(path)
 	if _, err := v.List(path); err == nil {
 		//We don't want the folder error to be ignored because of the -f flag to rm,
@@ -811,9 +811,9 @@ func (v *Vault) Move(oldpath, newpath string, opts MoveCopyOpts) error {
 }
 
 type mountpoint struct {
-	Type        string                 `json:"type"`
-	Description string                 `json:"description"`
-	Config      map[string]interface{} `json:"config"`
+	Type        string         `json:"type"`
+	Description string         `json:"description"`
+	Config      map[string]any `json:"config"`
 }
 
 func (v *Vault) Mounts(typ string) ([]string, error) {
@@ -847,7 +847,7 @@ func (v *Vault) IsMounted(typ, path string) (bool, error) {
 	return false, nil
 }
 
-func (v *Vault) Mount(typ, path string, params map[string]interface{}) error {
+func (v *Vault) Mount(typ, path string, params map[string]any) error {
 	mounted, err := v.IsMounted(typ, path)
 	if err != nil {
 		return err
@@ -926,7 +926,7 @@ func (v *Vault) RetrievePem(backend, path string) ([]byte, error) {
 }
 
 func DecodeErrorResponse(body []byte) error {
-	var raw map[string]interface{}
+	var raw map[string]any
 
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return fmt.Errorf("received non-200 with non-JSON payload:\n%s", body)
@@ -934,7 +934,7 @@ func DecodeErrorResponse(body []byte) error {
 
 	if rawErrors, ok := raw["errors"]; ok {
 		var errors []string
-		if elems, ok := rawErrors.([]interface{}); ok {
+		if elems, ok := rawErrors.([]any); ok {
 			for _, elem := range elems {
 				if err, ok := elem.(string); ok {
 					errors = append(errors, err)
@@ -981,12 +981,12 @@ func (v *Vault) CreateSignedCertificate(backend, role, path string, params CertO
 		return fmt.Errorf("unable to create certificate %s: %s", params.CN, DecodeErrorResponse(body))
 	}
 
-	var raw map[string]interface{}
+	var raw map[string]any
 	if err = json.Unmarshal(body, &raw); err == nil {
 		if d, ok := raw["data"]; ok {
-			if data, ok := d.(map[string]interface{}); ok {
+			if data, ok := d.(map[string]any); ok {
 				var cert, key, serial string
-				var c, k, s interface{}
+				var c, k, s any
 				var ok bool
 				if c, ok = data["certificate"]; !ok {
 					return fmt.Errorf("no certificate found when issuing certificate %s:\n%v", params.CN, data)

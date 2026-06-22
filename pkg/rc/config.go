@@ -36,10 +36,10 @@ type Vault struct {
 }
 
 type oldConfig struct {
-	Current    string                 `yaml:"Current"`
-	Targets    map[string]interface{} `yaml:"Targets"`
-	Aliases    map[string]string      `yaml:"Aliases"`
-	SkipVerify map[string]bool        `yaml:"SkipVerify"`
+	Current    string            `yaml:"Current"`
+	Targets    map[string]any    `yaml:"Targets"`
+	Aliases    map[string]string `yaml:"Aliases"`
+	SkipVerify map[string]bool   `yaml:"SkipVerify"`
 }
 
 func userHomeDir() string {

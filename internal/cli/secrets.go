@@ -657,7 +657,7 @@ func (c *CLI) cmdExport(command string, args ...string) error {
 	}
 	v := connect(true)
 
-	var toExport interface{}
+	var toExport any
 
 	//Standardize and validate paths
 	for i := range args {
@@ -907,14 +907,14 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 
 	var fn importFunc
 	//determine which version of the export format this is
-	var typeTest interface{}
+	var typeTest any
 	jsonParseErr := json.Unmarshal(b, &typeTest)
 	switch v := typeTest.(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		fn = v1Import
-	case []interface{}:
+	case []any:
 		if len(v) == 1 {
-			if meta, isMap := (v[0]).(map[string]interface{}); isMap {
+			if meta, isMap := (v[0]).(map[string]any); isMap {
 				version, isFloat64 := meta["export_version"].(float64)
 				if isFloat64 && version == 2 {
 					fn = v2Import

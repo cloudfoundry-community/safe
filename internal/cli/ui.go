@@ -216,7 +216,7 @@ func (t *table) _printCell(cell string, spaces int) {
 	_, _ = os.Stdout.Write(spaceBuf)
 }
 
-func (t *table) _sprintf(f string, args ...interface{}) string {
+func (t *table) _sprintf(f string, args ...any) string {
 	ret := ansi.Sprintf(f, args...)
 	if !ansi.ShouldColorize(os.Stdout) {
 		ret = t._stripColor(ret)

@@ -55,12 +55,12 @@ func readline() string {
 	return line
 }
 
-func Normal(label string, args ...interface{}) string {
+func Normal(label string, args ...any) string {
 	_, _ = ansi.Fprintf(os.Stderr, label, args...)
 	return readline()
 }
 
-func Secure(label string, args ...interface{}) string {
+func Secure(label string, args ...any) string {
 	if !isatty.IsTerminal(os.Stdin.Fd()) {
 		return readline()
 	}

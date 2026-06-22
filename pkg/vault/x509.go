@@ -989,7 +989,7 @@ func (cert *X509) getKeyID() []byte {
 	return nil
 }
 
-func getKeyIDFromPublicKey(key interface{}) ([]byte, error) {
+func getKeyIDFromPublicKey(key any) ([]byte, error) {
 	switch k := key.(type) {
 	case *rsa.PublicKey:
 		// Preserved for backward compatibility: SHA1 over the PKCS#1 DER.

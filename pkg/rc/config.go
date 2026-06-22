@@ -89,11 +89,14 @@ func Read() (Config, error) {
 
 	b, err := os.ReadFile(saferc())
 	if err != nil {
-		return Config{Version: 1}, nil
+		if os.IsNotExist(err) {
+			return Config{Version: 1}, nil
+		}
+		return Config{}, err
 	}
 
 	if err = yaml.Unmarshal(b, &c); err != nil {
-		return Config{Version: 1}, nil
+		return Config{}, fmt.Errorf("could not parse config: %w", err)
 	}
 	if c.Version == 0 {
 		var legacy oldConfig

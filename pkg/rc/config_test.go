@@ -43,9 +43,11 @@ func writeFile(t *testing.T, path, contents string) {
 	}
 }
 
-// TestRead covers the four filesystem paths through Read: a missing file and
-// unparseable contents both degrade to an empty v1 config without error, a
-// modern v1 file round-trips, and a legacy (version 0) file is converted.
+// TestRead covers the four filesystem paths through Read: a missing file
+// returns an empty v1 config without error; invalid YAML returns an error
+// (QC-12 fix — prevents a subsequent Write from clobbering a recoverable
+// .saferc); a modern v1 file round-trips; a legacy (version 0) file is
+// converted.
 func TestRead(t *testing.T) {
 	t.Run("missing file yields empty v1 config", func(t *testing.T) {
 		setHome(t)
@@ -61,15 +63,15 @@ func TestRead(t *testing.T) {
 		}
 	})
 
-	t.Run("invalid yaml degrades to empty v1 config", func(t *testing.T) {
+	t.Run("invalid yaml returns error", func(t *testing.T) {
 		home := setHome(t)
 		writeFile(t, filepath.Join(home, ".saferc"), "vaults: [unterminated")
-		c, err := Read()
-		if err != nil {
-			t.Fatalf("unexpected error: %s", err)
+		_, err := Read()
+		if err == nil {
+			t.Fatal("expected error for malformed .saferc, got nil")
 		}
-		if c.Version != 1 || len(c.Vaults) != 0 {
-			t.Errorf("got %+v, want empty v1 config", c)
+		if !strings.Contains(err.Error(), "could not parse config") {
+			t.Errorf("error message %q does not contain 'could not parse config'", err.Error())
 		}
 	})
 

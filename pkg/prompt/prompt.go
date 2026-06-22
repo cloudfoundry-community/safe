@@ -15,6 +15,16 @@ import (
 
 var in *bufio.Reader
 
+// SetReader replaces the reader used by Normal and readline. Passing nil resets
+// to the default (os.Stdin). Call this in tests to inject deterministic input.
+func SetReader(r io.Reader) {
+	if r == nil {
+		in = nil
+		return
+	}
+	in = bufio.NewReader(r)
+}
+
 func readline() string {
 	if in == nil {
 		in = bufio.NewReader(os.Stdin)

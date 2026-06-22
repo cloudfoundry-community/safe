@@ -39,12 +39,31 @@ type fakeVault struct {
 
 	// pkiRevokeHandler, if non-nil, is called for POST /v1/<backend>/revoke.
 	pkiRevokeHandler func(w http.ResponseWriter, r *http.Request)
+
+	// seal models the sys/seal, sys/unseal, sys/init, and sys/seal-status
+	// endpoints for Init/Seal/Unseal/Sealed/SealKeys tests.
+	initialized bool
+	sealed      bool
+	threshold   int      // keys required to unseal
+	shares      int      // total unseal keys
+	progress    int      // keys submitted so far this unseal attempt
+	rootToken   string   // returned by sys/init
+	initKeys    []string // returned by sys/init
+
+	// rekey models the sys/rekey/init and sys/rekey/update endpoints.
+	rekeyActive   bool
+	rekeyNonce    string
+	rekeyRequired int      // existing keys needed to authorize the rekey
+	rekeyProgress int      // existing keys submitted so far
+	rekeyShares   int      // new key count to mint on completion
+	rekeyNewKeys  []string // new keys returned on completion
 }
 
 func newFakeVault() *fakeVault {
 	return &fakeVault{
-		data: make(map[string]map[string]string),
-		pki:  make(map[string]bool),
+		data:        make(map[string]map[string]string),
+		pki:         make(map[string]bool),
+		initialized: true,
 	}
 }
 
@@ -113,15 +132,15 @@ func (f *fakeVault) sysMountsForListJSON() []byte {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	type mountEntry struct {
-		Type        string      `json:"type"`
-		Description string      `json:"description"`
-		Config      interface{} `json:"config"`
+		Type        string `json:"type"`
+		Description string `json:"description"`
+		Config      any    `json:"config"`
 	}
 	mounts := map[string]mountEntry{
-		"secret/": {Type: "kv", Config: map[string]interface{}{}},
+		"secret/": {Type: "kv", Config: map[string]any{}},
 	}
 	for name := range f.pki {
-		mounts[name+"/"] = mountEntry{Type: "pki", Config: map[string]interface{}{}}
+		mounts[name+"/"] = mountEntry{Type: "pki", Config: map[string]any{}}
 	}
 	b, _ := json.Marshal(mounts)
 	return b
@@ -144,8 +163,8 @@ func (f *fakeVault) uiMountsJSON() []byte {
 	for name := range f.pki {
 		secretMap[name+"/"] = secretMount{Type: "pki"}
 	}
-	payload := map[string]interface{}{
-		"data": map[string]interface{}{
+	payload := map[string]any{
+		"data": map[string]any{
 			"secret": secretMap,
 		},
 	}
@@ -156,7 +175,7 @@ func (f *fakeVault) uiMountsJSON() []byte {
 func jsonErr(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{"errors": []string{msg}})
+	_ = json.NewEncoder(w).Encode(map[string]any{"errors": []string{msg}})
 }
 
 // ServeHTTP dispatches requests to the fake Vault server.
@@ -175,6 +194,15 @@ func (f *fakeVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case p == "/v1/sys/mounts" && r.Method == http.MethodGet:
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(f.sysMountsForListJSON())
+
+	case p == "/v1/sys/health",
+		p == "/v1/sys/seal-status",
+		p == "/v1/sys/init",
+		p == "/v1/sys/seal",
+		p == "/v1/sys/unseal",
+		p == "/v1/sys/rekey/init",
+		p == "/v1/sys/rekey/update":
+		f.handleSys(w, r)
 
 	case strings.HasPrefix(p, "/v1/secret/") || p == "/v1/secret":
 		f.handleKV(w, r)
@@ -203,8 +231,8 @@ func (f *fakeVault) handleKV(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"data": map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
 				"keys": children,
 			},
 		})
@@ -217,13 +245,13 @@ func (f *fakeVault) handleKV(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": kv,
 		})
 
 	case r.Method == http.MethodPost || r.Method == http.MethodPut:
 		secretPath := "secret/" + subpath
-		var body map[string]interface{}
+		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			jsonErr(w, http.StatusBadRequest, "invalid json")
 			return
@@ -283,6 +311,162 @@ func (f *fakeVault) handlePKI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonErr(w, http.StatusNotFound, "not found")
+}
+
+// sealStateJSON renders the SealState payload shared by seal-status and unseal.
+func (f *fakeVault) sealStateJSON() map[string]any {
+	return map[string]any{
+		"type":        "shamir",
+		"sealed":      f.sealed,
+		"t":           f.threshold,
+		"n":           f.shares,
+		"progress":    f.progress,
+		"nonce":       "",
+		"version":     "1.0.0",
+		"initialized": f.initialized,
+	}
+}
+
+// handleSys models the subset of sys/* endpoints used by the seal, unseal,
+// init, and rekey flows. All state lives on the fakeVault under f.mu.
+func (f *fakeVault) handleSys(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p := r.URL.Path
+
+	writeJSON := func(v any) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(v)
+	}
+
+	switch {
+	case p == "/v1/sys/health" && r.Method == http.MethodGet:
+		// Status code alone drives Health(); body is decoded but unused.
+		switch {
+		case !f.initialized:
+			w.WriteHeader(http.StatusNotImplemented) // 501 → uninitialized
+		case f.sealed:
+			w.WriteHeader(http.StatusServiceUnavailable) // 503 → sealed
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+		writeJSON(map[string]any{})
+
+	case p == "/v1/sys/seal-status" && r.Method == http.MethodGet:
+		writeJSON(f.sealStateJSON())
+
+	case p == "/v1/sys/init" && r.Method == http.MethodGet:
+		writeJSON(map[string]any{"initialized": f.initialized})
+
+	case p == "/v1/sys/init" && r.Method == http.MethodPut:
+		var conf struct {
+			Shares    int `json:"secret_shares"`
+			Threshold int `json:"secret_threshold"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&conf)
+		f.initialized = true
+		f.shares = conf.Shares
+		f.threshold = conf.Threshold
+		if f.rootToken == "" {
+			f.rootToken = "root-test-token"
+		}
+		keys := f.initKeys
+		if keys == nil {
+			keys = make([]string, conf.Shares)
+			for i := range keys {
+				keys[i] = "init-key-" + string(rune('A'+i))
+			}
+		}
+		writeJSON(map[string]any{
+			"keys":        keys,
+			"keys_base64": keys,
+			"root_token":  f.rootToken,
+		})
+
+	case p == "/v1/sys/seal" && r.Method == http.MethodPut:
+		f.sealed = true
+		f.progress = 0
+		w.WriteHeader(http.StatusNoContent)
+
+	case p == "/v1/sys/unseal" && r.Method == http.MethodPut:
+		var body struct {
+			Key   string `json:"key"`
+			Reset bool   `json:"reset"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Reset {
+			f.progress = 0
+			writeJSON(f.sealStateJSON())
+			return
+		}
+		f.progress++
+		if f.threshold > 0 && f.progress >= f.threshold {
+			f.sealed = false
+			f.progress = 0
+		}
+		writeJSON(f.sealStateJSON())
+
+	case p == "/v1/sys/rekey/init" && r.Method == http.MethodDelete:
+		f.rekeyActive = false
+		f.rekeyProgress = 0
+		w.WriteHeader(http.StatusNoContent)
+
+	case p == "/v1/sys/rekey/init" && r.Method == http.MethodPut:
+		var conf struct {
+			Shares    int `json:"secret_shares"`
+			Threshold int `json:"secret_threshold"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&conf)
+		f.rekeyActive = true
+		f.rekeyNonce = "rekey-nonce"
+		f.rekeyProgress = 0
+		f.rekeyShares = conf.Shares
+		if f.rekeyRequired == 0 {
+			f.rekeyRequired = f.threshold
+		}
+		w.WriteHeader(http.StatusNoContent)
+
+	case p == "/v1/sys/rekey/init" && r.Method == http.MethodGet:
+		writeJSON(map[string]any{
+			"started":  f.rekeyActive,
+			"nonce":    f.rekeyNonce,
+			"t":        f.threshold,
+			"n":        f.rekeyShares,
+			"progress": f.rekeyProgress,
+			"required": f.rekeyRequired,
+			"backup":   false,
+		})
+
+	case p == "/v1/sys/rekey/update" && r.Method == http.MethodPut:
+		f.rekeyProgress++
+		if f.rekeyProgress >= f.rekeyRequired {
+			keys := f.rekeyNewKeys
+			if keys == nil {
+				keys = make([]string, f.rekeyShares)
+				for i := range keys {
+					keys[i] = "rekey-key-" + string(rune('A'+i))
+				}
+			}
+			f.rekeyActive = false
+			f.rekeyProgress = 0
+			writeJSON(map[string]any{
+				"complete":    true,
+				"keys":        keys,
+				"keys_base64": keys,
+				"nonce":       f.rekeyNonce,
+			})
+			return
+		}
+		writeJSON(map[string]any{
+			"started":  true,
+			"nonce":    f.rekeyNonce,
+			"progress": f.rekeyProgress,
+			"required": f.rekeyRequired,
+		})
+
+	default:
+		jsonErr(w, http.StatusNotFound, "unhandled sys path: "+p)
+	}
 }
 
 // newTestVault creates a fake Vault HTTP server and returns a configured

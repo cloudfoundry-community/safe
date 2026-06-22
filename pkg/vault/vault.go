@@ -65,6 +65,10 @@ func NewVault(conf VaultConfig) (*Vault, error) {
 		return nil, fmt.Errorf("error setting up proxy: %w", err)
 	}
 
+	if conf.SkipVerify {
+		_, _ = ansi.Fprintf(os.Stderr, "@Y{WARNING: TLS certificate verification disabled — connections to Vault are not authenticated}\n")
+	}
+
 	return &Vault{
 		client: (&vaultkv.Client{
 			VaultURL:  vaultURL,
@@ -220,7 +224,7 @@ func (v *Vault) errIfFolder(path, message string, args ...interface{}) error {
 		//We don't want the folder error to be ignored because of the -f flag to rm,
 		// so we explicitly don't make this a secretNotFound error
 		return fmt.Errorf(message, args...)
-	} else if err != nil && !IsNotFound(err) {
+	} else if !IsNotFound(err) {
 		return err
 	}
 	return nil
@@ -262,6 +266,10 @@ func (v *Vault) verifySecretState(path string, opts verifyOpts) error {
 			}
 
 			return err
+		}
+
+		if len(versions) == 0 {
+			return NewSecretNotFoundError(secret)
 		}
 
 		if !opts.AnyVersion {
@@ -364,6 +372,10 @@ func (v *Vault) canSemanticallyDelete(path string) error {
 		return err
 	}
 
+	if len(versions) == 0 {
+		return NewSecretNotFoundError(justSecret)
+	}
+
 	if versions[len(versions)-1].Version == uint(version) {
 		return nil
 	}
@@ -426,6 +438,9 @@ func (v *Vault) deleteEntireSecret(path string, destroy bool, all bool) error {
 		allVersions, err := v.Versions(secret)
 		if err != nil {
 			return err
+		}
+		if len(allVersions) == 0 {
+			return NewSecretNotFoundError(secret)
 		}
 		//Need to populate latest version to a Destroy call if the
 		// version is not explicitly given
@@ -510,6 +525,10 @@ func (v *Vault) Undelete(path string) error {
 	respVersions, err := v.Versions(secret)
 	if err != nil {
 		return err
+	}
+
+	if len(respVersions) == 0 {
+		return NewSecretNotFoundError(secret)
 	}
 
 	if version == 0 {
@@ -769,7 +788,7 @@ func (v *Vault) Move(oldpath, newpath string, opts MoveCopyOpts) error {
 
 	err := v.canSemanticallyDelete(oldpath)
 	if err != nil {
-		return fmt.Errorf("can't move `%s': %s. Did you mean cp?", oldpath, err)
+		return fmt.Errorf("can't move `%s': %w. Did you mean cp?", oldpath, err)
 	}
 
 	err = v.Copy(oldpath, newpath, opts)
@@ -951,6 +970,7 @@ func (v *Vault) CreateSignedCertificate(backend, role, path string, params CertO
 	if err != nil {
 		return err
 	}
+	defer func() { _ = res.Body.Close() }()
 
 	body, err := io.ReadAll(res.Body)
 	if err != nil {

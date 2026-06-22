@@ -332,9 +332,6 @@ func (v *Vault) constructTree(path string, opts TreeOpts) (*secretTree, error) {
 		return nil, fmt.Errorf("`%s' is not a secret", path)
 	}
 	operation := ret.getWorkType(opts)
-	if err != nil {
-		return nil, err
-	}
 	queue.Push(&workOrder{
 		insertInto: ret,
 		operation:  operation,

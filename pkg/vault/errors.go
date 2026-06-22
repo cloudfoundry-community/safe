@@ -1,6 +1,9 @@
 package vault
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 type secretNotFound struct {
 	message string
@@ -33,10 +36,11 @@ func NewSecretNotFoundError(path string) error {
 }
 
 // IsSecretNotFound returns true if the given error was created with
-// NewSecretNotFoundError().  False otherwise.
+// NewSecretNotFoundError(), including when the error is wrapped with %w.
+// False otherwise.
 func IsSecretNotFound(err error) bool {
-	_, is := err.(secretNotFound)
-	return is
+	var e secretNotFound
+	return errors.As(err, &e)
 }
 
 // NewKeyNotFoundError returns an error object describing the key that could not
@@ -48,8 +52,9 @@ func NewKeyNotFoundError(path, key string) error {
 }
 
 // IsKeyNotFound returns true if the given error was created with
-// NewKeyNotFoundError(). False otherwise.
+// NewKeyNotFoundError(), including when the error is wrapped with %w.
+// False otherwise.
 func IsKeyNotFound(err error) bool {
-	_, is := err.(keyNotFound)
-	return is
+	var e keyNotFound
+	return errors.As(err, &e)
 }

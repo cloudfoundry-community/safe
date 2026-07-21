@@ -203,7 +203,7 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 
 	token := ""
 	if len(keys) == 0 {
-		keys, _, err = v.Init(1, 1)
+		keys, token, err = v.Init(1, 1)
 		if err != nil {
 			die(fmt.Errorf("Unable to initialize the new (temporary) Vault: %w", err))
 		}
@@ -212,7 +212,9 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 	if err = v.Unseal(keys); err != nil {
 		die(fmt.Errorf("Unable to unseal the new (temporary) Vault: %w", err))
 	}
-	token, err = v.NewRootToken(keys)
+	token, err = resolveRootToken(token, func() (string, error) {
+		return v.NewRootToken(keys)
+	})
 	if err != nil {
 		die(fmt.Errorf("Unable to generate a new root token: %w", err))
 	}

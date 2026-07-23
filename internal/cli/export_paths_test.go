@@ -34,6 +34,25 @@ func TestDedupeExportPaths_Subsumption(t *testing.T) {
 			in:   []string{"secret/exodus", "secret/bosh"},
 			want: []string{"secret/bosh", "secret/exodus"},
 		},
+		{
+			name: "sibling sharing name prefix preserved",
+			in:   []string{"secret/bosh/nats", "secret/bosh/nats_sync_password"},
+			want: []string{"secret/bosh/nats", "secret/bosh/nats_sync_password"},
+		},
+		{
+			name: "hyphenated sibling sharing name prefix preserved",
+			in:   []string{"secret/bosh/ssl/uaa", "secret/bosh/ssl/uaa-sp"},
+			want: []string{"secret/bosh/ssl/uaa", "secret/bosh/ssl/uaa-sp"},
+		},
+		{
+			name: "prefix sibling before real children",
+			in: []string{
+				"secret/bosh/uaa",
+				"secret/bosh/uaa-sp",
+				"secret/bosh/uaa/clients/hm",
+			},
+			want: []string{"secret/bosh/uaa", "secret/bosh/uaa-sp"},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

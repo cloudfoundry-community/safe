@@ -673,19 +673,7 @@ func (c *CLI) cmdExport(command string, args ...string) error {
 	}
 
 	//Deduplicate the input paths
-	sort.Slice(args, func(i, j int) bool { return vault.PathLessThan(args[i], args[j]) })
-	for i := 0; i < len(args)-1; i++ {
-		//No need to get a deeper part of a tree if you're already walking the `((great)*grand)?parent`
-		if strings.HasPrefix(strings.Trim(args[i+1], "/"), strings.Trim(args[i], "/")) {
-			before := args[:i+1]
-			var after []string
-			if len(args)-1 != i+1 {
-				after = args[i+2:]
-			}
-			args = append(before, after...)
-			i--
-		}
-	}
+	args = dedupeExportPaths(args)
 
 	secrets := vault.Secrets{}
 	for _, path := range args {

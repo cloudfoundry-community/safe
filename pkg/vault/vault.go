@@ -334,12 +334,16 @@ func (v *Vault) DeleteTree(root string, opts DeleteOpts) error {
 	//A root naming a key or a version cannot be honoured by a recursion: the
 	// walk drops both and deletes everything beneath the secret. Refuse rather
 	// than delete more than was asked for.
-	if _, key, version := ParsePath(root); key != "" || version != 0 {
+	rawRoot, key, version := ParsePath(root)
+	if key != "" || version != 0 {
 		return fmt.Errorf("cannot recursively delete a specific key or version (%s)", root)
 	}
-	root = Canonicalize(root)
+	//ParsePath unescaped the root. The walk and the mount lookup want that
+	// literal Vault path; deleteEntireSecret parses its argument again, so it
+	// gets the escaped form back.
+	root = EncodePath(rawRoot, "", 0)
 
-	secrets, err := v.ConstructSecrets(root, TreeOpts{FetchKeys: false, SkipVersionInfo: true, AllowDeletedSecrets: true})
+	secrets, err := v.ConstructSecrets(rawRoot, TreeOpts{FetchKeys: false, SkipVersionInfo: true, AllowDeletedSecrets: true})
 	if err != nil {
 		return err
 	}
@@ -350,12 +354,12 @@ func (v *Vault) DeleteTree(root string, opts DeleteOpts) error {
 		}
 	}
 
-	mount, err := v.Client().MountPath(root)
+	mount, err := v.Client().MountPath(rawRoot)
 	if err != nil {
 		return err
 	}
 
-	if strings.Trim(root, "/") != strings.Trim(mount, "/") {
+	if strings.Trim(rawRoot, "/") != strings.Trim(mount, "/") {
 		err = v.deleteEntireSecret(root, opts.Destroy, opts.All)
 	}
 
@@ -739,21 +743,26 @@ func (v *Vault) Copy(oldpath, newpath string, opts MoveCopyOpts) error {
 func (v *Vault) MoveCopyTree(oldRoot, newRoot string, f func(string, string, MoveCopyOpts) error, opts MoveCopyOpts) error {
 	//Neither root can name a key or a version: the recursion drops both and
 	// relocates the whole subtree instead of the one thing that was named.
-	_, oldKey, oldVersion := ParsePath(oldRoot)
-	_, newKey, newVersion := ParsePath(newRoot)
+	rawOldRoot, oldKey, oldVersion := ParsePath(oldRoot)
+	rawNewRoot, newKey, newVersion := ParsePath(newRoot)
 	if oldKey != "" || newKey != "" || oldVersion != 0 || newVersion != 0 {
 		return fmt.Errorf("cannot recursively copy or move a specific key or version (%s -> %s)", oldRoot, newRoot)
 	}
-	oldRoot = Canonicalize(oldRoot)
-	newRoot = Canonicalize(newRoot)
+	//The walk wants the literal Vault paths ParsePath returned. The prefix
+	// replace below and f() both work in the escaped syntax that
+	// Secrets.Paths() emits, and EscapePathSegment substitutes byte by byte,
+	// so escaping a path and escaping its root prefix agree: the replace stays
+	// exact. Re-encoding also normalizes the roots the way the walk does.
+	oldRoot = EncodePath(rawOldRoot, "", 0)
+	newRoot = EncodePath(rawNewRoot, "", 0)
 
-	tree, err := v.ConstructSecrets(oldRoot, TreeOpts{FetchKeys: false, AllowDeletedSecrets: opts.Deep, SkipVersionInfo: true})
+	tree, err := v.ConstructSecrets(rawOldRoot, TreeOpts{FetchKeys: false, AllowDeletedSecrets: opts.Deep, SkipVersionInfo: true})
 	if err != nil {
 		return err
 	}
 	if opts.SkipIfExists {
 		//Writing one secret over a deleted secret isn't clobbering. Completely overwriting a set of deleted secrets would be
-		newTree, err := v.ConstructSecrets(newRoot, TreeOpts{FetchKeys: false, AllowDeletedSecrets: !opts.Deep, SkipVersionInfo: true})
+		newTree, err := v.ConstructSecrets(rawNewRoot, TreeOpts{FetchKeys: false, AllowDeletedSecrets: !opts.Deep, SkipVersionInfo: true})
 		if err != nil && !IsNotFound(err) {
 			return err
 		}

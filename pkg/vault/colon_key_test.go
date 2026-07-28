@@ -250,6 +250,75 @@ func TestMoveCopyTreePreservesColonPaths(t *testing.T) {
 	}
 }
 
+// A user who escapes a literal colon must get a walk rooted at the real path.
+func TestDeleteTreeAcceptsEscapedRoot(t *testing.T) {
+	t.Parallel()
+	v, fv := newTestVault(t)
+	fv.set("secret/od:d/leaf", map[string]string{"k": "v"})
+	fv.set("secret/od/other", map[string]string{"k": "v"})
+
+	if err := v.DeleteTree(`secret/od\:d`, vault.DeleteOpts{}); err != nil {
+		t.Fatalf("DeleteTree: %v", err)
+	}
+	secretAbsent(t, fv, "secret/od:d/leaf")
+	if kv := mustGetSecret(t, fv, "secret/od/other"); kv["k"] != "v" {
+		t.Errorf("unrelated secret/od/other was disturbed: %v", kv)
+	}
+}
+
+// The same at both ends of a recursive copy: source and destination roots may
+// each carry an escaped colon.
+func TestMoveCopyTreeAcceptsEscapedRoots(t *testing.T) {
+	t.Parallel()
+	v, fv := newTestVault(t)
+	fv.set("secret/od:d/leaf", map[string]string{"k": "v"})
+
+	err := v.MoveCopyTree(`secret/od\:d`, `secret/ne\:w`, v.Copy, vault.MoveCopyOpts{Quiet: true})
+	if err != nil {
+		t.Fatalf("MoveCopyTree: %v", err)
+	}
+	if kv := mustGetSecret(t, fv, "secret/ne:w/leaf"); kv["k"] != "v" {
+		t.Errorf("secret/ne:w/leaf = %v, want map[k:v]", kv)
+	}
+}
+
+// The prefix replace in MoveCopyTree rewrites a walked path against the root.
+// Both must be in the same vocabulary, or a colon inside the replaced prefix
+// stops matching and the subtree lands somewhere else.
+func TestMoveCopyTreeReplacesColonBearingPrefix(t *testing.T) {
+	t.Parallel()
+	v, fv := newTestVault(t)
+	fv.set("secret/o:d/a/b", map[string]string{"k": "v"})
+
+	err := v.MoveCopyTree(`secret/o\:d`, "secret/plain", v.Copy, vault.MoveCopyOpts{Quiet: true})
+	if err != nil {
+		t.Fatalf("MoveCopyTree: %v", err)
+	}
+	if kv := mustGetSecret(t, fv, "secret/plain/a/b"); kv["k"] != "v" {
+		t.Errorf("secret/plain/a/b = %v, want map[k:v]", kv)
+	}
+}
+
+// Clobber detection compares walked paths against walked paths. Both sides must
+// move to the escaped vocabulary together, or an existing colon-bearing secret
+// becomes invisible to the check and gets overwritten. This holds before and
+// after the root change; it must not flip.
+func TestMoveCopyTreeSkipIfExistsWithColonPaths(t *testing.T) {
+	t.Parallel()
+	v, fv := newTestVault(t)
+	fv.set("secret/sub/o:d", map[string]string{"k": "new"})
+	fv.set("secret/dst/o:d", map[string]string{"k": "old"})
+
+	err := v.MoveCopyTree("secret/sub", "secret/dst", v.Copy,
+		vault.MoveCopyOpts{Quiet: true, SkipIfExists: true})
+	if err != nil {
+		t.Fatalf("MoveCopyTree: %v", err)
+	}
+	if kv := mustGetSecret(t, fv, "secret/dst/o:d"); kv["k"] != "old" {
+		t.Errorf("dst/o:d = %v, want map[k:old] (copy should have been refused)", kv)
+	}
+}
+
 // The tree walk names key nodes "<raw path>:<escaped key>". Basename splits at
 // the last colon not preceded by a backslash, which is always the join colon,
 // so a colon or caret in the path half cannot steal the key. This locks that

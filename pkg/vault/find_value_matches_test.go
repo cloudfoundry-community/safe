@@ -286,8 +286,8 @@ func TestFindValueMatchesSortsByPathLessThan(t *testing.T) {
 	}
 }
 
-// Output escaping matches Secrets.Paths(): with --keys, path and key segments
-// have colons and carets escaped; in path mode the path is emitted bare.
+// Output escaping matches Secrets.Paths(): colons and carets are escaped in
+// the path segment and, with --keys, in the key segment too.
 func TestFindValueMatchesEscapingMatchesPaths(t *testing.T) {
 	t.Parallel()
 	v, fv := newTestVault(t)
@@ -315,7 +315,7 @@ func TestFindValueMatchesEscapingMatchesPaths(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindValueMatches(paths): %v", err)
 	}
-	if want := []string{"secret/odd:colon"}; !slices.Equal(got, want) {
+	if want := []string{`secret/odd\:colon`}; !slices.Equal(got, want) {
 		t.Errorf("FindValueMatches(bare path) = %v, want %v", got, want)
 	}
 }

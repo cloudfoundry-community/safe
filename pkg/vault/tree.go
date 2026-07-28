@@ -466,18 +466,15 @@ func (t *secretTree) getWorkType(opts TreeOpts) uint16 {
 func (s Secrets) Paths() []string {
 	ret := make([]string, 0)
 
+	//SecretEntry.Path is a literal Vault path. Callers parse what comes back
+	// out of here, so emit safe's path:key syntax in both branches.
 	for i := range s {
 		if len(s[i].Versions) > 0 {
 			for _, key := range s[i].Versions[len(s[i].Versions)-1].Data.Keys() {
-				ret = append(ret,
-					fmt.Sprintf("%s:%s",
-						EscapePathSegment(s[i].Path),
-						EscapePathSegment(key),
-					),
-				)
+				ret = append(ret, EncodePath(s[i].Path, key, 0))
 			}
 		} else {
-			ret = append(ret, s[i].Path)
+			ret = append(ret, EncodePath(s[i].Path, "", 0))
 		}
 	}
 
@@ -1023,9 +1020,9 @@ func (v *Vault) FindValueMatches(paths []string, targetValues []string, showKeys
 	results = make([]string, 0, len(matches))
 	for _, match := range matches {
 		if showKeys {
-			results = append(results, EscapePathSegment(match.path)+":"+EscapePathSegment(match.key))
+			results = append(results, EncodePath(match.path, match.key, 0))
 		} else {
-			results = append(results, match.path)
+			results = append(results, EncodePath(match.path, "", 0))
 		}
 	}
 

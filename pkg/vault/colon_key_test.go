@@ -171,3 +171,114 @@ func TestMoveCopyTreeRejectsKeyOrVersionRoot(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Colons and carets in the secret PATH (as opposed to the key)
+// ---------------------------------------------------------------------------
+
+// Paths() must escape the path it emits for keyless entries, so that what the
+// tree walk hands to callers parses back to the path it came from.
+func TestSecretsPathsEscapesColonPaths(t *testing.T) {
+	t.Parallel()
+	v, fv := newTestVault(t)
+	fv.set("secret/tree/od:d", map[string]string{"k": "v"})
+
+	s, err := v.ConstructSecrets("secret/tree", vault.TreeOpts{
+		FetchKeys: false, SkipVersionInfo: true,
+	})
+	if err != nil {
+		t.Fatalf("ConstructSecrets: %v", err)
+	}
+
+	want := []string{`secret/tree/od\:d`}
+	if got := s.Paths(); !slices.Equal(got, want) {
+		t.Errorf("Paths() = %v, want %v", got, want)
+	}
+	secret, key, _ := vault.ParsePath(`secret/tree/od\:d`)
+	if secret != "secret/tree/od:d" || key != "" {
+		t.Errorf("ParsePath round-trip = (%q, %q), want (secret/tree/od:d, \"\")", secret, key)
+	}
+}
+
+// safe rm -r must delete the colon-bearing secret it walked, not the sibling
+// whose name is that path truncated at the colon.
+func TestDeleteTreePreservesColonPaths(t *testing.T) {
+	t.Parallel()
+	v, fv := newTestVault(t)
+	fv.set("secret/tree/od:d", map[string]string{"k": "v"})
+	fv.set("secret/tree/od", map[string]string{"k2": "v2"})
+
+	if err := v.DeleteTree("secret/tree", vault.DeleteOpts{}); err != nil {
+		t.Fatalf("DeleteTree: %v", err)
+	}
+	secretAbsent(t, fv, "secret/tree/od:d")
+	secretAbsent(t, fv, "secret/tree/od")
+}
+
+// The caret twin: a walked path ending in ^<digits> must not be read back as a
+// version of its prefix.
+func TestDeleteTreePreservesCaretPaths(t *testing.T) {
+	t.Parallel()
+	v, fv := newTestVault(t)
+	fv.set("secret/tree/od^2", map[string]string{"k": "v"})
+	fv.set("secret/tree/od", map[string]string{"k2": "v2"})
+
+	if err := v.DeleteTree("secret/tree", vault.DeleteOpts{}); err != nil {
+		t.Fatalf("DeleteTree: %v", err)
+	}
+	secretAbsent(t, fv, "secret/tree/od^2")
+	secretAbsent(t, fv, "secret/tree/od")
+}
+
+// safe cp -R must relocate a colon-bearing secret whole, and must not mistake
+// it for a key of its truncated sibling.
+func TestMoveCopyTreePreservesColonPaths(t *testing.T) {
+	t.Parallel()
+	v, fv := newTestVault(t)
+	fv.set("secret/sub/od:d", map[string]string{"k": "v"})
+	fv.set("secret/sub/od", map[string]string{"k2": "v2"})
+
+	err := v.MoveCopyTree("secret/sub", "secret/dst", v.Copy, vault.MoveCopyOpts{Quiet: true})
+	if err != nil {
+		t.Fatalf("MoveCopyTree: %v", err)
+	}
+	if kv := mustGetSecret(t, fv, "secret/dst/od:d"); kv["k"] != "v" {
+		t.Errorf("dst/od:d = %v, want map[k:v]", kv)
+	}
+	if kv := mustGetSecret(t, fv, "secret/dst/od"); kv["k2"] != "v2" {
+		t.Errorf("dst/od = %v, want map[k2:v2]", kv)
+	}
+}
+
+// The tree walk names key nodes "<raw path>:<escaped key>". Basename splits at
+// the last colon not preceded by a backslash, which is always the join colon,
+// so a colon or caret in the path half cannot steal the key. This locks that
+// reasoning in; it holds before and after the Paths() change.
+func TestBasenameRecoversKeyFromColonPath(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, leaf, key string }{
+		{"colon in path", "od:d", "k"},
+		{"colon in path and key", "od:d", "o:k"},
+		{"caret in path", "od^2", "k"},
+		{"caret-digits path, colon key", "a^9", "o:k"},
+		{"backslash-colon in path", `od\:d`, "k"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			v, fv := newTestVault(t)
+			fv.set("secret/tree/"+tc.leaf, map[string]string{tc.key: "v"})
+
+			s, err := v.ConstructSecrets("secret/tree", vault.TreeOpts{FetchKeys: true})
+			if err != nil {
+				t.Fatalf("ConstructSecrets: %v", err)
+			}
+			if len(s) != 1 || len(s[0].Versions) == 0 {
+				t.Fatalf("walk returned %+v", s)
+			}
+			keys := s[0].Versions[len(s[0].Versions)-1].Data.Keys()
+			if !slices.Equal(keys, []string{tc.key}) {
+				t.Errorf("keys = %q, want [%q]", keys, tc.key)
+			}
+		})
+	}
+}

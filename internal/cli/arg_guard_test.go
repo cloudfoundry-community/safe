@@ -17,6 +17,11 @@ package cli
 // For each handler we build a minimal *CLI with NewRunner (so r.Usage works),
 // ensure the guard fires, and assert the returned error is a *UsageError.
 // No Vault connection is made because connect() is only called after the guard.
+//
+// Intentionally exempt:
+//   - cmdValues — zero args prompts for a value instead of returning a
+//     UsageError; its pre-connect guards (@ expansion errors, empty prompt)
+//     are covered in values_cmd_test.go.
 
 import (
 	"errors"

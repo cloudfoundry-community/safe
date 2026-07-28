@@ -32,6 +32,10 @@ type fakeVault struct {
 	mu   sync.RWMutex
 	data map[string]map[string]string // path → key → value
 
+	// forbidden marks secret paths whose list and get requests return 403,
+	// modeling a token whose policy denies part of the tree.
+	forbidden map[string]bool
+
 	// pki holds registered PKI mount names (for sys/mounts responses).
 	pki map[string]bool
 
@@ -63,9 +67,24 @@ type fakeVault struct {
 func newFakeVault() *fakeVault {
 	return &fakeVault{
 		data:        make(map[string]map[string]string),
+		forbidden:   make(map[string]bool),
 		pki:         make(map[string]bool),
 		initialized: true,
 	}
+}
+
+// forbid makes list and get requests for a secret path return 403.
+func (f *fakeVault) forbid(path string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.forbidden[path] = true
+}
+
+// isForbidden reports whether a secret path has been marked 403.
+func (f *fakeVault) isForbidden(path string) bool {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.forbidden[path]
 }
 
 // set stores kv pairs at a secret path. Callers own the map.
@@ -222,6 +241,10 @@ func (f *fakeVault) handleKV(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case isList:
 		prefix := "secret/" + subpath
+		if f.isForbidden(strings.TrimRight(prefix, "/")) {
+			jsonErr(w, http.StatusForbidden, "permission denied")
+			return
+		}
 		children := f.listUnder(prefix)
 		if len(children) == 0 {
 			jsonErr(w, http.StatusNotFound, "")
@@ -236,6 +259,10 @@ func (f *fakeVault) handleKV(w http.ResponseWriter, r *http.Request) {
 
 	case r.Method == http.MethodGet:
 		secretPath := "secret/" + subpath
+		if f.isForbidden(secretPath) {
+			jsonErr(w, http.StatusForbidden, "permission denied")
+			return
+		}
 		kv := f.get(secretPath)
 		if kv == nil {
 			jsonErr(w, http.StatusNotFound, "")

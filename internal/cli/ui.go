@@ -53,6 +53,35 @@ func parseKeyVal(key string, quiet bool) (string, string, bool, error) {
 	return key, "", true, nil
 }
 
+// expandValueArg resolves the @-prefix conventions for `safe values`
+// positional arguments: "@-" reads all of standard input, "@FILE" reads
+// FILE, and a "@@" prefix escapes a literal leading '@'. Anything else is
+// returned unchanged. File and stdin content is used verbatim (no newline
+// trimming), matching what `safe set key@FILE` would have stored. Unlike
+// parseKeyVal, nothing is echoed to stderr: the resolved values are search
+// targets the user may consider sensitive.
+func expandValueArg(arg string) (string, error) {
+	switch {
+	case arg == "@":
+		return "", fmt.Errorf("no file specified: expecting @<filename>")
+	case strings.HasPrefix(arg, "@@"):
+		return arg[1:], nil
+	case arg == "@-":
+		b, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return "", fmt.Errorf("failed to read from standard input: %s", err)
+		}
+		return string(b), nil
+	case strings.HasPrefix(arg, "@"):
+		b, err := os.ReadFile(arg[1:]) // #nosec G703 - user intentionally supplies file path via @file CLI syntax
+		if err != nil {
+			return "", fmt.Errorf("failed to read contents of %s: %s", arg[1:], err)
+		}
+		return string(b), nil
+	}
+	return arg, nil
+}
+
 func pr(label string, confirm bool, secure bool) string {
 	if !confirm {
 		if secure {

@@ -339,6 +339,25 @@ func TestDrawEscapesColonPaths(t *testing.T) {
 	}
 }
 
+// Write reads its argument as path:key syntax, so a literal Vault path has to
+// be encoded before it is handed over. This is the contract safe import relies
+// on when it replays the keys of an export.
+func TestWriteRequiresEncodedColonPath(t *testing.T) {
+	t.Parallel()
+	v, _ := newTestVault(t)
+	s := vault.NewSecret()
+	if err := s.Set("k", "v", false); err != nil {
+		t.Fatalf("Secret.Set: %v", err)
+	}
+
+	if err := v.Write("secret/o:d", s); err == nil {
+		t.Error("Write of a raw colon path should be rejected as path:key syntax")
+	}
+	if err := v.Write(vault.EncodePath("secret/o:d", "", 0), s); err != nil {
+		t.Errorf("Write of an encoded colon path: %v", err)
+	}
+}
+
 // The tree walk names key nodes "<raw path>:<escaped key>". Basename splits at
 // the last colon not preceded by a backslash, which is always the join colon,
 // so a colon or caret in the path half cannot steal the key. This locks that

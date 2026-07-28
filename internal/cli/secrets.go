@@ -844,7 +844,9 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 			return err
 		}
 		for path, s := range data {
-			err = v.Write(path, s)
+			//The keys of an export are literal Vault paths; Write reads its
+			// argument as path:key syntax.
+			err = v.Write(vault.EncodePath(path, "", 0), s)
 			if err != nil {
 				return err
 			}

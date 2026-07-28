@@ -74,7 +74,16 @@ func (v *Vault) ReKey(unsealKeyCount, numToUnseal int, pgpKeys []string) ([]stri
 	givenKeys := make([]string, rekey.Remaining())
 
 	for i := range givenKeys {
-		givenKeys[i] = prompt.Secure("Unseal Key %d: ", i+1)
+		key, err := prompt.SecureE("Unseal Key %d: ", i+1)
+		if err != nil {
+			// stdin closed before every key arrived. Submit what we have
+			// anyway: the submission is rejected, the deferred cancel runs,
+			// and the server is left without a half-started rekey. Returning
+			// here instead would report a safe-side error for what is a
+			// Vault-side validation failure.
+			break
+		}
+		givenKeys[i] = key
 	}
 
 	rekeyDone, err := rekey.Submit(givenKeys...)

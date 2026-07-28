@@ -2081,7 +2081,7 @@ EOF
   sed -i -e 's/must specified/must be specified/' t/home/got
   cat <<'EOF' > t/home/want ; diffok
 Vault rekey canceled successfully
-!! Key submission failed: no key provided
+!! key submission failed: no key provided
 EOF
 
   now after failures to rekey, the cancel command was sent to reset the rekey

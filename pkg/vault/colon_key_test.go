@@ -413,6 +413,73 @@ func TestDeleteKeyOfPlainPath(t *testing.T) {
 	}
 }
 
+// Copying a single key into a colon-bearing destination must write that
+// destination, not error out on the colon as if it named a key.
+func TestCopyKeyToColonPath(t *testing.T) {
+	t.Parallel()
+	v, fv := newTestVault(t)
+	fv.set("secret/src", map[string]string{"k": "v"})
+
+	err := v.Copy(`secret/src:k`, `secret/de\:st:kk`, vault.MoveCopyOpts{Quiet: true})
+	if err != nil {
+		t.Fatalf("Copy: %v", err)
+	}
+	if kv := mustGetSecret(t, fv, "secret/de:st"); kv["kk"] != "v" {
+		t.Errorf("secret/de:st = %v, want map[kk:v]", kv)
+	}
+	secretAbsent(t, fv, "secret/de")
+}
+
+// The keys already in a colon-bearing destination survive the copy: the
+// destination has to be read back before the merged secret is written.
+func TestCopyKeyMergesIntoColonPath(t *testing.T) {
+	t.Parallel()
+	v, fv := newTestVault(t)
+	fv.set("secret/src", map[string]string{"k": "v"})
+	fv.set("secret/de:st", map[string]string{"existing": "keep"})
+
+	err := v.Copy(`secret/src:k`, `secret/de\:st:kk`, vault.MoveCopyOpts{Quiet: true})
+	if err != nil {
+		t.Fatalf("Copy: %v", err)
+	}
+	kv := mustGetSecret(t, fv, "secret/de:st")
+	if kv["kk"] != "v" || kv["existing"] != "keep" {
+		t.Errorf("secret/de:st = %v, want map[existing:keep kk:v]", kv)
+	}
+}
+
+// A whole-secret copy to a colon-bearing destination goes through the tree
+// walk, which takes literal paths, and must land at the same place.
+func TestCopySecretToColonPath(t *testing.T) {
+	t.Parallel()
+	v, fv := newTestVault(t)
+	fv.set("secret/src", map[string]string{"k": "v"})
+
+	err := v.Copy("secret/src", `secret/de\:st`, vault.MoveCopyOpts{Quiet: true})
+	if err != nil {
+		t.Fatalf("Copy: %v", err)
+	}
+	if kv := mustGetSecret(t, fv, "secret/de:st"); kv["k"] != "v" {
+		t.Errorf("secret/de:st = %v, want map[k:v]", kv)
+	}
+}
+
+// The colon-free control: an ordinary single-key copy keeps working.
+func TestCopyKeyToPlainPath(t *testing.T) {
+	t.Parallel()
+	v, fv := newTestVault(t)
+	fv.set("secret/src", map[string]string{"k": "v"})
+	fv.set("secret/dst", map[string]string{"existing": "keep"})
+
+	if err := v.Copy("secret/src:k", "secret/dst:kk", vault.MoveCopyOpts{Quiet: true}); err != nil {
+		t.Fatalf("Copy: %v", err)
+	}
+	kv := mustGetSecret(t, fv, "secret/dst")
+	if kv["kk"] != "v" || kv["existing"] != "keep" {
+		t.Errorf("secret/dst = %v, want map[existing:keep kk:v]", kv)
+	}
+}
+
 // Write reads its argument as path:key syntax, so a literal Vault path has to
 // be encoded before it is handed over. This is the contract safe import relies
 // on when it replays the keys of an export.

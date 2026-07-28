@@ -656,6 +656,10 @@ func (v *Vault) Copy(oldpath, newpath string, opts MoveCopyOpts) error {
 
 	srcPath, srcKey, srcVersion := ParsePath(oldpath)
 	dstPath, dstKey, dstVersion := ParsePath(newpath)
+	//ParsePath unescaped both paths. The tree walk and SecretEntry.Copy want
+	// those literal Vault paths, but Read and Write parse their argument again,
+	// so they get the destination back in the escaped syntax.
+	encodedDstPath := EncodePath(dstPath, "", 0)
 
 	if dstVersion != 0 {
 		return fmt.Errorf("copying a secret to a specific destination version is not supported")
@@ -683,7 +687,7 @@ func (v *Vault) Copy(oldpath, newpath string, opts MoveCopyOpts) error {
 			dstKey = srcKey
 		}
 
-		dstOrig, err := v.Read(dstPath)
+		dstOrig, err := v.Read(encodedDstPath)
 		if err != nil && !IsSecretNotFound(err) {
 			return err
 		}
@@ -732,7 +736,7 @@ func (v *Vault) Copy(oldpath, newpath string, opts MoveCopyOpts) error {
 	}
 
 	for i := range toWrite {
-		err := v.Write(dstPath, toWrite[i])
+		err := v.Write(encodedDstPath, toWrite[i])
 		if err != nil {
 			return err
 		}

@@ -827,7 +827,11 @@ func (v *Vault) Move(oldpath, newpath string, opts MoveCopyOpts) error {
 	}
 
 	if opts.Deep && opts.DeletedVersions {
-		err = v.client.DestroyAll(oldpath)
+		//DestroyAll goes straight to Vault, so it takes the literal path rather
+		// than the escaped syntax the caller wrote. Copy has already refused a
+		// deep move that names a key or a version, so nothing is dropped here.
+		rawOldPath, _, _ := ParsePath(oldpath)
+		err = v.client.DestroyAll(rawOldPath)
 		if err != nil {
 			return err
 		}

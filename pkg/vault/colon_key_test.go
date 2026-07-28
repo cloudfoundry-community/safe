@@ -480,6 +480,49 @@ func TestCopyKeyToPlainPath(t *testing.T) {
 	}
 }
 
+// A deep move destroys the source once the copy is through. That destroy talks
+// to Vault directly, so an escaped source path has to be unescaped first or the
+// data the user asked to move is left behind.
+func TestDeepMoveDestroysColonBearingSource(t *testing.T) {
+	t.Parallel()
+	v, fv := newTestVault(t)
+	fv.set("secret/we:ird", map[string]string{"k": "v"})
+	fv.set("secret/we", map[string]string{"k2": "keep"})
+
+	err := v.Move(`secret/we\:ird`, "secret/dst", vault.MoveCopyOpts{
+		Quiet: true, Deep: true, DeletedVersions: true,
+	})
+	if err != nil {
+		t.Fatalf("Move: %v", err)
+	}
+	if kv := mustGetSecret(t, fv, "secret/dst"); kv["k"] != "v" {
+		t.Errorf("secret/dst = %v, want map[k:v]", kv)
+	}
+	secretAbsent(t, fv, "secret/we:ird")
+	if kv := mustGetSecret(t, fv, "secret/we"); kv["k2"] != "keep" {
+		t.Errorf("sibling secret/we was destroyed: %v", kv)
+	}
+}
+
+// The colon-free control: a deep move of an ordinary path still destroys its
+// source.
+func TestDeepMoveDestroysPlainSource(t *testing.T) {
+	t.Parallel()
+	v, fv := newTestVault(t)
+	fv.set("secret/plainsrc", map[string]string{"k": "v"})
+
+	err := v.Move("secret/plainsrc", "secret/dst", vault.MoveCopyOpts{
+		Quiet: true, Deep: true, DeletedVersions: true,
+	})
+	if err != nil {
+		t.Fatalf("Move: %v", err)
+	}
+	if kv := mustGetSecret(t, fv, "secret/dst"); kv["k"] != "v" {
+		t.Errorf("secret/dst = %v, want map[k:v]", kv)
+	}
+	secretAbsent(t, fv, "secret/plainsrc")
+}
+
 // Write reads its argument as path:key syntax, so a literal Vault path has to
 // be encoded before it is handed over. This is the contract safe import relies
 // on when it replays the keys of an export.

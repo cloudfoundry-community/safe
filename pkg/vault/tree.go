@@ -608,6 +608,9 @@ func (s Secrets) Draw(root string, color, secrets bool) string {
 	if root != strings.Trim(s[0].Path, "/") {
 		root = strings.TrimSuffix(root, "/") + "/"
 	}
+	//Escape the printed root for the same reason as the segments below: a
+	// literal ':' or '^' in it would otherwise read as key or version syntax.
+	root = EscapePathSegment(root)
 	if color {
 		root = ansi.Sprintf("@C{%s}", root)
 	}
@@ -633,6 +636,9 @@ func (s Secrets) printableTree(color, secrets bool, index int) *tree.Node {
 		dirFmt, secFmt = "@B{%s/}", "@G{%s}"
 	}
 
+	//Escape the segment so a literal ':' or '^' in a path name is not read
+	// back as key or version syntax.
+	thisName = EscapePathSegment(thisName)
 	if isSecret {
 		thisName = ansi.Sprintf(secFmt, thisName)
 	} else {

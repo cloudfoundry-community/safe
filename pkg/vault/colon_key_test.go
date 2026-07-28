@@ -319,6 +319,26 @@ func TestMoveCopyTreeSkipIfExistsWithColonPaths(t *testing.T) {
 	}
 }
 
+// tree display escapes path segments and the printed root, not just keys, so
+// what is on screen is what a user can paste back into another command.
+func TestDrawEscapesColonPaths(t *testing.T) {
+	t.Parallel()
+	v, fv := newTestVault(t)
+	fv.set("secret/o:d/leaf", map[string]string{"k": "v"})
+
+	s, err := v.ConstructSecrets("secret/o:d", vault.TreeOpts{FetchKeys: true})
+	if err != nil {
+		t.Fatalf("ConstructSecrets: %v", err)
+	}
+	out := s.Draw("secret/o:d", false, true)
+	if !strings.Contains(out, `o\:d`) {
+		t.Errorf("Draw output %q should escape the colon in the path root", out)
+	}
+	if strings.Contains(out, "o:d/") && !strings.Contains(out, `o\:d/`) {
+		t.Errorf("Draw output %q printed an unescaped path segment", out)
+	}
+}
+
 // The tree walk names key nodes "<raw path>:<escaped key>". Basename splits at
 // the last colon not preceded by a backslash, which is always the join colon,
 // so a colon or caret in the path half cannot steal the key. This locks that

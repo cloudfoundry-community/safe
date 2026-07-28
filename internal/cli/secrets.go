@@ -634,12 +634,14 @@ func (c *CLI) cmdRevert(command string, args ...string) error {
 	//Check what the most recent version is to avoid setting the latest version if unnecessary.
 	// This should also catch if the secret is non-existent, or if we're targeting a destroyed,
 	// deleted, or non-existent version.
-	allVersions, err := v.Versions(args[0])
+	//Versions does not unescape its argument, so it takes the literal path
+	// ParsePath already produced rather than what the user typed.
+	allVersions, err := v.Versions(secret)
 	if err != nil {
 		return err
 	}
 	if len(allVersions) == 0 {
-		return fmt.Errorf("no versions found for %s", args[0])
+		return fmt.Errorf("no versions found for %s", secret)
 	}
 
 	destroyedErr := fmt.Errorf("Version %d of secret `%s' is destroyed", targetVersion, secret)
@@ -679,7 +681,9 @@ func (c *CLI) cmdRevert(command string, args ...string) error {
 		return err
 	}
 
-	err = v.Write(secret, toWrite)
+	//Write parses its argument as path:key syntax, so the literal path goes
+	// back to the escaped form before the revert is written.
+	err = v.Write(vault.EncodePath(secret, "", 0), toWrite)
 	if err != nil {
 		return err
 	}

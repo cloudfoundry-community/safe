@@ -548,8 +548,10 @@ func (t secretTree) Basename() string {
 		splits := strings.Split(strings.TrimRight(t.Name, "/"), "/")
 		ret = splits[len(splits)-1]
 	case treeTypeKey:
-		splits := strings.Split(t.Name, ":")
-		ret = splits[len(splits)-1]
+		//The node name is path:key with the key segment escaped (workGet);
+		// ParsePath splits on the last unescaped colon and unescapes.
+		_, key, _ := ParsePath(t.Name)
+		ret = key
 	}
 
 	return ret
@@ -638,7 +640,7 @@ func (s Secrets) printableTree(color, secrets bool, index int) *tree.Node {
 
 			// Create child nodes for each key instead of appending to the name
 			for _, key := range keys {
-				keyName := fmt.Sprintf(":%s", key)
+				keyName := fmt.Sprintf(":%s", EscapePathSegment(key))
 				if color {
 					keyName = ansi.Sprintf("@Y{%s}", keyName)
 				}
@@ -844,8 +846,10 @@ func (w *treeWorker) workGet(t secretTree) ([]secretTree, error) {
 
 	ret := []secretTree{}
 	for _, key := range s.Keys() {
+		//Escape the key so a literal ':' or '^' in it survives the joined
+		// node name; Basename recovers the key with ParsePath.
 		ret = append(ret, secretTree{
-			Name:    path + ":" + key,
+			Name:    path + ":" + EscapePathSegment(key),
 			Type:    treeTypeKey,
 			Value:   string(s.data[key]),
 			Version: version,

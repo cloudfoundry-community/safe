@@ -115,10 +115,8 @@ func (t *table) setHeader(headers ...string) {
 
 func (t *table) addRow(cols ...string) {
 	t._assertValidRowWidth(len(cols))
-	if !ansi.ShouldColorize(os.Stdout) {
-		for i := range cols {
-			cols[i] = t._stripColor(cols[i])
-		}
+	for i := range cols {
+		cols[i] = t._renderCell(cols[i])
 	}
 	t.rows = append(t.rows, cols)
 }
@@ -243,6 +241,13 @@ func (t *table) _printCell(cell string, spaces int) {
 	}
 
 	_, _ = os.Stdout.Write(spaceBuf)
+}
+
+// _renderCell interprets go-ansi markup in cell content. go-ansi only renders
+// markup found in the format string, so the cell has to be passed as the format
+// itself; any '%' it contains is escaped first so it is not consumed as a verb.
+func (t *table) _renderCell(cell string) string {
+	return t._sprintf(strings.ReplaceAll(cell, "%", "%%"))
 }
 
 func (t *table) _sprintf(f string, args ...any) string {

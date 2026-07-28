@@ -39,6 +39,9 @@ func (c *CLI) cmdGen(command string, args ...string) error {
 		var path, key string
 		if vault.PathHasKey(args[0]) {
 			path, key, _ = vault.ParsePath(args[0])
+			//Read and Write parse their argument as path:key syntax, so the
+			// literal path ParsePath returned goes back to the escaped form.
+			path = vault.EncodePath(path, "", 0)
 			args = args[1:]
 		} else {
 			if len(args) < 2 {
@@ -96,6 +99,9 @@ func (c *CLI) cmdUuid(command string, args ...string) error {
 	var path, key string
 	if vault.PathHasKey(args[0]) {
 		path, key, _ = vault.ParsePath(args[0])
+		//Read and Write parse their argument as path:key syntax, so the literal
+		// path ParsePath returned goes back to the escaped form.
+		path = vault.EncodePath(path, "", 0)
 
 	} else {
 		path, key = args[0], "uuid"

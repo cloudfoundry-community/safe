@@ -1,6 +1,8 @@
 package prompt
 
 import (
+	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -119,6 +121,106 @@ func TestSecure_NonTTY(t *testing.T) {
 	want := "s3cr3t"
 	if got != want {
 		t.Errorf("Secure() non-TTY = %q, want %q", got, want)
+	}
+}
+
+// TestNormalE verifies that NormalE returns the line read from the injected
+// reader, and reports io.EOF instead of exiting once the reader is exhausted.
+//
+// No t.Parallel — test mutates the package-level `in` reader.
+func TestNormalE(t *testing.T) {
+	SetReader(strings.NewReader("hunter2\n"))
+	defer SetReader(nil)
+
+	got, err := NormalE("Password: ")
+	if err != nil {
+		t.Fatalf("NormalE() error = %v, want nil", err)
+	}
+	if got != "hunter2" {
+		t.Errorf("NormalE() = %q, want %q", got, "hunter2")
+	}
+
+	got, err = NormalE("Password: ")
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("NormalE() at EOF: error = %v, want io.EOF", err)
+	}
+	if got != "" {
+		t.Errorf("NormalE() at EOF = %q, want empty string", got)
+	}
+}
+
+// TestReadLine_Exported verifies the exported wrapper reads through the
+// injection seam and surfaces io.EOF rather than exiting.
+func TestReadLine_Exported(t *testing.T) {
+	SetReader(strings.NewReader("value\n"))
+	defer SetReader(nil)
+
+	got, err := ReadLine()
+	if err != nil {
+		t.Fatalf("ReadLine() error = %v, want nil", err)
+	}
+	if got != "value" {
+		t.Errorf("ReadLine() = %q, want %q", got, "value")
+	}
+
+	if _, err = ReadLine(); !errors.Is(err, io.EOF) {
+		t.Fatalf("ReadLine() at EOF: error = %v, want io.EOF", err)
+	}
+}
+
+// TestSecureE_NonTTY verifies the non-TTY branch of SecureE via subprocess
+// re-exec, for the same reason as TestSecure_NonTTY: the child's stdin is a
+// pipe, so isatty.IsTerminal reports false deterministically.
+//
+// The exhausted-reader case is the point of SecureE. The child exiting 0 after
+// reporting io.EOF is what proves SecureE returned to its caller instead of
+// calling os.Exit and skipping every pending defer.
+func TestSecureE_NonTTY(t *testing.T) {
+	// Guard: the child process runs the actual SecureE call.
+	if mode := os.Getenv("SAFE_TEST_SECUREE_NONTTY"); mode != "" {
+		input := "s3cr3t\n"
+		if mode == "eof" {
+			input = ""
+		}
+		SetReader(strings.NewReader(input))
+
+		value, err := SecureE("Password: ")
+		switch {
+		case errors.Is(err, io.EOF):
+			os.Stdout.WriteString("EOF\n")
+		case err != nil:
+			os.Stdout.WriteString("ERR " + err.Error() + "\n")
+		default:
+			os.Stdout.WriteString(value + "\n")
+		}
+		os.Exit(0)
+	}
+
+	tests := []struct {
+		name string
+		mode string
+		want string
+	}{
+		{"returns typed value", "value", "s3cr3t"},
+		{"returns EOF on exhausted input", "eof", "EOF"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := exec.Command(os.Args[0], "-test.run=TestSecureE_NonTTY")
+			cmd.Env = append(os.Environ(), "SAFE_TEST_SECUREE_NONTTY="+tt.mode)
+			// Attach a pipe as stdin so isatty reports false in the child.
+			cmd.Stdin = strings.NewReader("")
+
+			out, err := cmd.Output()
+			if err != nil {
+				t.Fatalf("child process failed: %v", err)
+			}
+
+			if got := strings.TrimRight(string(out), "\n"); got != tt.want {
+				t.Errorf("SecureE() non-TTY = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

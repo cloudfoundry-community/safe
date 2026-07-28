@@ -466,18 +466,15 @@ func (t *secretTree) getWorkType(opts TreeOpts) uint16 {
 func (s Secrets) Paths() []string {
 	ret := make([]string, 0)
 
+	//SecretEntry.Path is a literal Vault path. Callers parse what comes back
+	// out of here, so emit safe's path:key syntax in both branches.
 	for i := range s {
 		if len(s[i].Versions) > 0 {
 			for _, key := range s[i].Versions[len(s[i].Versions)-1].Data.Keys() {
-				ret = append(ret,
-					fmt.Sprintf("%s:%s",
-						EscapePathSegment(s[i].Path),
-						EscapePathSegment(key),
-					),
-				)
+				ret = append(ret, EncodePath(s[i].Path, key, 0))
 			}
 		} else {
-			ret = append(ret, s[i].Path)
+			ret = append(ret, EncodePath(s[i].Path, "", 0))
 		}
 	}
 
@@ -611,6 +608,9 @@ func (s Secrets) Draw(root string, color, secrets bool) string {
 	if root != strings.Trim(s[0].Path, "/") {
 		root = strings.TrimSuffix(root, "/") + "/"
 	}
+	//Escape the printed root for the same reason as the segments below: a
+	// literal ':' or '^' in it would otherwise read as key or version syntax.
+	root = EscapePathSegment(root)
 	if color {
 		root = ansi.Sprintf("@C{%s}", root)
 	}
@@ -636,6 +636,9 @@ func (s Secrets) printableTree(color, secrets bool, index int) *tree.Node {
 		dirFmt, secFmt = "@B{%s/}", "@G{%s}"
 	}
 
+	//Escape the segment so a literal ':' or '^' in a path name is not read
+	// back as key or version syntax.
+	thisName = EscapePathSegment(thisName)
 	if isSecret {
 		thisName = ansi.Sprintf(secFmt, thisName)
 	} else {
@@ -1023,9 +1026,9 @@ func (v *Vault) FindValueMatches(paths []string, targetValues []string, showKeys
 	results = make([]string, 0, len(matches))
 	for _, match := range matches {
 		if showKeys {
-			results = append(results, EscapePathSegment(match.path)+":"+EscapePathSegment(match.key))
+			results = append(results, EncodePath(match.path, match.key, 0))
 		} else {
-			results = append(results, match.path)
+			results = append(results, EncodePath(match.path, "", 0))
 		}
 	}
 

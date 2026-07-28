@@ -1927,7 +1927,6 @@ secret/export/robot:
 secret/export/a/b/c:
   subkey: the-value-given
 EOF
-EOF
 
 
 

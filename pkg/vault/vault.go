@@ -495,7 +495,11 @@ func (v *Vault) deleteEntireSecret(path string, destroy bool, all bool) error {
 
 func (v *Vault) deleteSpecificKey(path string) error {
 	secretPath, key, _ := ParsePath(path)
-	secret, err := v.Read(secretPath)
+	//ParsePath unescaped the secret path. Read, Write, and deleteEntireSecret
+	// all parse their argument again, so they need the escaped form back or
+	// they split a second time at a colon that belongs to the path.
+	encodedPath := EncodePath(secretPath, "", 0)
+	secret, err := v.Read(encodedPath)
 	if err != nil {
 		return err
 	}
@@ -510,9 +514,9 @@ func (v *Vault) deleteSpecificKey(path string) error {
 		//
 		//At some point, we should probably get Destroy routed into here so that we can destroy
 		// secrets through specifying keys
-		return v.deleteEntireSecret(secretPath, false, false)
+		return v.deleteEntireSecret(encodedPath, false, false)
 	}
-	return v.Write(secretPath, secret)
+	return v.Write(encodedPath, secret)
 }
 
 // DeleteVersions marks the given versions of the given secret as deleted for

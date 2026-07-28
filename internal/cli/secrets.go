@@ -286,7 +286,7 @@ func (c *CLI) cmdVersions(command string, args ...string) error {
 
 			table.addRow(
 				fmt.Sprintf("%d", versions[j].Version),
-				fmt.Sprintf("%s", statusString),
+				statusString,
 				createdAtString,
 			)
 		}
@@ -1098,7 +1098,7 @@ func (c *CLI) cmdOption(command string, args ...string) error {
 			if *entry.val {
 				value = "@G{true}"
 			}
-			table.addRow(entry.opt, fmt.Sprintf("%s", value))
+			table.addRow(entry.opt, value)
 		}
 
 		table.print()

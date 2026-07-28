@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -145,6 +146,100 @@ func TestTableStripColor(t *testing.T) {
 				t.Errorf("_stripColor(%q): got %q, want %q", tc.input, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestTableAddRowRendersMarkup verifies that go-ansi markup handed to addRow as
+// cell content is rendered rather than passed through verbatim.
+//
+// go-ansi only interprets markup appearing in the format string, and
+// ansiColorRegexp only matches already-rendered escape sequences. A cell holding
+// an unrendered "@G{...}" template therefore survives _stripColor untouched and
+// reaches stdout literally.
+//
+// Assertions are written to hold whether or not stdout is colorized: the cell's
+// display width must equal the visible text, and stripping it must yield the
+// visible text exactly.
+func TestTableAddRowRendersMarkup(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		cell string
+		want string
+	}{
+		{name: "green markup", cell: "@G{alive}", want: "alive"},
+		{name: "red markup", cell: "@R{destroyed}", want: "destroyed"},
+		{name: "yellow markup", cell: "@Y{deleted}", want: "deleted"},
+		{name: "plain text is unchanged", cell: "unknown", want: "unknown"},
+		{name: "markup surrounded by text", cell: "pre @C{mid} post", want: "pre mid post"},
+		{name: "two markup runs in one cell", cell: "@G{a}/@R{b}", want: "a/b"},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tbl := &table{}
+			tbl.addRow(tc.cell)
+
+			got := tbl.rows[0][0]
+			if strings.Contains(got, "@") {
+				t.Errorf("addRow(%q): stored %q, which still contains unrendered markup", tc.cell, got)
+			}
+			if stripped := tbl._stripColor(got); stripped != tc.want {
+				t.Errorf("addRow(%q): stripped to %q, want %q", tc.cell, stripped, tc.want)
+			}
+			if width := tbl._calcDisplayWidth(got); width != len(tc.want) {
+				t.Errorf("addRow(%q): display width %d, want %d (column alignment depends on this)",
+					tc.cell, width, len(tc.want))
+			}
+		})
+	}
+}
+
+// TestTableAddRowPreservesPercent verifies that cell content is not treated as a
+// format string. Rendering a cell requires handing it to go-ansi as a format,
+// so any '%' it contains must be escaped first or it is consumed as a verb.
+func TestTableAddRowPreservesPercent(t *testing.T) {
+	t.Parallel()
+
+	cases := []string{
+		"100%done",
+		"%",
+		"%s",
+		"%d%%",
+		"50% off",
+	}
+
+	for _, cell := range cases {
+		cell := cell
+		t.Run(cell, func(t *testing.T) {
+			t.Parallel()
+			tbl := &table{}
+			tbl.addRow(cell)
+
+			if got := tbl._stripColor(tbl.rows[0][0]); got != cell {
+				t.Errorf("addRow(%q): stored %q, want the input preserved verbatim", cell, got)
+			}
+		})
+	}
+}
+
+// TestTableAddRowRendersMarkupWithPercent covers the interaction of the two
+// fixes above in a single cell.
+func TestTableAddRowRendersMarkupWithPercent(t *testing.T) {
+	t.Parallel()
+
+	tbl := &table{}
+	tbl.addRow("@G{100%done}")
+
+	got := tbl.rows[0][0]
+	if strings.Contains(got, "@") {
+		t.Errorf("stored %q, which still contains unrendered markup", got)
+	}
+	if stripped := tbl._stripColor(got); stripped != "100%done" {
+		t.Errorf("stripped to %q, want %q", stripped, "100%done")
 	}
 }
 

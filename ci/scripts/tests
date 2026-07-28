@@ -884,7 +884,7 @@ EOF
   (run; ${SAFE_CMD} set secret/from-file/content nothing@non-existent-file 2>t/home/got) ; exitok $? 1
   now checking the output error
   cat > t/home/want<<EOF ; diffok
-!! Failed to read contents of non-existent-file: open non-existent-file: no such file or directory
+!! failed to read contents of non-existent-file: open non-existent-file: no such file or directory
 EOF
 
   now checking that we did not set a secret in vault
@@ -895,7 +895,7 @@ EOF
 
   now checking the output error
   cat > t/home/want<<EOF ; diffok
-!! No file specified: expecting no-file@<filename>
+!! no file specified: expecting no-file@<filename>
 EOF
 
   now checking that we did not set a secret in vault

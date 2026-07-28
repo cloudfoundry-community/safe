@@ -209,6 +209,11 @@ type Options struct {
 		Quick      bool `cli:"-q, --quick"`
 	} `cli:"tree"`
 
+	Values struct {
+		ShowKeys bool     `cli:"--keys"`
+		Paths    []string `cli:"-p, --path"`
+	} `cli:"values"`
+
 	Target struct {
 		JSON        bool     `cli:"--json"`
 		Interactive bool     `cli:"-i, --interactive"`
@@ -751,6 +756,36 @@ marked as deleted. This may cause keys which would 404 in an attempt to read
 them to appear in the tree, but is often considerably quicker for larger
 vaults. This flag does nothing for kv v1 mounts.
 `}, c.cmdPaths)
+
+	r.Dispatch("values", &Help{
+		Summary: "Find secrets containing specified values",
+		Usage:   "safe values [--keys] [-p PATH ...] [VALUE ...]",
+		Type:    NonDestructiveCommand,
+		Description: `
+Searches the hierarchy of secrets for any whose stored values equal one of
+the given values. Matching is exact, case-sensitive, and against whole
+values; no substring or pattern matching is performed. Only the latest live
+version of each secret is inspected -- secrets whose newest version has been
+deleted or destroyed are not searched.
+
+Search locations are given with -p (--path), which may be repeated to search
+several subtrees. The flag value must be a separate argument; the --path=x
+form is not supported. If no -p is given, the search defaults to the
+'secret' mount. The root of each search path must be readable or the command
+fails. Subtrees the authenticated token cannot read are skipped, and a count
+of skipped subtrees is reported on standard error, since skipped subtrees
+mean the results may be incomplete.
+
+Every non-flag argument is a value to search for. A value of @- reads the
+value from standard input, @FILE reads it from FILE, and a leading @@
+escapes a literal @. Values beginning with '-' cannot be passed on the
+command line; supply them via @FILE, @-, or the prompt. If no values are
+given, safe prompts for a single value without echoing it, which also keeps
+the value out of shell history and process listings.
+
+By default each matching secret path is printed once per line; with --keys,
+each match is printed as path:key instead.
+`}, c.cmdValues)
 
 	r.Dispatch("delete", &Help{
 		Summary: "Remove one or more path from the Vault",

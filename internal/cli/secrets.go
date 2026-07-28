@@ -460,6 +460,56 @@ func (c *CLI) cmdPaths(command string, args ...string) error {
 	return nil
 }
 
+func (c *CLI) cmdValues(command string, args ...string) error {
+	opt := c.opt
+
+	if _, err := rc.Apply(opt.UseTarget); err != nil {
+		return err
+	}
+
+	//Expansion and prompting happen before connect() so input errors surface
+	// without network traffic. @- consumes stdin during expansion; the prompt
+	// only fires when no positionals were given, so the two never contend.
+	values := make([]string, 0, len(args))
+	for _, arg := range args {
+		value, err := expandValueArg(arg)
+		if err != nil {
+			return err
+		}
+		values = append(values, value)
+	}
+	if len(values) == 0 {
+		value := pr("value", false, true)
+		if value == "" {
+			return fmt.Errorf("no values specified to search for")
+		}
+		values = append(values, value)
+	}
+
+	paths := opt.Values.Paths
+	if len(paths) == 0 {
+		paths = []string{"secret"}
+	}
+	for i := range paths {
+		paths[i] = vault.Canonicalize(paths[i])
+	}
+	paths = dedupeExportPaths(paths)
+
+	v := connect(true)
+	results, skipped, err := v.FindValueMatches(paths, values, opt.Values.ShowKeys)
+	//Partial results still print when some paths failed; err below makes
+	// main report the failure and exit non-zero.
+	for _, result := range results {
+		_, _ = fmt.Printf("%s\n", result)
+	}
+	if skipped > 0 {
+		_, _ = fmt.Fprintf(os.Stderr,
+			"@Y{warning: skipped %d subtree(s) due to insufficient permissions; results may be incomplete}\n",
+			skipped)
+	}
+	return err
+}
+
 func (c *CLI) cmdDelete(command string, args ...string) error {
 	opt := c.opt
 	r := c.r

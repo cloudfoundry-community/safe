@@ -884,7 +884,7 @@ EOF
   (run; ${SAFE_CMD} set secret/from-file/content nothing@non-existent-file 2>t/home/got) ; exitok $? 1
   now checking the output error
   cat > t/home/want<<EOF ; diffok
-!! Failed to read contents of non-existent-file: open non-existent-file: no such file or directory
+!! failed to read contents of non-existent-file: open non-existent-file: no such file or directory
 EOF
 
   now checking that we did not set a secret in vault
@@ -895,7 +895,7 @@ EOF
 
   now checking the output error
   cat > t/home/want<<EOF ; diffok
-!! No file specified: expecting no-file@<filename>
+!! no file specified: expecting no-file@<filename>
 EOF
 
   now checking that we did not set a secret in vault
@@ -1927,7 +1927,6 @@ secret/export/robot:
 secret/export/a/b/c:
   subkey: the-value-given
 EOF
-EOF
 
 
 
@@ -2081,7 +2080,7 @@ EOF
   sed -i -e 's/must specified/must be specified/' t/home/got
   cat <<'EOF' > t/home/want ; diffok
 Vault rekey canceled successfully
-!! Key submission failed: no key provided
+!! key submission failed: no key provided
 EOF
 
   now after failures to rekey, the cancel command was sent to reset the rekey
@@ -3124,9 +3123,13 @@ EOF
   ne "$(${SAFE_CMD} x509 show secret/reissue/orig | grep 'valid from')" \
       "$(${SAFE_CMD} x509 show secret/reissue/cert | grep 'valid from')"
 
-  now checking that reissue does not change certificate attributes, other than ttl
-  eq_or_diff "$(${SAFE_CMD} x509 show secret/reissue/orig | grep -Ev 'secret/re|valid from|expires in|serial')" \
-              "$(${SAFE_CMD} x509 show secret/reissue/cert | grep -Ev 'secret/re|valid from|expires in|serial')"
+  now checking that reissue does not change certificate attributes, other than ttl and key size
+  eq_or_diff "$(${SAFE_CMD} x509 show secret/reissue/orig | grep -Ev 'secret/re|valid from|expires in|serial|^  key:')" \
+              "$(${SAFE_CMD} x509 show secret/reissue/cert | grep -Ev 'secret/re|valid from|expires in|serial|^  key:')"
+
+  now checking that reissue applied the requested key size
+  eq "$(${SAFE_CMD} x509 show secret/reissue/cert | grep '^  key:')" \
+     "  key: RSA (1024 bit)"
 
 
 

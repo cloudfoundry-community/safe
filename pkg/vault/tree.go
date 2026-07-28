@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/cloudfoundry-community/goutils/tree"
 	"github.com/cloudfoundry-community/vaultkv"
@@ -308,6 +309,17 @@ type TreeOpts struct {
 	GetDeletedVersions bool
 	//Only perform gets. If the target is not a secret, then an error is returned
 	GetOnly bool
+	//SkippedForbidden, when non-nil, is incremented once for each node the
+	// walk skipped because Vault denied access to it. The pointer is shared
+	// across the concurrent tree workers.
+	SkippedForbidden *atomic.Uint64
+}
+
+// noteSkippedForbidden records one access-denied skip if a counter is wired in.
+func (o TreeOpts) noteSkippedForbidden() {
+	if o.SkippedForbidden != nil {
+		o.SkippedForbidden.Add(1)
+	}
 }
 
 func (v *Vault) constructTree(path string, opts TreeOpts) (*secretTree, error) {
@@ -773,7 +785,11 @@ func (w *treeWorker) workList(t secretTree) ([]secretTree, error) {
 		//IsForbidden: This is because you were able to list the contents of a path
 		// that this path is contained in, but you do not have the permissions to
 		// list this path.
-		if IsNotFound(err) || vaultkv.IsForbidden(err) {
+		if vaultkv.IsForbidden(err) {
+			w.opts.noteSkippedForbidden()
+			return nil, nil
+		}
+		if IsNotFound(err) {
 			return nil, nil
 		}
 		return nil, err
@@ -824,6 +840,7 @@ func (w *treeWorker) workGet(t secretTree) ([]secretTree, error) {
 	// don't explode.
 	if err != nil {
 		if t.MountVersion == 1 && vaultkv.IsForbidden(err) {
+			w.opts.noteSkippedForbidden()
 			return nil, nil
 		}
 		return nil, err
@@ -910,6 +927,7 @@ func (w *treeWorker) workVersions(t secretTree) ([]secretTree, error) {
 	// don't explode.
 	if err != nil {
 		if t.MountVersion == 2 && vaultkv.IsForbidden(err) {
+			w.opts.noteSkippedForbidden()
 			return nil, nil
 		}
 		return nil, err

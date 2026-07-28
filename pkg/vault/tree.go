@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"errors"
 	"fmt"
 	"runtime"
 	"sort"
@@ -949,4 +950,80 @@ func (w *treeWorker) workVersions(t secretTree) ([]secretTree, error) {
 	}
 
 	return ret, nil
+}
+
+// FindValueMatches walks each of the given paths and reports the secrets
+// whose latest live version contains any of targetValues, compared exactly
+// and case-sensitively against whole stored values. With showKeys, each
+// match is rendered as escaped path:key exactly as Secrets.Paths() renders
+// keyed entries; otherwise the bare path of each matching secret is
+// reported once.
+//
+// Results sort by PathLessThan on path with a bytewise key tiebreak.
+// skipped counts the subtrees the walk dropped because Vault denied access
+// to them. Walk errors are accumulated per path and returned joined,
+// alongside whatever results the remaining paths produced.
+func (v *Vault) FindValueMatches(paths []string, targetValues []string, showKeys bool) (results []string, skipped uint64, err error) {
+	valueSet := make(map[string]bool, len(targetValues))
+	for _, value := range targetValues {
+		valueSet[value] = true
+	}
+
+	type valueMatch struct{ path, key string }
+	var (
+		skipCount  atomic.Uint64
+		matches    []valueMatch
+		seenSecret = map[string]bool{}
+	)
+
+	for _, path := range paths {
+		secrets, cerr := v.ConstructSecrets(path, TreeOpts{
+			FetchKeys:        true,
+			SkippedForbidden: &skipCount,
+		})
+		if cerr != nil {
+			err = errors.Join(err, fmt.Errorf("%s: %w", path, cerr))
+			continue
+		}
+
+		for _, secret := range secrets {
+			if seenSecret[secret.Path] {
+				continue
+			}
+			seenSecret[secret.Path] = true
+			//ConstructSecrets purges zero-version entries; guard the index anyway
+			if len(secret.Versions) == 0 {
+				continue
+			}
+
+			data := secret.Versions[len(secret.Versions)-1].Data
+			for _, key := range data.Keys() {
+				if !valueSet[data.Get(key)] {
+					continue
+				}
+				matches = append(matches, valueMatch{path: secret.Path, key: key})
+				if !showKeys {
+					break
+				}
+			}
+		}
+	}
+
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].path != matches[j].path {
+			return PathLessThan(matches[i].path, matches[j].path)
+		}
+		return matches[i].key < matches[j].key
+	})
+
+	results = make([]string, 0, len(matches))
+	for _, match := range matches {
+		if showKeys {
+			results = append(results, EscapePathSegment(match.path)+":"+EscapePathSegment(match.key))
+		} else {
+			results = append(results, match.path)
+		}
+	}
+
+	return results, skipCount.Load(), err
 }

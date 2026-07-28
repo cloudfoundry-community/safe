@@ -331,6 +331,12 @@ func (v *Vault) verifySecretExists(path string) error {
 // DeleteTree recursively deletes the leaf nodes beneath the given root until
 // the root has no children, and then deletes that.
 func (v *Vault) DeleteTree(root string, opts DeleteOpts) error {
+	//A root naming a key or a version cannot be honoured by a recursion: the
+	// walk drops both and deletes everything beneath the secret. Refuse rather
+	// than delete more than was asked for.
+	if _, key, version := ParsePath(root); key != "" || version != 0 {
+		return fmt.Errorf("cannot recursively delete a specific key or version (%s)", root)
+	}
 	root = Canonicalize(root)
 
 	secrets, err := v.ConstructSecrets(root, TreeOpts{FetchKeys: false, SkipVersionInfo: true, AllowDeletedSecrets: true})
@@ -731,6 +737,13 @@ func (v *Vault) Copy(oldpath, newpath string, opts MoveCopyOpts) error {
 // This function will get confused about 'secret:key' syntax, so don't let those
 // get routed here - they don't make sense for a recursion anyway.
 func (v *Vault) MoveCopyTree(oldRoot, newRoot string, f func(string, string, MoveCopyOpts) error, opts MoveCopyOpts) error {
+	//Neither root can name a key or a version: the recursion drops both and
+	// relocates the whole subtree instead of the one thing that was named.
+	_, oldKey, oldVersion := ParsePath(oldRoot)
+	_, newKey, newVersion := ParsePath(newRoot)
+	if oldKey != "" || newKey != "" || oldVersion != 0 || newVersion != 0 {
+		return fmt.Errorf("cannot recursively copy or move a specific key or version (%s -> %s)", oldRoot, newRoot)
+	}
 	oldRoot = Canonicalize(oldRoot)
 	newRoot = Canonicalize(newRoot)
 

@@ -532,7 +532,7 @@ func (c *CLI) cmdDelete(command string, args ...string) error {
 		_, key, version := vault.ParsePath(path)
 
 		//Ignore -r if path has a version or key because that seems like a mistake
-		if opt.Delete.Recurse && (key == "" || version > 0) {
+		if opt.Delete.Recurse && key == "" && version == 0 {
 			if !opt.Delete.Force && !recursively(verb, path) {
 				continue /* skip this command, process the next */
 			}
@@ -974,7 +974,7 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 // moveCopyParams captures the per-command differences between move and copy.
 // op is the underlying vault operation (v.Move or v.Copy); verb names the
 // command for messages and the recurse prompt; guardRecurseVersion enables the
-// copy-only check that forbids recursively copying a versioned source.
+// check that forbids recursively moving or copying a versioned source.
 type moveCopyParams struct {
 	verb                string
 	recurse             bool
@@ -1003,7 +1003,7 @@ func (c *CLI) moveCopy(v *vault.Vault, args []string, p moveCopyParams) error {
 	}
 
 	if p.guardRecurseVersion && p.recurse && vault.PathHasVersion(args[0]) {
-		return fmt.Errorf("Cannot recursively copy a path with specific version")
+		return fmt.Errorf("Cannot recursively %s a path with specific version", p.verb)
 	}
 
 	opts := vault.MoveCopyOpts{
@@ -1045,11 +1045,12 @@ func (c *CLI) cmdMove(command string, args ...string) error {
 
 	v := connect(true)
 	return c.moveCopy(v, args, moveCopyParams{
-		verb:    "move",
-		recurse: opt.Move.Recurse,
-		force:   opt.Move.Force,
-		deep:    opt.Move.Deep,
-		op:      v.Move,
+		verb:                "move",
+		recurse:             opt.Move.Recurse,
+		force:               opt.Move.Force,
+		deep:                opt.Move.Deep,
+		guardRecurseVersion: true,
+		op:                  v.Move,
 	})
 }
 

@@ -123,3 +123,51 @@ func TestDrawEscapesColonKeys(t *testing.T) {
 		t.Errorf("Draw output %q should contain escaped key %q", out, `:odd\:key`)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Recursive roots that name a key or a version
+// ---------------------------------------------------------------------------
+
+// A recursive delete whose root names a key or a version is a user mistake.
+// It must be refused, not silently widened to the whole subtree.
+func TestDeleteTreeRejectsKeyOrVersionRoot(t *testing.T) {
+	t.Parallel()
+	for _, root := range []string{"secret/foo:key^2", "secret/foo:key", "secret/foo^2"} {
+		t.Run(root, func(t *testing.T) {
+			t.Parallel()
+			v, fv := newTestVault(t)
+			fv.set("secret/foo", map[string]string{"key": "v", "other": "keep"})
+			fv.set("secret/foo/a", map[string]string{"k": "1"})
+
+			err := v.DeleteTree(root, vault.DeleteOpts{})
+			if err == nil || !strings.Contains(err.Error(), "specific key or version") {
+				t.Fatalf("DeleteTree(%q) = %v, want a specific-key-or-version refusal", root, err)
+			}
+			if kv := mustGetSecret(t, fv, "secret/foo"); kv["other"] != "keep" {
+				t.Errorf("secret/foo was modified: %v", kv)
+			}
+			if kv := mustGetSecret(t, fv, "secret/foo/a"); kv["k"] != "1" {
+				t.Errorf("secret/foo/a was deleted: %v", kv)
+			}
+		})
+	}
+}
+
+// The same for a recursive copy or move: a versioned or keyed root silently
+// drops the version, so refuse it instead of relocating the whole subtree.
+func TestMoveCopyTreeRejectsKeyOrVersionRoot(t *testing.T) {
+	t.Parallel()
+	for _, root := range []string{"secret/src^2", "secret/src:k"} {
+		t.Run(root, func(t *testing.T) {
+			t.Parallel()
+			v, fv := newTestVault(t)
+			fv.set("secret/src/a", map[string]string{"k": "1"})
+
+			err := v.MoveCopyTree(root, "secret/dst", v.Copy, vault.MoveCopyOpts{Quiet: true})
+			if err == nil || !strings.Contains(err.Error(), "specific key or version") {
+				t.Fatalf("MoveCopyTree(%q) = %v, want a specific-key-or-version refusal", root, err)
+			}
+			secretAbsent(t, fv, "secret/dst/a")
+		})
+	}
+}

@@ -156,6 +156,65 @@ safe fmt crypt-sha512 secret/account password crypt_pass
 safe get secret/account
 ```
 
+Secret Paths
+------------
+
+Most commands take a _path_ naming a secret, like `secret/dc1/admin`.
+Some also accept a single key inside that secret, written after a
+`:`, and a specific version of it, written after a `^`:
+
+```
+safe get secret/dc1/admin            # every key, latest version
+safe get secret/dc1/admin:password   # one key
+safe get secret/dc1/admin^3          # every key, version 3
+safe get secret/dc1/admin:password^3 # one key, version 3
+```
+
+The version must come last.  Version numbers start at 1, and are only
+meaningful on a version 2 KV mount; `^0` means the latest version,
+which is the same as leaving the version off entirely.
+
+Not every command understands all three parts, and the ones that
+cannot honour a key or a version say so rather than ignoring it:
+
+  - Commands that write a whole secret — `set`, `ask`, `paste`, `ssh`,
+    `rsa`, and `dhparam` — take a path only.
+
+  - Commands that walk a subtree — `tree`, `paths`, `values`, and
+    `export` — take a path only, since a key or a version cannot
+    scope a recursive walk.
+
+  - `gen` and `uuid` take `path:key`, which is how you name the key
+    they are about to create.
+
+  - `get`, `exists`, and `delete` take all three.
+
+  - `move` and `copy` take a key or a version on the secret they read
+    from, and a key on the one they write to.
+
+### Escaping
+
+Because `:` and `^` separate the parts, a path or key that contains
+one has to escape it with a backslash:
+
+```
+safe set secret/dc1/admin 'user:name=root'
+safe get 'secret/dc1/admin:user\:name'
+```
+
+`safe` prints paths in this same escaped form, so anything from `safe
+paths`, `safe paths --keys`, or `safe tree --keys` can be pasted
+straight back into another command:
+
+```
+safe paths --keys secret/dc1/admin
+secret/dc1/admin:password
+secret/dc1/admin:user\:name
+```
+
+Quote these arguments, or your shell will eat the backslashes before
+`safe` ever sees them.
+
 Command Reference
 ------------------
 
@@ -220,16 +279,17 @@ Vault.
 
 ```
 safe tree secret/dc1
-secret/dc1
-  concourse/
-    pipeline-the-first/
-      aws
-      dockerhub
-      github
-    pipeline-the-second/
-      aws
-      dockerhub
-      github
+.
+└── secret/dc1/
+    └── concourse/
+        ├── pipeline-the-first/
+        │   ├── aws
+        │   ├── dockerhub
+        │   └── github
+        └── pipeline-the-second/
+            ├── aws
+            ├── dockerhub
+            └── github
 ```
 
 ### paths path \[path ... \]
@@ -238,12 +298,12 @@ Provide a flat listing of all reachable keys in the Vault.
 
 ```
 safe paths secret/dc1
-secret/dc1concourse/pipeline-the-first/aws
-secret/dc1concourse/pipeline-the-first/dockerhub
-secret/dc1concourse/pipeline-the-first/github
-secret/dc1concourse/pipeline-the-second/aws
-secret/dc1concourse/pipeline-the-second/dockerhub
-secret/dc1concourse/pipeline-the-second/github
+secret/dc1/concourse/pipeline-the-first/aws
+secret/dc1/concourse/pipeline-the-first/dockerhub
+secret/dc1/concourse/pipeline-the-first/github
+secret/dc1/concourse/pipeline-the-second/aws
+secret/dc1/concourse/pipeline-the-second/dockerhub
+secret/dc1/concourse/pipeline-the-second/github
 ```
 
 ### values \[--keys\] \[-p path ...\] value \[value ...\]

@@ -9,30 +9,71 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
-// cliFakeVault serves a minimal KV v1 API: mount discovery plus GET, PUT,
-// DELETE and LIST under /v1/secret/. Paths are stored verbatim, so a secret
-// name containing a colon round-trips unchanged.
+// cliFakeVault serves a minimal KV API: mount discovery plus GET, PUT, DELETE
+// and LIST under /v1/secret/. Paths are stored verbatim, so a secret name
+// containing a colon round-trips unchanged.
+//
+// It speaks either KV version. newCLIFake gives a version 1 mount, which is
+// what most tests want; newCLIFakeV2 gives a version 2 mount, which keeps a
+// version history per path and is the only way to reach the code behind
+// versions, undelete, revert, and a versioned get. Real Vault defaults to
+// version 2, so behaviour that only exists there was previously untestable.
 type cliFakeVault struct {
-	mu   sync.Mutex
+	mu sync.Mutex
+	//data is the version 1 store: path to key/value pairs.
 	data map[string]map[string]string
+	//versions is the version 2 store: path to its version history, oldest
+	// first. Version N is at index N-1; entries are never removed, since a
+	// destroyed version still occupies its number.
+	versions map[string][]*fakeVersion
+	v2       bool
+}
+
+// fakeVersion is one version of a version 2 secret. A version is alive until
+// it is deleted, which is reversible, or destroyed, which is not.
+type fakeVersion struct {
+	data      map[string]string
+	createdAt time.Time
+	deletedAt *time.Time
+	destroyed bool
+}
+
+func (f *cliFakeVault) kvVersion() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.v2 {
+		return 2
+	}
+	return 1
 }
 
 func (f *cliFakeVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if strings.HasPrefix(r.URL.Path, "/v1/sys/internal/ui/mounts") {
-		_, _ = w.Write([]byte(`{"data":{"secret/":{"type":"kv","options":{"version":"1"}}}}`))
+		//The client looks for the mount under data.secret; anything else
+		// decodes to an empty map and is reported as version 1 by default.
+		_, _ = fmt.Fprintf(w,
+			`{"data":{"secret":{"secret/":{"type":"kv","options":{"version":"%d"}}}}}`,
+			f.kvVersion())
 		return
 	}
 	if !strings.HasPrefix(r.URL.Path, "/v1/secret/") {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"errors":[]}`))
+		return
+	}
+
+	if f.kvVersion() == 2 {
+		f.serveV2(w, r)
 		return
 	}
 

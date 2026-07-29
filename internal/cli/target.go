@@ -43,7 +43,17 @@ func (c *CLI) cmdTargets(command string, args ...string) error {
 		}
 		vaults := make([]vault, 0)
 
-		for name, details := range cfg.Vaults {
+		//Sorted, like the listing this is the machine-readable half of. Ranging
+		// over the map put the targets in a different order on every run, which
+		// is no use to anything diffing or reviewing the output.
+		names := make([]string, 0, len(cfg.Vaults))
+		for name := range cfg.Vaults {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+
+		for _, name := range names {
+			details := cfg.Vaults[name]
 			vaults = append(vaults, vault{
 				Name:      name,
 				URL:       details.URL,
@@ -285,8 +295,20 @@ func (c *CLI) cmdTargetDelete(command string, args ...string) error {
 		return r.Usage("target delete")
 	}
 
-	delete(cfg.Vaults, args[0])
-	if cfg.Current == args[0] {
+	//Resolving the name rather than deleting the map key directly: every
+	// other target command reaches a target by alias or by URL, and a delete
+	// that quietly matched neither reported success while leaving the target,
+	// and the token stored with it, in place.
+	alias, ok, err := cfg.Alias(args[0])
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("Unknown target '%s'", args[0])
+	}
+
+	delete(cfg.Vaults, alias)
+	if cfg.Current == alias {
 		cfg.Current = ""
 	}
 

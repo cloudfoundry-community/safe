@@ -335,29 +335,41 @@ func (c *Config) Namespace() string {
 	return ""
 }
 
-func (c *Config) Find(alias string) (*Vault, bool, error) {
-	if v, ok := c.Vaults[alias]; ok {
-		return v, true, nil
+// Alias resolves a name -- either an alias or the URL of a target -- to the
+// alias that target is stored under. Callers that change the config need the
+// key rather than the target it points at, and a name reaches the same target
+// here as it does everywhere else.
+func (c *Config) Alias(name string) (string, bool, error) {
+	if _, ok := c.Vaults[name]; ok {
+		return name, true, nil
 	}
 
-	var v *Vault
+	var alias string
 	n := 0
-	want := strings.TrimSuffix(alias, "/")
+	want := strings.TrimSuffix(name, "/")
 
-	for _, maybe := range c.Vaults {
+	for maybeAlias, maybe := range c.Vaults {
 		if strings.TrimSuffix(maybe.URL, "/") == want {
 			n++
-			v = maybe
+			alias = maybeAlias
 		}
 	}
 	if n == 1 {
-		return v, true, nil
+		return alias, true, nil
 	}
 	if n > 1 {
-		return nil, true, fmt.Errorf("More than one target for Vault at '%s' (maybe try an alias?)", alias)
+		return "", true, fmt.Errorf("More than one target for Vault at '%s' (maybe try an alias?)", name)
 	}
 
-	return nil, false, nil
+	return "", false, nil
+}
+
+func (c *Config) Find(alias string) (*Vault, bool, error) {
+	name, ok, err := c.Alias(alias)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	return c.Vaults[name], true, nil
 }
 
 func (c *Config) Vault(which string) (*Vault, error) {

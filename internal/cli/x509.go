@@ -131,6 +131,13 @@ func (c *CLI) cmdX509Issue(command string, args ...string) error {
 		return r.Usage("x509 issue")
 	}
 
+	//Both the new certificate and the CA that signed it are written back, and
+	// checking now means the refusal arrives before a key is generated rather
+	// than after.
+	if err := assertWritablePaths(args[0], opt.X509.Issue.SignedBy); err != nil {
+		return err
+	}
+
 	if opt.X509.Issue.Subject == "" {
 		opt.X509.Issue.Subject = fmt.Sprintf("CN=%s", opt.X509.Issue.Name[0])
 	}
@@ -229,6 +236,10 @@ func (c *CLI) cmdX509Reissue(command string, args ...string) error {
 	if opt.SkipIfExists {
 		_, _ = fmt.Fprintf(os.Stderr, "@R{!!} @C{--no-clobber} @R{is incompatible with} @C{safe x509 reissue}\n")
 		return r.Usage("x509 reissue")
+	}
+
+	if err := assertWritablePaths(args[0], opt.X509.Reissue.SignedBy); err != nil {
+		return err
 	}
 
 	v := connect(true)
@@ -355,6 +366,10 @@ func (c *CLI) cmdX509Renew(command string, args ...string) error {
 		return r.Usage("x509 renew")
 	}
 
+	if err := assertWritablePaths(args[0], opt.X509.Renew.SignedBy); err != nil {
+		return err
+	}
+
 	v := connect(true)
 
 	/* find the Certificate that we want to renew */
@@ -448,6 +463,12 @@ func (c *CLI) cmdX509Revoke(command string, args ...string) error {
 
 	if opt.X509.Revoke.SignedBy == "" || len(args) != 1 {
 		return r.Usage("x509 revoke")
+	}
+
+	//Only the CA is written; the certificate named on the command line is
+	// read to find its serial number.
+	if err := assertWritablePaths(opt.X509.Revoke.SignedBy); err != nil {
+		return err
 	}
 
 	if _, err := rc.Apply(opt.UseTarget); err != nil {
@@ -697,6 +718,11 @@ func (c *CLI) cmdX509Crl(command string, args ...string) error {
 
 	if !opt.X509.CRL.Renew || len(args) != 1 {
 		return r.Usage("x509 crl")
+	}
+
+	//Regenerating the CRL saves the CA back over itself.
+	if err := assertWritablePaths(args[0]); err != nil {
+		return err
 	}
 
 	if _, err := rc.Apply(opt.UseTarget); err != nil {

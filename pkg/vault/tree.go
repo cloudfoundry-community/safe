@@ -184,6 +184,15 @@ func PathLessThan(left, right string) bool {
 		return false
 	}
 
+	//No path is less than itself. Without this, every path that does not end
+	// in a slash compares less than a copy of itself, which is not an ordering
+	// sort.Slice is entitled to be given. Reaching here with different strings
+	// means they differ only in slashes -- `/secret/a` against `secret/a/` --
+	// and the one that is not a folder sorts first.
+	if left == right {
+		return false
+	}
+
 	return !strings.HasSuffix(left, "/")
 }
 

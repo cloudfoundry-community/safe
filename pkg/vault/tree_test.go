@@ -18,11 +18,9 @@ func TestPathLessThan(t *testing.T) {
 		right string
 		want  bool
 	}{
-		// identical paths without trailing slash: the function reaches the final
-		// return !strings.HasSuffix(left, "/") which evaluates to true.
-		// This is the actual implemented behaviour — not a strict weak order for
-		// equal non-slash paths, but consistent with how Secrets.Sort uses it.
-		{"equal paths no slash", "secret/foo", "secret/foo", true},
+		// identical paths, with or without a trailing slash, are not less than
+		// each other. See TestPathLessThanIsIrreflexive for why that matters.
+		{"equal paths no slash", "secret/foo", "secret/foo", false},
 		{"equal paths with slash left", "secret/foo/", "secret/foo/", false},
 		// simple lexical ordering within same depth
 		{"left before right same depth", "secret/a", "secret/b", true},
@@ -44,10 +42,10 @@ func TestPathLessThan(t *testing.T) {
 		{"numeric lexical: 9 vs 10", "path/9", "path/10", false},
 		{"numeric lexical: 10 vs 9", "path/10", "path/9", true},
 		{"numeric lexical: 2 vs 10", "path/2", "path/10", false},
-		// empty string: both empty reaches final return !HasSuffix("","/")==true
+		// empty string: an empty path is a path, and is not less than itself
 		{"empty left vs non-empty right", "", "a", true},
 		{"non-empty left vs empty right", "a", "", false},
-		{"both empty", "", "", true},
+		{"both empty", "", "", false},
 	}
 
 	for _, tc := range cases {

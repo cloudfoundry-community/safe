@@ -9,6 +9,7 @@ import (
 	"unicode"
 
 	"github.com/cloudfoundry-community/safe/pkg/prompt"
+	"github.com/cloudfoundry-community/safe/pkg/vault"
 	"github.com/jhunt/go-ansi"
 )
 
@@ -80,6 +81,21 @@ func expandValueArg(arg string) (string, error) {
 		return string(b), nil
 	}
 	return arg, nil
+}
+
+// assertWritablePath refuses a path naming a key or a version, using the same
+// wording Vault.Write does. The commands that write a whole secret cannot
+// honour either, and checking here rather than at the write means the
+// complaint arrives before a value is prompted for or key material is
+// generated, instead of after the work is thrown away.
+func assertWritablePath(path string) error {
+	if vault.PathHasKey(path) {
+		return fmt.Errorf("cannot write to paths in /path:key notation (%s)", path)
+	}
+	if vault.PathHasVersion(path) {
+		return fmt.Errorf("cannot write to paths in /path^version notation (%s)", path)
+	}
+	return nil
 }
 
 func pr(label string, confirm bool, secure bool) string {

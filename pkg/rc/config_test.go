@@ -494,6 +494,46 @@ func TestConfigAccessors(t *testing.T) {
 		}
 	})
 
+	t.Run("Alias resolves a name to the key it is stored under", func(t *testing.T) {
+		c := Config{
+			Vaults: map[string]*Vault{
+				"prod":  {URL: "https://prod:8200"},
+				"stage": {URL: "https://stage:8200/"},
+			},
+		}
+
+		for _, tc := range []struct{ name, want string }{
+			{"prod", "prod"},
+			{"https://prod:8200", "prod"},
+			{"https://prod:8200/", "prod"},
+			{"https://stage:8200", "stage"},
+		} {
+			got, ok, err := c.Alias(tc.name)
+			if err != nil || !ok {
+				t.Fatalf("Alias(%q) = %q, %v, %v", tc.name, got, ok, err)
+			}
+			if got != tc.want {
+				t.Errorf("Alias(%q) = %q, want %q", tc.name, got, tc.want)
+			}
+		}
+
+		if _, ok, err := c.Alias("ghost"); ok || err != nil {
+			t.Errorf("Alias(ghost) = %v, %v; want not found and no error", ok, err)
+		}
+
+		//An alias always wins over a URL, so a target named after another
+		//target's URL still resolves to itself.
+		shared := Config{
+			Vaults: map[string]*Vault{
+				"one": {URL: "https://shared:8200"},
+				"two": {URL: "https://shared:8200"},
+			},
+		}
+		if _, _, err := shared.Alias("https://shared:8200"); err == nil {
+			t.Error("expected an error for a URL naming two targets")
+		}
+	})
+
 	t.Run("SetCurrent validates the alias and can reskip", func(t *testing.T) {
 		c := Config{Vaults: map[string]*Vault{"prod": {URL: "u"}}}
 		if err := c.SetCurrent("ghost", false); err == nil {

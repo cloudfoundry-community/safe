@@ -1011,6 +1011,10 @@ type ValueSearchOpts struct {
 	//AllVersions searches every readable version of each secret rather than
 	// only the newest live one, and names the version each match came from.
 	AllVersions bool
+	//Deleted searches versions that have been deleted, by undeleting each
+	// one, reading it, and deleting it again. Destroyed versions are gone
+	// for good and are never searched.
+	Deleted bool
 }
 
 // FindValueMatches walks each of the given paths and reports the secrets
@@ -1048,9 +1052,11 @@ func (v *Vault) FindValueMatches(paths []string, targetValues []string, opts Val
 
 	for _, path := range paths {
 		secrets, cerr := v.ConstructSecrets(path, TreeOpts{
-			FetchKeys:        true,
-			FetchAllVersions: opts.AllVersions,
-			SkippedForbidden: &skipCount,
+			FetchKeys:           true,
+			FetchAllVersions:    opts.AllVersions,
+			GetDeletedVersions:  opts.Deleted,
+			AllowDeletedSecrets: opts.Deleted,
+			SkippedForbidden:    &skipCount,
 		})
 		if cerr != nil {
 			err = errors.Join(err, fmt.Errorf("%s: %w", path, cerr))
@@ -1073,19 +1079,21 @@ func (v *Vault) FindValueMatches(paths []string, targetValues []string, opts Val
 			}
 
 			for _, version := range versions {
-				//The walk fetches no data for a version it cannot read, so a
-				// deleted or destroyed one compares against nothing anyway.
-				// Skipping it by state says so outright, and keeps a walk that
-				// did undelete to read them — which a search must not do —
-				// from quietly reporting what it found.
-				if version.State != SecretStateAlive {
+				//Without Deleted the walk fetched no data for a version it
+				// could not read, so a deleted or destroyed one compares
+				// against nothing anyway; skipping it by state says so
+				// outright. With Deleted the walk undeleted and read them, and
+				// a destroyed version stays empty either way.
+				if !opts.Deleted && version.State != SecretStateAlive {
 					continue
 				}
 
 				//Version 0 renders no ^suffix, which is what a search of the
-				// current value alone should print.
+				// current value alone should print. Once more than the current
+				// value is in play, naming the version is what tells a match on
+				// a superseded or deleted one apart from a live match.
 				var number uint64
-				if opts.AllVersions {
+				if opts.AllVersions || opts.Deleted {
 					number = uint64(version.Number)
 				}
 

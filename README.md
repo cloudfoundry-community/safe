@@ -295,6 +295,24 @@ public: |
   -----END RSA PRIVATE KEY-----
 ```
 
+### ls \[-1|-q\] \[path ...\]
+
+List what sits directly under a path, one level deep: secrets plain,
+folders with a trailing slash.  With no path, the mounts are listed
+instead.  `-1` prints one entry per line, and `-q` skips checking
+whether each secret on a version 2 mount can still be read, which is
+quicker but shows secrets whose newest version has been deleted.
+
+```
+safe ls secret/dc1
+admin  concourse/
+
+safe ls -1 secret/dc1/concourse/pipeline-the-first
+aws
+dockerhub
+github
+```
+
 ### tree path \[path ...\]
 
 Provide a tree hierarchy listing of all reachable keys in the

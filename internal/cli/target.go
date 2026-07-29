@@ -43,7 +43,17 @@ func (c *CLI) cmdTargets(command string, args ...string) error {
 		}
 		vaults := make([]vault, 0)
 
-		for name, details := range cfg.Vaults {
+		//Sorted, like the listing this is the machine-readable half of. Ranging
+		// over the map put the targets in a different order on every run, which
+		// is no use to anything diffing or reviewing the output.
+		names := make([]string, 0, len(cfg.Vaults))
+		for name := range cfg.Vaults {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+
+		for _, name := range names {
+			details := cfg.Vaults[name]
 			vaults = append(vaults, vault{
 				Name:      name,
 				URL:       details.URL,

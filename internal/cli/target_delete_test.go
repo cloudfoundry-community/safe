@@ -7,6 +7,7 @@ package cli
 // opposite of what someone deleting a target is asking for.
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -121,4 +122,62 @@ vaults:
 	if len(readConfig(t).Vaults) != 2 {
 		t.Error("neither target should have been deleted")
 	}
+}
+
+// The JSON listing is the machine-readable half of `safe targets`, which sorts.
+// Ranging over the config map ordered it differently on every run.
+func TestTargetsJSONListsInASortedOrder(t *testing.T) {
+	isolateHome(t)
+	writeSaferc(t, `version: 1
+current: delta
+vaults:
+  zeta:
+    url: https://zeta.example.com
+  alpha:
+    url: https://alpha.example.com
+  delta:
+    url: https://delta.example.com
+  beta:
+    url: https://beta.example.com
+`)
+	c := newTestCLI(t)
+	c.opt.Targets.JSON = true
+
+	want := []string{"alpha", "beta", "delta", "zeta"}
+	//Repeated because map iteration order is random per run: one pass could
+	// come out sorted by luck.
+	for i := 0; i < 8; i++ {
+		out := captureStdout(t, func() {
+			if err := c.cmdTargets("targets"); err != nil {
+				t.Fatalf("cmdTargets: %v", err)
+			}
+		})
+
+		var listed []struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal([]byte(out), &listed); err != nil {
+			t.Fatalf("targets --json is not JSON: %v\n%s", err, out)
+		}
+
+		got := make([]string, 0, len(listed))
+		for _, v := range listed {
+			got = append(got, v.Name)
+		}
+		if !sameNames(got, want) {
+			t.Fatalf("run %d listed %v, want %v", i+1, got, want)
+		}
+	}
+}
+
+func sameNames(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }

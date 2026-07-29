@@ -466,6 +466,34 @@ func TestConfigAccessors(t *testing.T) {
 		}
 	})
 
+	t.Run("SetTokenFor names its target and leaves the current one alone", func(t *testing.T) {
+		c := Config{
+			Current: "prod",
+			Vaults: map[string]*Vault{
+				"prod":  {URL: "https://prod:8200", Token: "prod-token"},
+				"stage": {URL: "https://stage:8200", Token: "stage-token"},
+			},
+		}
+		if err := c.SetTokenFor("stage", "new"); err != nil {
+			t.Fatalf("SetTokenFor: %s", err)
+		}
+		if c.Vaults["stage"].Token != "new" {
+			t.Errorf("stage token: got %q, want new", c.Vaults["stage"].Token)
+		}
+		if c.Vaults["prod"].Token != "prod-token" {
+			t.Errorf("prod token: got %q, want it untouched", c.Vaults["prod"].Token)
+		}
+		if c.Current != "prod" {
+			t.Errorf("current: got %q, want prod", c.Current)
+		}
+		if err := c.SetTokenFor("ghost", "x"); err == nil {
+			t.Error("expected error setting a token on an unknown target")
+		}
+		if err := c.SetTokenFor("", "x"); err == nil {
+			t.Error("expected error setting a token with no target named")
+		}
+	})
+
 	t.Run("SetCurrent validates the alias and can reskip", func(t *testing.T) {
 		c := Config{Vaults: map[string]*Vault{"prod": {URL: "u"}}}
 		if err := c.SetCurrent("ghost", false); err == nil {

@@ -18,7 +18,11 @@ func TestEscapePathSegment(t *testing.T) {
 		{name: "caret", input: "foo^bar", want: `foo\^bar`},
 		{name: "both", input: "a:b^c", want: `a\:b\^c`},
 		{name: "empty", input: "", want: ""},
-		{name: "already escaped colon", input: `a\:b`, want: `a\\:b`},
+		//The input is a raw segment holding a backslash and a colon, not an
+		// escaped one: both characters have to be escaped, or the result
+		// parses back with the colon separating a key.
+		{name: "backslash and colon", input: `a\:b`, want: `a\\\:b`},
+		{name: "trailing backslash", input: `a\`, want: `a\\`},
 		{name: "multiple colons", input: "a:b:c", want: `a\:b\:c`},
 		{name: "multiple carets", input: "a^b^c", want: `a\^b\^c`},
 	}
@@ -77,6 +81,9 @@ func TestEncodePathRoundTrip(t *testing.T) {
 		{"secret/f:oo", "b^ar", 2},
 		{"a:b", "c^d", 1},
 		{"plain", "simple", 0},
+		{`secret/ends-in\`, "bar", 0},
+		{`secret/ends-in\`, "bar", 4},
+		{"secret/foo", `key-ends-in\`, 6},
 	}
 	for _, tc := range cases {
 		t.Run(fmt.Sprintf("%s:%s^%d", tc.path, tc.key, tc.version), func(t *testing.T) {

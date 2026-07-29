@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -287,9 +288,6 @@ func (v *Vault) verifySecretState(path string, opts verifyOpts) error {
 		return err
 	}
 
-	var deletedErr = secretNotFound{fmt.Sprintf("`%s' is deleted", path)}
-	var destroyedErr = secretNotFound{fmt.Sprintf("`%s' is destroyed", path)}
-
 	switch mountV {
 	case 1:
 		return v.verifySecretExists(path)
@@ -317,23 +315,27 @@ func (v *Vault) verifySecretState(path string, opts verifyOpts) error {
 			if version == 0 {
 				v = versions[len(versions)-1]
 			} else {
+				//Older than anything Vault still lists, which only happens
+				// once a version has been destroyed and pruned.
 				if uint64(versions[0].Version) > version {
-					return destroyedErr
+					return NewVersionNotFoundError(secret, version, "destroyed")
 				}
 
 				if version > uint64(versions[len(versions)-1].Version) {
-					return secretNotFound{fmt.Sprintf("`%s' references a version that does not yet exist", path)}
+					return NewVersionNotFoundError(secret, version, "")
 				}
 
 				idx := version - uint64(versions[0].Version)
 				v = versions[idx]
 			}
 
+			//Named by number even when the caller asked for the latest, since
+			// which version that was is the part they do not know.
 			if v.Destroyed {
-				return destroyedErr
+				return NewVersionNotFoundError(secret, uint64(v.Version), "destroyed")
 			}
 			if opts.State == verifyStateAlive && v.Deleted {
-				return deletedErr
+				return NewVersionNotFoundError(secret, uint64(v.Version), "deleted")
 			}
 		} else {
 			for i := range versions {
@@ -344,10 +346,9 @@ func (v *Vault) verifySecretState(path string, opts verifyOpts) error {
 
 			//If we got this far, we couldn't find a version that satisfied our constraints
 			if opts.State == verifyStateAlive {
-				return secretNotFound{fmt.Sprintf("No living versions for `%s'", path)}
-			} else {
-				return secretNotFound{fmt.Sprintf("No living or deleted versions for `%s'", path)}
+				return secretNotFound{fmt.Sprintf("no living version of secret `%s` exists", secret)}
 			}
+			return secretNotFound{fmt.Sprintf("no living or deleted version of secret `%s` exists", secret)}
 		}
 
 	default:
@@ -589,7 +590,9 @@ func (v *Vault) Undelete(path string) error {
 		version = uint64(respVersions[len(respVersions)-1].Version)
 	}
 
-	destroyedErr := fmt.Errorf("`%s' version: %d is destroyed", secret, version)
+	//Said the way a read says it, but left a plain error: this one reaches the
+	// tree walk, and MoveCopyTree drops walk errors that answer to IsNotFound.
+	destroyedErr := errors.New(VersionNotFoundMessage(secret, version, "destroyed"))
 	firstVersion := respVersions[0].Version
 	if version < uint64(firstVersion) {
 		return destroyedErr
@@ -602,7 +605,7 @@ func (v *Vault) Undelete(path string) error {
 	}
 	idx := int(diff)
 	if idx >= len(respVersions) {
-		return fmt.Errorf("version %d of `%s' does not yet exist", version, secret)
+		return errors.New(VersionNotFoundMessage(secret, version, ""))
 	}
 
 	if respVersions[idx].Destroyed {

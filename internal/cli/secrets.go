@@ -679,16 +679,19 @@ func (c *CLI) cmdRevert(command string, args ...string) error {
 		return err
 	}
 	if len(allVersions) == 0 {
-		return fmt.Errorf("no versions found for %s", secret)
+		return errors.New(vault.SecretNotFoundMessage(secret))
 	}
 
-	destroyedErr := fmt.Errorf("Version %d of secret `%s' is destroyed", targetVersion, secret)
+	//Said the way a read says it, but left plain: revert reports these by
+	// reading version metadata, not by failing a read, so nothing downstream
+	// should mistake one for a missing path.
+	destroyedErr := errors.New(vault.VersionNotFoundMessage(secret, targetVersion, "destroyed"))
 	if targetVersion < uint64(allVersions[0].Version) {
 		return destroyedErr
 	}
 
 	if targetVersion > uint64(allVersions[len(allVersions)-1].Version) {
-		return fmt.Errorf("Version %d of secret `%s' does not exist", targetVersion, secret)
+		return errors.New(vault.VersionNotFoundMessage(secret, targetVersion, ""))
 	}
 
 	versionObject := allVersions[targetVersion-uint64(allVersions[0].Version)]
@@ -698,7 +701,8 @@ func (c *CLI) cmdRevert(command string, args ...string) error {
 
 	if versionObject.Deleted {
 		if !opt.Revert.Deleted {
-			return fmt.Errorf("Version %d of secret `%s' is deleted. To force a read, specify --deleted", targetVersion, secret)
+			return fmt.Errorf("%s; pass --deleted to undelete it, revert to it, and delete it again",
+				vault.VersionNotFoundMessage(secret, targetVersion, "deleted"))
 		}
 
 		err = v.Undelete(vault.EncodePath(secret, "", targetVersion))

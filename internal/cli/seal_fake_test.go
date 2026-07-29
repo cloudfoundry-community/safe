@@ -25,12 +25,14 @@ type fakeSealVault struct {
 	seals   int
 	unseals int
 	url     string
+	//rootToken is what initializing this Vault hands back.
+	rootToken string
 }
 
 // newSealFake starts a fake Vault in the given seal state.
 func newSealFake(t *testing.T, sealed bool) *fakeSealVault {
 	t.Helper()
-	f := &fakeSealVault{sealed: sealed}
+	f := &fakeSealVault{sealed: sealed, rootToken: "root-token"}
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
 	f.url = srv.URL
@@ -76,6 +78,13 @@ func (f *fakeSealVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.sealed = true
 		f.seals++
 		w.WriteHeader(http.StatusNoContent)
+
+	case r.URL.Path == "/v1/sys/init" && r.Method == http.MethodPut:
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"keys":        []string{"seal-key"},
+			"keys_base64": []string{"seal-key"},
+			"root_token":  f.rootToken,
+		})
 
 	case r.URL.Path == "/v1/sys/unseal" && r.Method == http.MethodPut:
 		var body struct {

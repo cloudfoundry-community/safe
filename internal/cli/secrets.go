@@ -743,8 +743,7 @@ func (c *CLI) cmdExport(command string, args ...string) error {
 
 	//Standardize and validate paths
 	for i := range args {
-		args[i] = vault.Canonicalize(args[i])
-		_, key, version := vault.ParsePath(args[i])
+		raw, key, version := vault.ParsePath(args[i])
 		if key != "" {
 			return fmt.Errorf("Cannot export path with key (%s)", args[i])
 		}
@@ -752,6 +751,9 @@ func (c *CLI) cmdExport(command string, args ...string) error {
 		if version > 0 {
 			return fmt.Errorf("Cannot export path with version (%s)", args[i])
 		}
+		//ParsePath already canonicalized, and the walk wants the literal
+		// path rather than the escaped syntax the argument arrived in.
+		args[i] = raw
 	}
 
 	//Deduplicate the input paths

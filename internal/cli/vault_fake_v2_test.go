@@ -119,14 +119,21 @@ func (f *cliFakeVault) latestLocked(path string) (*fakeVersion, uint) {
 }
 
 // serveV2 routes /v1/secret/<verb>/<path> to the version 2 handlers.
+//
+// The subpath is optional: a listing of the mount root arrives as
+// /v1/secret/metadata?list=true with nothing after the verb, which is what
+// every tree walk starts with.
 func (f *cliFakeVault) serveV2(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/v1/secret/")
-	verb, subpath, found := strings.Cut(rest, "/")
-	if !found {
+	verb, subpath, _ := strings.Cut(rest, "/")
+	if verb == "" {
 		notFound(w)
 		return
 	}
-	path := "secret/" + subpath
+	path := "secret"
+	if subpath != "" {
+		path += "/" + subpath
+	}
 
 	f.mu.Lock()
 	defer f.mu.Unlock()

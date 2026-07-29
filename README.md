@@ -299,9 +299,14 @@ public: |
 
 List what sits directly under a path, one level deep: secrets plain,
 folders with a trailing slash.  With no path, the mounts are listed
-instead.  `-1` prints one entry per line, and `-q` skips checking
-whether each secret on a version 2 mount can still be read, which is
-quicker but shows secrets whose newest version has been deleted.
+instead.  `-1` prints one entry per line.
+
+A secret is listed only if its newest version can still be read, so
+one whose newest version has been deleted or destroyed is left out —
+even when an older version of it is still live.  Finding that out
+costs a read per secret, and `-q` skips the check and lists those
+secrets too.  Only a version 2 mount keeps versions, so neither the
+check nor `-q` does anything on a version 1 mount.
 
 ```
 safe ls secret/dc1
@@ -313,10 +318,15 @@ dockerhub
 github
 ```
 
-### tree path \[path ...\]
+### tree \[-d|-q|--keys\] path \[path ...\]
 
 Provide a tree hierarchy listing of all reachable keys in the
 Vault.
+
+`-d` draws only the folders, which is a quicker way to get your
+bearings in an unfamiliar Vault.  `--keys` names the keys inside each
+secret beside it.  `-q` skips the liveness check, exactly as it does
+for `ls` above.
 
 ```
 safe tree secret/dc1
@@ -333,9 +343,13 @@ safe tree secret/dc1
             └── github
 ```
 
-### paths path \[path ... \]
+### paths \[-q|--keys\] path \[path ... \]
 
 Provide a flat listing of all reachable keys in the Vault.
+
+`--keys` prints a line per key, as `path:key`, rather than a line per
+secret.  `-q` skips the liveness check, exactly as it does for `ls`
+above.
 
 ```
 safe paths secret/dc1
@@ -499,13 +513,30 @@ expiry.
 Renews (re-signs) the certificate authority at `path`, without
 affecting the list of revoked certificates.
 
-### export path \[path ...\]
+### export \[-a|-d\] path \[path ...\]
 
 Export the given subtree(s) in a format suitable for migration
 (via a future `import` call), or long-term storage offline.
 Secrets will not be encrypted in this representation, so care
 should be taken in handling it.  Output will be printed to
 standard output.
+
+By default only the latest version of each secret is exported, which
+keeps the output readable by versions of `safe` before v1.0.0.  `-a`
+exports every version instead, in a newer format those versions cannot
+read.
+
+A secret is exported only if something in it can be read.  A plain
+export takes the latest version, so it skips a secret whose latest
+version has been deleted or destroyed; `-a` keeps any secret with at
+least one readable version, and records the unreadable ones in place
+as empty placeholders, so the versions around them keep their numbers.
+
+`-d` undeletes, reads, and re-deletes each deleted version so that it
+is exported with its value rather than as a placeholder, and it also
+brings in the secrets a plain export would have skipped entirely.  A
+destroyed version cannot be recovered and stays a placeholder either
+way.
 
 ### import <export.file
 

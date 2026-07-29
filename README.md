@@ -375,9 +375,13 @@ warning on standard error.
 `-a` (`--all-versions`) searches the whole readable history rather than
 the value in use, which is what finds a credential that has already
 been rotated away. Each match is then reported as `path^version`, so a
-hit on a superseded version reads back exactly as printed. Deleted and
-destroyed versions are searched in neither mode, since reading one
-would mean undeleting it first.
+hit on a superseded version reads back exactly as printed.
+
+`-d` (`--deleted`) reaches deleted versions as well, by undeleting each
+one, reading it, and deleting it again — the same cycle `safe export
+-d` uses. It writes to the Vault to answer the question, and an
+interrupted search can leave a version undeleted. Destroyed versions
+are gone and are searched by neither flag.
 
 ```
 safe values -p secret/prod hunter2

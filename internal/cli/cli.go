@@ -115,6 +115,21 @@ func connect(auth bool) *vault.Vault {
 	return nil
 }
 
+// usesStrongbox reports whether a command should look for Strongbox alongside
+// the Vault it is acting on. A nil target means no Vault is configured and the
+// address came from the environment, where there is no flag to consult.
+func usesStrongbox(target *rc.Vault) bool {
+	return target != nil && !target.NoStrongbox
+}
+
+// targetAddress is the address the client returned by connect is talking to.
+// rc.Apply sets it from the target the command named, so it holds for -T and
+// for an environment-only configuration alike, where the config has no
+// address to offer.
+func targetAddress() string {
+	return os.Getenv("VAULT_ADDR")
+}
+
 type Options struct {
 	Insecure     bool `cli:"-k, --insecure"`
 	Version      bool `cli:"-v, --version"`

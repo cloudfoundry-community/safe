@@ -300,6 +300,10 @@ func (c *CLI) cmdStatus(command string, args ...string) error {
 	if err != nil {
 		return err
 	}
+	tgt, err := cfg.Vault(opt.UseTarget)
+	if err != nil {
+		return err
+	}
 	v := connect(false)
 
 	type status struct {
@@ -309,7 +313,7 @@ func (c *CLI) cmdStatus(command string, args ...string) error {
 
 	var statuses []status
 
-	if cfg.HasStrongbox() {
+	if usesStrongbox(tgt) {
 		st, err := v.Strongbox()
 		if err != nil {
 			return fmt.Errorf("%w; are you targeting a `safe' installation?", err)
@@ -319,15 +323,12 @@ func (c *CLI) cmdStatus(command string, args ...string) error {
 			statuses = append(statuses, status{addr, state == "sealed"})
 		}
 	} else {
-		if err := v.SetURL(cfg.URL()); err != nil {
-			return err
-		}
 		isSealed, err := v.Sealed()
 		if err != nil {
 			return err
 		}
 
-		statuses = append(statuses, status{cfg.URL(), isSealed})
+		statuses = append(statuses, status{targetAddress(), isSealed})
 	}
 
 	var hasSealed bool

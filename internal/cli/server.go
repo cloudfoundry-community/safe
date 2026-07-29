@@ -470,10 +470,14 @@ func (c *CLI) cmdUnseal(command string, args ...string) error {
 	if err != nil {
 		return err
 	}
+	tgt, err := cfg.Vault(opt.UseTarget)
+	if err != nil {
+		return err
+	}
 	v := connect(false)
 
 	var addrs []string
-	if cfg.HasStrongbox() {
+	if usesStrongbox(tgt) {
 		st, err := v.Strongbox()
 		if err != nil {
 			return fmt.Errorf("%w; are you targeting a `safe' installation?", err)
@@ -485,16 +489,13 @@ func (c *CLI) cmdUnseal(command string, args ...string) error {
 			}
 		}
 	} else {
-		if err := v.SetURL(cfg.URL()); err != nil {
-			return err
-		}
 		isSealed, err := v.Sealed()
 		if err != nil {
 			return err
 		}
 
 		if isSealed {
-			addrs = append(addrs, cfg.URL())
+			addrs = append(addrs, targetAddress())
 		}
 	}
 
@@ -539,10 +540,14 @@ func (c *CLI) cmdSeal(command string, args ...string) error {
 	if err != nil {
 		return err
 	}
+	tgt, err := cfg.Vault(opt.UseTarget)
+	if err != nil {
+		return err
+	}
 	v := connect(true)
 
 	var toSeal []string
-	if cfg.HasStrongbox() {
+	if usesStrongbox(tgt) {
 		st, err := v.Strongbox()
 		if err != nil {
 			return fmt.Errorf("%w; are you targeting a `safe' installation?", err)
@@ -554,15 +559,12 @@ func (c *CLI) cmdSeal(command string, args ...string) error {
 			}
 		}
 	} else {
-		if err := v.SetURL(cfg.URL()); err != nil {
-			return err
-		}
 		isSealed, err := v.Sealed()
 		if err != nil {
 			return err
 		}
 		if !isSealed {
-			toSeal = append(toSeal, cfg.URL())
+			toSeal = append(toSeal, targetAddress())
 		}
 	}
 

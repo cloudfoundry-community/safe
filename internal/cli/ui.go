@@ -98,6 +98,21 @@ func assertWritablePath(path string) error {
 	return nil
 }
 
+// assertWritablePaths applies assertWritablePath to each path, returning the
+// first complaint. Empty paths are skipped, so an unset flag naming an
+// optional destination costs nothing.
+func assertWritablePaths(paths ...string) error {
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		if err := assertWritablePath(path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func pr(label string, confirm bool, secure bool) string {
 	if !confirm {
 		if secure {

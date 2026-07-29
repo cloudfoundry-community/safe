@@ -114,6 +114,14 @@ func (c *CLI) cmdFmt(command string, args ...string) error {
 	oldKey := args[2]
 	newKey := args[3]
 
+	//fmt names the keys it reads and writes separately, so a key on the path
+	// is a mistake. Left unchecked it reads as one, and the complaint that
+	// comes back is that the key does not exist rather than that it does not
+	// belong there.
+	if err := assertWritablePaths(path); err != nil {
+		return err
+	}
+
 	v := connect(true)
 	s, err := v.Read(path)
 	if err != nil {

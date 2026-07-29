@@ -361,7 +361,7 @@ secret/dc1/concourse/pipeline-the-second/dockerhub
 secret/dc1/concourse/pipeline-the-second/github
 ```
 
-### values \[--keys\] \[-p path ...\] value \[value ...\]
+### values \[--keys\] \[-a\] \[-p path ...\] value \[value ...\]
 
 Find the secrets whose latest live version contains one of the given
 values, matched exactly and case-sensitively. Handy for auditing
@@ -372,6 +372,13 @@ read from a file (`@file`), standard input (`@-`), or a hidden prompt
 (no arguments). Subtrees the token cannot read are skipped with a
 warning on standard error.
 
+`-a` (`--all-versions`) searches the whole readable history rather than
+the value in use, which is what finds a credential that has already
+been rotated away. Each match is then reported as `path^version`, so a
+hit on a superseded version reads back exactly as printed. Deleted and
+destroyed versions are searched in neither mode, since reading one
+would mean undeleting it first.
+
 ```
 safe values -p secret/prod hunter2
 secret/prod/db
@@ -380,6 +387,11 @@ secret/prod/legacy/db
 safe values --keys hunter2
 secret/prod/db:password
 secret/prod/legacy/db:old-password
+
+safe values --all-versions --keys hunter2
+secret/prod/db:password^3
+secret/prod/legacy/db:old-password^1
+secret/prod/legacy/db:old-password^2
 ```
 
 ### delete path \[path ...\]

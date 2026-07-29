@@ -281,20 +281,12 @@ func (c *Config) SetTarget(alias string, config Vault) error {
 }
 
 func (c *Config) SetToken(token string) error {
-	return c.SetTokenFor(c.Current, token)
-}
-
-// SetTokenFor stores a token against a named target without making it the
-// current one. Commands that honour -T need that separation: -T names a Vault
-// for one command, and moving the current target would outlive the command,
-// since Write persists it.
-func (c *Config) SetTokenFor(alias, token string) error {
-	if alias == "" {
+	if c.Current == "" {
 		return fmt.Errorf("No target selected")
 	}
-	v, ok, _ := c.Find(alias)
+	v, ok, _ := c.Find(c.Current)
 	if !ok {
-		return fmt.Errorf("Unknown target '%s'", alias)
+		return fmt.Errorf("Unknown target '%s'", c.Current)
 	}
 	v.Token = token
 	return nil

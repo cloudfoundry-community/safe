@@ -495,7 +495,11 @@ func (v *Vault) deleteEntireSecret(path string, destroy bool, all bool) error {
 
 func (v *Vault) deleteSpecificKey(path string) error {
 	secretPath, key, _ := ParsePath(path)
-	secret, err := v.Read(secretPath)
+	//ParsePath unescaped the secret path. Read, Write, and deleteEntireSecret
+	// all parse their argument again, so they need the escaped form back or
+	// they split a second time at a colon that belongs to the path.
+	encodedPath := EncodePath(secretPath, "", 0)
+	secret, err := v.Read(encodedPath)
 	if err != nil {
 		return err
 	}
@@ -510,9 +514,9 @@ func (v *Vault) deleteSpecificKey(path string) error {
 		//
 		//At some point, we should probably get Destroy routed into here so that we can destroy
 		// secrets through specifying keys
-		return v.deleteEntireSecret(secretPath, false, false)
+		return v.deleteEntireSecret(encodedPath, false, false)
 	}
-	return v.Write(secretPath, secret)
+	return v.Write(encodedPath, secret)
 }
 
 // DeleteVersions marks the given versions of the given secret as deleted for
@@ -652,6 +656,10 @@ func (v *Vault) Copy(oldpath, newpath string, opts MoveCopyOpts) error {
 
 	srcPath, srcKey, srcVersion := ParsePath(oldpath)
 	dstPath, dstKey, dstVersion := ParsePath(newpath)
+	//ParsePath unescaped both paths. The tree walk and SecretEntry.Copy want
+	// those literal Vault paths, but Read and Write parse their argument again,
+	// so they get the destination back in the escaped syntax.
+	encodedDstPath := EncodePath(dstPath, "", 0)
 
 	if dstVersion != 0 {
 		return fmt.Errorf("copying a secret to a specific destination version is not supported")
@@ -679,7 +687,7 @@ func (v *Vault) Copy(oldpath, newpath string, opts MoveCopyOpts) error {
 			dstKey = srcKey
 		}
 
-		dstOrig, err := v.Read(dstPath)
+		dstOrig, err := v.Read(encodedDstPath)
 		if err != nil && !IsSecretNotFound(err) {
 			return err
 		}
@@ -728,7 +736,7 @@ func (v *Vault) Copy(oldpath, newpath string, opts MoveCopyOpts) error {
 	}
 
 	for i := range toWrite {
-		err := v.Write(dstPath, toWrite[i])
+		err := v.Write(encodedDstPath, toWrite[i])
 		if err != nil {
 			return err
 		}
@@ -819,7 +827,11 @@ func (v *Vault) Move(oldpath, newpath string, opts MoveCopyOpts) error {
 	}
 
 	if opts.Deep && opts.DeletedVersions {
-		err = v.client.DestroyAll(oldpath)
+		//DestroyAll goes straight to Vault, so it takes the literal path rather
+		// than the escaped syntax the caller wrote. Copy has already refused a
+		// deep move that names a key or a version, so nothing is dropped here.
+		rawOldPath, _, _ := ParsePath(oldpath)
+		err = v.client.DestroyAll(rawOldPath)
 		if err != nil {
 			return err
 		}

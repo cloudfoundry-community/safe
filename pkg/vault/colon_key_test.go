@@ -339,6 +339,190 @@ func TestDrawEscapesColonPaths(t *testing.T) {
 	}
 }
 
+// Deleting one key of a colon-bearing secret must reach that secret. The
+// remaining keys stay, and the sibling whose name is the path truncated at the
+// colon is not touched.
+func TestDeleteKeyOfColonPath(t *testing.T) {
+	t.Parallel()
+	v, fv := newTestVault(t)
+	fv.set("secret/we:ird", map[string]string{"alpha": "1", "beta": "2"})
+	fv.set("secret/we", map[string]string{"alpha": "untouched"})
+
+	if err := v.Delete(`secret/we\:ird:alpha`, vault.DeleteOpts{}); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	kv := mustGetSecret(t, fv, "secret/we:ird")
+	if _, present := kv["alpha"]; present {
+		t.Errorf("secret/we:ird still has alpha: %v", kv)
+	}
+	if kv["beta"] != "2" {
+		t.Errorf("secret/we:ird = %v, want beta preserved", kv)
+	}
+	if kv := mustGetSecret(t, fv, "secret/we"); kv["alpha"] != "untouched" {
+		t.Errorf("sibling secret/we was modified: %v", kv)
+	}
+}
+
+// Deleting the last key of a colon-bearing secret removes the secret itself,
+// which routes through deleteEntireSecret — another re-parser.
+func TestDeleteLastKeyOfColonPath(t *testing.T) {
+	t.Parallel()
+	v, fv := newTestVault(t)
+	fv.set("secret/we:ird", map[string]string{"alpha": "1"})
+	fv.set("secret/we", map[string]string{"alpha": "untouched"})
+
+	if err := v.Delete(`secret/we\:ird:alpha`, vault.DeleteOpts{}); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	secretAbsent(t, fv, "secret/we:ird")
+	if kv := mustGetSecret(t, fv, "secret/we"); kv["alpha"] != "untouched" {
+		t.Errorf("sibling secret/we was deleted or modified: %v", kv)
+	}
+}
+
+// A key that is not in a colon-bearing secret is a key-not-found, not a
+// secret-not-found: the secret was located, the key was not.
+func TestDeleteMissingKeyOfColonPathReportsKeyNotFound(t *testing.T) {
+	t.Parallel()
+	v, fv := newTestVault(t)
+	fv.set("secret/we:ird", map[string]string{"alpha": "1"})
+
+	err := v.Delete(`secret/we\:ird:nope`, vault.DeleteOpts{})
+	assertKeyNotFound(t, err)
+	if kv := mustGetSecret(t, fv, "secret/we:ird"); kv["alpha"] != "1" {
+		t.Errorf("secret/we:ird = %v, want map[alpha:1]", kv)
+	}
+}
+
+// The colon-free control: an ordinary key delete keeps working.
+func TestDeleteKeyOfPlainPath(t *testing.T) {
+	t.Parallel()
+	v, fv := newTestVault(t)
+	fv.set("secret/plain", map[string]string{"alpha": "1", "beta": "2"})
+
+	if err := v.Delete("secret/plain:alpha", vault.DeleteOpts{}); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	kv := mustGetSecret(t, fv, "secret/plain")
+	if _, present := kv["alpha"]; present {
+		t.Errorf("secret/plain still has alpha: %v", kv)
+	}
+	if kv["beta"] != "2" {
+		t.Errorf("secret/plain = %v, want beta preserved", kv)
+	}
+}
+
+// Copying a single key into a colon-bearing destination must write that
+// destination, not error out on the colon as if it named a key.
+func TestCopyKeyToColonPath(t *testing.T) {
+	t.Parallel()
+	v, fv := newTestVault(t)
+	fv.set("secret/src", map[string]string{"k": "v"})
+
+	err := v.Copy(`secret/src:k`, `secret/de\:st:kk`, vault.MoveCopyOpts{Quiet: true})
+	if err != nil {
+		t.Fatalf("Copy: %v", err)
+	}
+	if kv := mustGetSecret(t, fv, "secret/de:st"); kv["kk"] != "v" {
+		t.Errorf("secret/de:st = %v, want map[kk:v]", kv)
+	}
+	secretAbsent(t, fv, "secret/de")
+}
+
+// The keys already in a colon-bearing destination survive the copy: the
+// destination has to be read back before the merged secret is written.
+func TestCopyKeyMergesIntoColonPath(t *testing.T) {
+	t.Parallel()
+	v, fv := newTestVault(t)
+	fv.set("secret/src", map[string]string{"k": "v"})
+	fv.set("secret/de:st", map[string]string{"existing": "keep"})
+
+	err := v.Copy(`secret/src:k`, `secret/de\:st:kk`, vault.MoveCopyOpts{Quiet: true})
+	if err != nil {
+		t.Fatalf("Copy: %v", err)
+	}
+	kv := mustGetSecret(t, fv, "secret/de:st")
+	if kv["kk"] != "v" || kv["existing"] != "keep" {
+		t.Errorf("secret/de:st = %v, want map[existing:keep kk:v]", kv)
+	}
+}
+
+// A whole-secret copy to a colon-bearing destination goes through the tree
+// walk, which takes literal paths, and must land at the same place.
+func TestCopySecretToColonPath(t *testing.T) {
+	t.Parallel()
+	v, fv := newTestVault(t)
+	fv.set("secret/src", map[string]string{"k": "v"})
+
+	err := v.Copy("secret/src", `secret/de\:st`, vault.MoveCopyOpts{Quiet: true})
+	if err != nil {
+		t.Fatalf("Copy: %v", err)
+	}
+	if kv := mustGetSecret(t, fv, "secret/de:st"); kv["k"] != "v" {
+		t.Errorf("secret/de:st = %v, want map[k:v]", kv)
+	}
+}
+
+// The colon-free control: an ordinary single-key copy keeps working.
+func TestCopyKeyToPlainPath(t *testing.T) {
+	t.Parallel()
+	v, fv := newTestVault(t)
+	fv.set("secret/src", map[string]string{"k": "v"})
+	fv.set("secret/dst", map[string]string{"existing": "keep"})
+
+	if err := v.Copy("secret/src:k", "secret/dst:kk", vault.MoveCopyOpts{Quiet: true}); err != nil {
+		t.Fatalf("Copy: %v", err)
+	}
+	kv := mustGetSecret(t, fv, "secret/dst")
+	if kv["kk"] != "v" || kv["existing"] != "keep" {
+		t.Errorf("secret/dst = %v, want map[existing:keep kk:v]", kv)
+	}
+}
+
+// A deep move destroys the source once the copy is through. That destroy talks
+// to Vault directly, so an escaped source path has to be unescaped first or the
+// data the user asked to move is left behind.
+func TestDeepMoveDestroysColonBearingSource(t *testing.T) {
+	t.Parallel()
+	v, fv := newTestVault(t)
+	fv.set("secret/we:ird", map[string]string{"k": "v"})
+	fv.set("secret/we", map[string]string{"k2": "keep"})
+
+	err := v.Move(`secret/we\:ird`, "secret/dst", vault.MoveCopyOpts{
+		Quiet: true, Deep: true, DeletedVersions: true,
+	})
+	if err != nil {
+		t.Fatalf("Move: %v", err)
+	}
+	if kv := mustGetSecret(t, fv, "secret/dst"); kv["k"] != "v" {
+		t.Errorf("secret/dst = %v, want map[k:v]", kv)
+	}
+	secretAbsent(t, fv, "secret/we:ird")
+	if kv := mustGetSecret(t, fv, "secret/we"); kv["k2"] != "keep" {
+		t.Errorf("sibling secret/we was destroyed: %v", kv)
+	}
+}
+
+// The colon-free control: a deep move of an ordinary path still destroys its
+// source.
+func TestDeepMoveDestroysPlainSource(t *testing.T) {
+	t.Parallel()
+	v, fv := newTestVault(t)
+	fv.set("secret/plainsrc", map[string]string{"k": "v"})
+
+	err := v.Move("secret/plainsrc", "secret/dst", vault.MoveCopyOpts{
+		Quiet: true, Deep: true, DeletedVersions: true,
+	})
+	if err != nil {
+		t.Fatalf("Move: %v", err)
+	}
+	if kv := mustGetSecret(t, fv, "secret/dst"); kv["k"] != "v" {
+		t.Errorf("secret/dst = %v, want map[k:v]", kv)
+	}
+	secretAbsent(t, fv, "secret/plainsrc")
+}
+
 // Write reads its argument as path:key syntax, so a literal Vault path has to
 // be encoded before it is handed over. This is the contract safe import relies
 // on when it replays the keys of an export.

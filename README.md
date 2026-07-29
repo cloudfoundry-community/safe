@@ -220,16 +220,17 @@ Vault.
 
 ```
 safe tree secret/dc1
-secret/dc1
-  concourse/
-    pipeline-the-first/
-      aws
-      dockerhub
-      github
-    pipeline-the-second/
-      aws
-      dockerhub
-      github
+.
+└── secret/dc1/
+    └── concourse/
+        ├── pipeline-the-first/
+        │   ├── aws
+        │   ├── dockerhub
+        │   └── github
+        └── pipeline-the-second/
+            ├── aws
+            ├── dockerhub
+            └── github
 ```
 
 ### paths path \[path ... \]
@@ -238,12 +239,12 @@ Provide a flat listing of all reachable keys in the Vault.
 
 ```
 safe paths secret/dc1
-secret/dc1concourse/pipeline-the-first/aws
-secret/dc1concourse/pipeline-the-first/dockerhub
-secret/dc1concourse/pipeline-the-first/github
-secret/dc1concourse/pipeline-the-second/aws
-secret/dc1concourse/pipeline-the-second/dockerhub
-secret/dc1concourse/pipeline-the-second/github
+secret/dc1/concourse/pipeline-the-first/aws
+secret/dc1/concourse/pipeline-the-first/dockerhub
+secret/dc1/concourse/pipeline-the-first/github
+secret/dc1/concourse/pipeline-the-second/aws
+secret/dc1/concourse/pipeline-the-second/dockerhub
+secret/dc1/concourse/pipeline-the-second/github
 ```
 
 ### values \[--keys\] \[-p path ...\] value \[value ...\]

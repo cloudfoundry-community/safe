@@ -558,16 +558,20 @@ func (c *CLI) cmdLogout(command string, args ...string) error {
 	if err != nil {
 		return err
 	}
-	_ = cfg.SetToken("")
-	err = cfg.Write()
-	if err != nil {
-		return err
-	}
 
 	target := cfg.Current
 	if opt.UseTarget != "" {
 		target = opt.UseTarget
 	}
+	//Dropping the token of the target that was named, rather than of the
+	// current one, which is the only target SetToken can reach.
+	if err := cfg.SetTokenFor(target, ""); err != nil {
+		return err
+	}
+	if err := cfg.Write(); err != nil {
+		return err
+	}
+
 	_, _ = fmt.Fprintf(os.Stderr, "Successfully logged out of @C{%s}\n", target)
 	return nil
 }

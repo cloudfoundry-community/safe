@@ -20,6 +20,22 @@ import (
 	"github.com/cloudfoundry-community/safe/pkg/vault"
 )
 
+// walkRoot resolves a tree-walk root argument to the literal Vault path the
+// walk needs. safe prints paths in its own escaped syntax, so a root pasted
+// back from `safe paths` or `safe tree` arrives escaped, while the walk and
+// Secrets.Draw both work in literal paths. A key or a version cannot scope a
+// recursive walk, so naming one is refused rather than quietly dropped.
+func walkRoot(command, arg string) (string, error) {
+	raw, key, version := vault.ParsePath(arg)
+	if key != "" {
+		return "", fmt.Errorf("%s does not take a specific key (%s)", command, arg)
+	}
+	if version != 0 {
+		return "", fmt.Errorf("%s does not take a specific version (%s)", command, arg)
+	}
+	return raw, nil
+}
+
 func (c *CLI) writeHelper(prompt bool, insecure bool, command string, args ...string) error {
 	opt := c.opt
 	r := c.r
@@ -410,7 +426,11 @@ func (c *CLI) cmdTree(command string, args ...string) error {
 	r2, _ := regexp.Compile("^└")
 	v := connect(true)
 	for i, path := range args {
-		secrets, err := v.ConstructSecrets(path, vault.TreeOpts{
+		root, err := walkRoot("tree", path)
+		if err != nil {
+			return err
+		}
+		secrets, err := v.ConstructSecrets(root, vault.TreeOpts{
 			FetchKeys:           opt.Tree.ShowKeys,
 			AllowDeletedSecrets: opt.Tree.Quick,
 		})
@@ -418,7 +438,7 @@ func (c *CLI) cmdTree(command string, args ...string) error {
 		if err != nil {
 			return err
 		}
-		lines := strings.Split(secrets.Draw(path, fmt.CanColorize(os.Stdout), !opt.Tree.HideLeaves), "\n")
+		lines := strings.Split(secrets.Draw(root, fmt.CanColorize(os.Stdout), !opt.Tree.HideLeaves), "\n")
 		if i > 0 {
 			lines = lines[1:] // Drop root '.' from subsequent paths
 		}
@@ -446,7 +466,11 @@ func (c *CLI) cmdPaths(command string, args ...string) error {
 	}
 	v := connect(true)
 	for _, path := range args {
-		secrets, err := v.ConstructSecrets(path, vault.TreeOpts{
+		root, err := walkRoot("paths", path)
+		if err != nil {
+			return err
+		}
+		secrets, err := v.ConstructSecrets(root, vault.TreeOpts{
 			FetchKeys:           opt.Paths.ShowKeys,
 			AllowDeletedSecrets: opt.Paths.Quick,
 			SkipVersionInfo:     !opt.Paths.ShowKeys,
@@ -491,7 +515,11 @@ func (c *CLI) cmdValues(command string, args ...string) error {
 		paths = []string{"secret"}
 	}
 	for i := range paths {
-		paths[i] = vault.Canonicalize(paths[i])
+		root, err := walkRoot("values", paths[i])
+		if err != nil {
+			return err
+		}
+		paths[i] = root
 	}
 	paths = dedupeExportPaths(paths)
 

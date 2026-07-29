@@ -136,8 +136,10 @@ func (v *Vault) Curl(method string, path string, body []byte) (*http.Response, e
 }
 
 // Read checks the Vault for a Secret at the specified path, and returns it.
-// If there is nothing at that path, a nil *Secret will be returned, with no
-// error.
+// The returned *Secret is never nil. A missing secret and a missing key are
+// both reported through err, as SecretNotFound and KeyNotFound respectively,
+// alongside an empty Secret; every Secret method dereferences its receiver,
+// so a caller that tolerates a not-found error can still use the value.
 func (v *Vault) Read(path string) (secret *Secret, err error) {
 	path, key, version := ParsePath(path)
 
@@ -155,7 +157,7 @@ func (v *Vault) Read(path string) (secret *Secret, err error) {
 	if key != "" {
 		val, found := raw[key]
 		if !found {
-			return nil, NewKeyNotFoundError(path, key)
+			return secret, NewKeyNotFoundError(path, key)
 		}
 		raw = map[string]any{key: val}
 	}

@@ -30,8 +30,11 @@ func (c *CLI) writeHelper(prompt bool, insecure bool, command string, args ...st
 	if len(args) < 2 {
 		return r.Usage(command)
 	}
-	v := connect(true)
 	path, args := args[0], args[1:]
+	if err := assertWritablePath(path); err != nil {
+		return err
+	}
+	v := connect(true)
 	s, err := v.Read(path)
 	if err != nil && !vault.IsNotFound(err) {
 		return err

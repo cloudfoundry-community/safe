@@ -154,6 +154,12 @@ func (c *CLI) cmdSsh(command string, args ...string) error {
 		return r.Usage("ssh")
 	}
 
+	for _, path := range args {
+		if err := assertWritablePath(path); err != nil {
+			return err
+		}
+	}
+
 	v := connect(true)
 	for _, path := range args {
 		s, err := v.Read(path)
@@ -194,6 +200,12 @@ func (c *CLI) cmdRsa(command string, args ...string) error {
 
 	if len(args) < 1 {
 		return r.Usage("rsa")
+	}
+
+	for _, path := range args {
+		if err := assertWritablePath(path); err != nil {
+			return err
+		}
 	}
 
 	v := connect(true)
@@ -240,6 +252,9 @@ func (c *CLI) cmdDhparam(command string, args ...string) error {
 	}
 
 	path := args[0]
+	if err := assertWritablePath(path); err != nil {
+		return err
+	}
 	v := connect(true)
 	s, err := v.Read(path)
 	if err != nil && !vault.IsNotFound(err) {

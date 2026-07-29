@@ -149,7 +149,7 @@ func (v *Vault) Read(path string) (secret *Secret, err error) {
 	_, err = v.client.Get(path, &raw, &vaultkv.KVGetOpts{Version: uint(version)})
 	if err != nil {
 		if vaultkv.IsNotFound(err) {
-			err = NewSecretNotFoundError(path)
+			err = v.notFoundReading(path, version)
 		}
 		return
 	}
@@ -178,6 +178,44 @@ func (v *Vault) Read(path string) (secret *Secret, err error) {
 	}
 
 	return
+}
+
+// notFoundReading turns a 404 from a read into the most specific not-found
+// error it can. A versioned read fails either because the secret is not there
+// or because that one version is not, and the two send a reader looking in
+// different places: one to create the secret, the other to `safe versions`.
+//
+// Telling them apart costs a metadata request, so it is only paid when a
+// version was actually named. A plain read of a missing secret — what every
+// `safe gen` does on a path it is about to create — still costs the single
+// request it always did.
+func (v *Vault) notFoundReading(path string, version uint64) error {
+	if version == 0 {
+		return NewSecretNotFoundError(path)
+	}
+
+	versions, err := v.client.Versions(path)
+	if err != nil || len(versions) == 0 {
+		//No history to consult, so the secret itself is the better answer.
+		return NewSecretNotFoundError(path)
+	}
+
+	for _, v := range versions {
+		if uint64(v.Version) != version {
+			continue
+		}
+		switch {
+		case v.Destroyed:
+			return NewVersionNotFoundError(path, version, "destroyed")
+		case v.Deleted:
+			return NewVersionNotFoundError(path, version, "deleted")
+		}
+		//The version is there and alive, so the 404 was about something
+		// other than the version; do not claim otherwise.
+		return NewSecretNotFoundError(path)
+	}
+
+	return NewVersionNotFoundError(path, version, "")
 }
 
 // List returns the set of (relative) paths that are directly underneath

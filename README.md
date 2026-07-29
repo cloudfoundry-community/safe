@@ -202,6 +202,18 @@ safe set secret/dc1/admin 'user:name=root'
 safe get 'secret/dc1/admin:user\:name'
 ```
 
+Only the arguments `safe` parses need escaping.  The key named on a
+`set` is taken as written, which is why the same key goes in plain
+and comes back escaped.
+
+The backslash escapes itself as well, so a path or key holding a
+literal backslash takes two:
+
+```
+safe set 'secret/dc1/we\\ird' password=s3cr3t
+safe get 'secret/dc1/we\\ird:password'
+```
+
 `safe` prints paths in this same escaped form, so anything from `safe
 paths`, `safe paths --keys`, or `safe tree --keys` can be pasted
 straight back into another command:

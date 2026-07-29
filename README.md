@@ -299,9 +299,14 @@ public: |
 
 List what sits directly under a path, one level deep: secrets plain,
 folders with a trailing slash.  With no path, the mounts are listed
-instead.  `-1` prints one entry per line, and `-q` skips checking
-whether each secret on a version 2 mount can still be read, which is
-quicker but shows secrets whose newest version has been deleted.
+instead.  `-1` prints one entry per line.
+
+A secret is listed only if its newest version can still be read, so
+one whose newest version has been deleted or destroyed is left out —
+even when an older version of it is still live.  Finding that out
+costs a read per secret, and `-q` skips the check and lists those
+secrets too.  Only a version 2 mount keeps versions, so neither the
+check nor `-q` does anything on a version 1 mount.
 
 ```
 safe ls secret/dc1
@@ -313,10 +318,15 @@ dockerhub
 github
 ```
 
-### tree path \[path ...\]
+### tree \[-d|-q|--keys\] path \[path ...\]
 
 Provide a tree hierarchy listing of all reachable keys in the
 Vault.
+
+`-d` draws only the folders, which is a quicker way to get your
+bearings in an unfamiliar Vault.  `--keys` names the keys inside each
+secret beside it.  `-q` skips the liveness check, exactly as it does
+for `ls` above.
 
 ```
 safe tree secret/dc1
@@ -333,9 +343,13 @@ safe tree secret/dc1
             └── github
 ```
 
-### paths path \[path ... \]
+### paths \[-q|--keys\] path \[path ... \]
 
 Provide a flat listing of all reachable keys in the Vault.
+
+`--keys` prints a line per key, as `path:key`, rather than a line per
+secret.  `-q` skips the liveness check, exactly as it does for `ls`
+above.
 
 ```
 safe paths secret/dc1

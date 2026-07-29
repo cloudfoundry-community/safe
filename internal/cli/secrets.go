@@ -264,11 +264,16 @@ func (c *CLI) cmdVersions(command string, args ...string) error {
 	}
 
 	for i := range args {
-		_, _, version := vault.ParsePath(args[i])
+		secret, key, version := vault.ParsePath(args[i])
 		if version > 0 {
 			return fmt.Errorf("Specifying version to versions is not supported")
 		}
-		versions, err := v.Client().Versions(args[i])
+		if key != "" {
+			return fmt.Errorf("Specifying key to versions is not supported")
+		}
+		//The client takes literal Vault paths, so it gets what ParsePath
+		// returned rather than the escaped syntax the argument arrived in.
+		versions, err := v.Client().Versions(secret)
 		if vaultkv.IsNotFound(err) {
 			err = vault.NewSecretNotFoundError(args[i])
 		}

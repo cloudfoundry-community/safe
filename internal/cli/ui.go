@@ -92,6 +92,15 @@ func assertWritablePath(path string) error {
 	if vault.PathHasKey(path) {
 		return fmt.Errorf("cannot write to paths in /path:key notation (%s)", path)
 	}
+	return assertWritableKeyPath(path)
+}
+
+// assertWritableKeyPath refuses a path naming a version, for the commands that
+// do accept a key. gen and uuid take one because it names the key they are
+// about to create, but a version names a revision that already exists, and
+// there is no writing to that, so naming one is a mistake rather than
+// something to drop on the floor.
+func assertWritableKeyPath(path string) error {
 	if vault.PathHasVersion(path) {
 		return fmt.Errorf("cannot write to paths in /path^version notation (%s)", path)
 	}

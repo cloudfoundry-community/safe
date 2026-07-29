@@ -36,6 +36,11 @@ func (c *CLI) cmdGen(command string, args ...string) error {
 	v := connect(true)
 
 	for len(args) > 0 {
+		//Checked before the password is generated, so a refused path costs
+		// nothing, and per path, since each one is named separately.
+		if err := assertWritableKeyPath(args[0]); err != nil {
+			return err
+		}
 		var path, key string
 		if vault.PathHasKey(args[0]) {
 			path, key, _ = vault.ParsePath(args[0])
@@ -88,6 +93,10 @@ func (c *CLI) cmdUuid(command string, args ...string) error {
 
 	if len(args) != 1 {
 		return r.Usage("uuid")
+	}
+
+	if err := assertWritableKeyPath(args[0]); err != nil {
+		return err
 	}
 
 	u := uuid.NewRandom()

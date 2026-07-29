@@ -133,7 +133,15 @@ func (v *Vault) ConstructSecrets(path string, opts TreeOpts) (s Secrets, err err
 
 	s = t.convertToSecrets()
 	if !opts.AllowDeletedSecrets {
-		s.purgeWhereLatestVersionDeleted()
+		if opts.FetchAllVersions {
+			//A walk that asked for the whole history keeps a secret for the
+			// sake of the versions it can still read. Dropping it because the
+			// newest one happens to be deleted throws away the older ones with
+			// it, which is data loss in an export.
+			s.purgeWhereNoVersionAlive()
+		} else {
+			s.purgeWhereLatestVersionDeleted()
+		}
 	}
 	//If we populated versions earlier and it wasn't asked for directly, lets clean them up now
 	if opts.SkipVersionInfo {
@@ -153,6 +161,30 @@ func (s *Secrets) purgeWhereLatestVersionDeleted() {
 			i--
 		}
 	}
+}
+
+// purgeWhereNoVersionAlive drops only the secrets with nothing left to read.
+// A secret keeping even one alive version is worth carrying: the caller asked
+// for every version, and the ones it cannot read are recorded as placeholders
+// rather than dropped, exactly as a deleted version in the middle of a history
+// already was.
+func (s *Secrets) purgeWhereNoVersionAlive() {
+	for i := 0; i < len(*s); i++ {
+		if !(*s)[i].hasAliveVersion() {
+			(*s)[i], (*s)[len(*s)-1] = (*s)[len(*s)-1], (*s)[i]
+			*s = (*s)[:len(*s)-1]
+			i--
+		}
+	}
+}
+
+func (e SecretEntry) hasAliveVersion() bool {
+	for _, version := range e.Versions {
+		if version.State == SecretStateAlive {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Secrets) purgeVersions() {

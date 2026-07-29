@@ -218,6 +218,49 @@ func (v *Vault) notFoundReading(path string, version uint64) error {
 	return NewVersionNotFoundError(path, version, "")
 }
 
+// ExplainNotFound narrows a not-found error from Read the way notFoundReading
+// narrows a versioned one: when the secret does exist and it is only its newest
+// version that cannot be read, it says which version and what became of it.
+// Anything else is returned untouched, including a missing key and a version
+// the caller named, which is already as specific as it gets.
+//
+// Read does not do this for itself. A read with no version named is what gen,
+// uuid, ssh, rsa and dhparam all do to a path they are about to create, and
+// they expect the miss; the metadata request this costs would land on every one
+// of those. Here it is paid only by a command that has already failed and is
+// about to put the message in front of somebody.
+//
+// Vault does say which version it was in the body of the 404, but vaultkv
+// discards the body of any non-2xx response, so the history has to be asked for
+// separately.
+func (v *Vault) ExplainNotFound(path string, err error) error {
+	if !IsSecretNotFound(err) {
+		return err
+	}
+
+	secret, _, version := ParsePath(path)
+	if version != 0 {
+		return err
+	}
+
+	versions, verr := v.client.Versions(secret)
+	if verr != nil || len(versions) == 0 {
+		//Nothing to consult, so the secret really is the best answer.
+		return err
+	}
+
+	//A read with no version named asks for the newest one, so that is the
+	// only version whose state can explain this particular miss.
+	latest := versions[len(versions)-1]
+	switch {
+	case latest.Destroyed:
+		return NewVersionNotFoundError(secret, uint64(latest.Version), "destroyed")
+	case latest.Deleted:
+		return NewVersionNotFoundError(secret, uint64(latest.Version), "deleted")
+	}
+	return err
+}
+
 // List returns the set of (relative) paths that are directly underneath
 // the given path.  Intermediate path nodes are suffixed with a single "/",
 // whereas leaf nodes (the secrets themselves) are not.

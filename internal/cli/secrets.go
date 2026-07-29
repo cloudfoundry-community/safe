@@ -333,22 +333,23 @@ func (c *CLI) cmdLs(command string, args ...string) error {
 	}
 	v := connect(true)
 	display := func(paths []string) {
+		end := "  "
 		if opt.List.Single {
-			for _, s := range paths {
-				if strings.HasSuffix(s, "/") {
-					_, _ = fmt.Printf("@B{%s}\n", s)
-				} else {
-					_, _ = fmt.Printf("@G{%s}\n", s)
-				}
+			end = "\n"
+		}
+		for _, s := range paths {
+			//Printed in safe's own syntax, so a name holding a colon or a
+			// caret can be pasted back. The trailing slash marks a folder
+			// and is not part of the name.
+			name, folder := strings.CutSuffix(s, "/")
+			name = vault.EscapePathSegment(name)
+			if folder {
+				_, _ = fmt.Printf("@B{%s/}%s", name, end)
+			} else {
+				_, _ = fmt.Printf("@G{%s}%s", name, end)
 			}
-		} else {
-			for _, s := range paths {
-				if strings.HasSuffix(s, "/") {
-					_, _ = fmt.Printf("@B{%s}  ", s)
-				} else {
-					_, _ = fmt.Printf("@G{%s}  ", s)
-				}
-			}
+		}
+		if !opt.List.Single {
 			_, _ = fmt.Printf("\n")
 		}
 	}
@@ -357,9 +358,16 @@ func (c *CLI) cmdLs(command string, args ...string) error {
 		args = []string{"/"}
 	}
 
-	for _, path := range args {
+	for _, arg := range args {
+		//Vault lists literal paths, so a root pasted back from safe's own
+		// output has to be unescaped first.
+		root, err := walkRoot("ls", arg)
+		if err != nil {
+			return err
+		}
+
 		var paths []string
-		if path == "" || path == "/" {
+		if root == "" {
 			generics, err := v.Mounts("generic")
 			if err != nil {
 				return err
@@ -371,8 +379,7 @@ func (c *CLI) cmdLs(command string, args ...string) error {
 
 			paths = append(generics, kvs...)
 		} else {
-			var err error
-			paths, err = v.List(path)
+			paths, err = v.List(root)
 			if err != nil {
 				return err
 			}
@@ -382,14 +389,17 @@ func (c *CLI) cmdLs(command string, args ...string) error {
 		if !opt.List.Quick {
 			for i := range paths {
 				if !strings.HasSuffix(paths[i], "/") {
-					fullpath := path + "/" + vault.EscapePathSegment(paths[i])
-					mountVersion, err := v.MountVersion(fullpath)
+					child := root + "/" + paths[i]
+					mountVersion, err := v.MountVersion(child)
 					if err != nil {
 						return err
 					}
 
 					if mountVersion == 2 {
-						_, err := v.Read(fullpath)
+						//Read parses the mini-language, so it takes the
+						// escaped form: a colon anywhere in the path would
+						// otherwise be read as a key separator.
+						_, err := v.Read(vault.EncodePath(child, "", 0))
 						if err != nil {
 							if vault.IsNotFound(err) {
 								continue
@@ -408,7 +418,7 @@ func (c *CLI) cmdLs(command string, args ...string) error {
 		sort.Strings(filteredPaths)
 
 		if len(args) != 1 {
-			_, _ = fmt.Printf("@C{%s}:\n", path)
+			_, _ = fmt.Printf("@C{%s}:\n", arg)
 		}
 		display(filteredPaths)
 		if len(args) != 1 {

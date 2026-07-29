@@ -621,7 +621,9 @@ func (c *CLI) cmdUndelete(command string, args ...string) error {
 				versions = append(versions, v.Version)
 			}
 
-			if err = v.Client().Undelete(path, versions); err != nil {
+			//The version list was looked up under the parsed path; the
+			// client takes literal paths, so the undelete uses it too.
+			if err = v.Client().Undelete(secret, versions); err != nil {
 				return err
 			}
 		} else {

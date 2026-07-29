@@ -41,7 +41,7 @@ func TestCmdRevertColonBearingPathMissingVersion(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error reverting to a version that does not exist")
 	}
-	if !strings.Contains(err.Error(), "Version 2") {
+	if !strings.Contains(err.Error(), "no version 2 of secret `secret/we:ird` exists") {
 		t.Errorf("error %q should report version 2 as missing", err)
 	}
 }

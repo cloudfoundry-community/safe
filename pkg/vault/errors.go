@@ -29,27 +29,42 @@ func IsNotFound(err error) bool {
 	return IsSecretNotFound(err) || IsKeyNotFound(err)
 }
 
-// NewSecretNotFoundError returns an error with a message descibing the path
-// which could not be found in the secret backend.
-func NewSecretNotFoundError(path string) error {
-	return secretNotFound{message: fmt.Sprintf("no secret exists at path `%s`", path)}
+// SecretNotFoundMessage returns the sentence safe uses for a secret it could
+// not read. See VersionNotFoundMessage for why the wording is available apart
+// from the error that usually carries it.
+func SecretNotFoundMessage(path string) string {
+	return fmt.Sprintf("no secret exists at path `%s`", path)
 }
 
-// NewVersionNotFoundError returns an error describing a version that could not
-// be read from a secret which does itself exist. state names why, in the
+// VersionNotFoundMessage returns the sentence safe uses for a version it could
+// not read from a secret that does itself exist. state names why, in the
 // vocabulary `safe versions` prints — "deleted" or "destroyed" — or is empty
 // if the version was simply never created.
 //
-// The result is the same kind of error as NewSecretNotFoundError, since the
-// secret is still what could not be read; only the wording narrows. Callers
-// testing IsSecretNotFound or IsNotFound are unaffected.
-func NewVersionNotFoundError(path string, version uint64, state string) error {
-	if state != "" {
-		return secretNotFound{message: fmt.Sprintf(
-			"version %d of secret `%s` has been %s", version, path, state)}
+// revert and undelete report these same conditions, but they find them by
+// walking version metadata rather than by failing a read, and their errors
+// reach the tree walk, where anything answering to IsNotFound is discarded by
+// the skip-if-exists check in MoveCopyTree. They take the wording from here
+// and keep their own error kind.
+func VersionNotFoundMessage(path string, version uint64, state string) string {
+	if state == "" {
+		return fmt.Sprintf("no version %d of secret `%s` exists", version, path)
 	}
-	return secretNotFound{message: fmt.Sprintf(
-		"no version %d of secret `%s` exists", version, path)}
+	return fmt.Sprintf("version %d of secret `%s` has been %s", version, path, state)
+}
+
+// NewSecretNotFoundError returns an error with a message descibing the path
+// which could not be found in the secret backend.
+func NewSecretNotFoundError(path string) error {
+	return secretNotFound{message: SecretNotFoundMessage(path)}
+}
+
+// NewVersionNotFoundError returns VersionNotFoundMessage as an error of the
+// same kind as NewSecretNotFoundError, since the secret is still what could
+// not be read; only the wording narrows. Callers testing IsSecretNotFound or
+// IsNotFound are unaffected.
+func NewVersionNotFoundError(path string, version uint64, state string) error {
+	return secretNotFound{message: VersionNotFoundMessage(path, version, state)}
 }
 
 // IsSecretNotFound returns true if the given error was created with

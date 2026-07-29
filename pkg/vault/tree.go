@@ -867,10 +867,13 @@ func (w *treeWorker) workGet(t secretTree) ([]secretTree, error) {
 
 	ret := []secretTree{}
 	for _, key := range s.Keys() {
-		//Escape the key so a literal ':' or '^' in it survives the joined
-		// node name; Basename recovers the key with ParsePath.
+		//Encode both halves so a literal ':', '^' or '\' in either survives
+		// the joined node name; Basename recovers the key with ParsePath.
+		// Escaping only the key is not enough: a path ending in a backslash
+		// would make the joining colon itself look escaped, and the key
+		// would come back empty.
 		ret = append(ret, secretTree{
-			Name:    path + ":" + EscapePathSegment(key),
+			Name:    EncodePath(path, key, 0),
 			Type:    treeTypeKey,
 			Value:   string(s.data[key]),
 			Version: version,

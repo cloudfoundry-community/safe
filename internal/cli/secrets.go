@@ -145,7 +145,7 @@ func (c *CLI) cmdGet(command string, args ...string) error {
 	if len(args) == 1 && !opt.Get.Yaml {
 		s, err := v.Read(args[0])
 		if err != nil {
-			return err
+			return v.ExplainNotFound(args[0], err)
 		}
 
 		if opt.Get.KeysOnly {
@@ -175,7 +175,7 @@ func (c *CLI) cmdGet(command string, args ...string) error {
 
 		// Check if the desired path[:key] is found
 		if err != nil {
-			errs = append(errs, err)
+			errs = append(errs, v.ExplainNotFound(path, err))
 			if k != "" {
 				if _, ok := missingKeys[p]; !ok {
 					missingKeys[p] = make([]string, 0)

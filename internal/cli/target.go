@@ -539,15 +539,11 @@ func (c *CLI) cmdAuth(command string, args ...string) error {
 		return fmt.Errorf("Unrecognized authentication method '%s'", method)
 	}
 
-	//This handles saving the token to the correct target when using the -T
-	// flag to use a different target
-	currentTarget := cfg.Current
-	err = cfg.SetCurrent(target, false)
-	if err != nil {
-		return fmt.Errorf("Could not find target with name `%s'", target)
+	//The token belongs to the target that was authenticated against, which
+	// -T may have named, and storing it must not move the current target.
+	if err := cfg.SetTokenFor(target, token); err != nil {
+		return err
 	}
-	_ = cfg.SetToken(token)
-	_ = cfg.SetCurrent(currentTarget, false)
 	return cfg.Write()
 }
 

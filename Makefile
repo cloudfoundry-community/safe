@@ -19,6 +19,14 @@ LDFLAGS := -X main.Version="$(VERSION)" -X main.BuildTime="$(BUILD_TIME)" -X mai
 BINARY_NAME := safe
 GO_FILES := $(shell find . -name '*.go' -type f -not -path "./vendor/*")
 
+# Integration suite. TEST_PATH is the suite script, SAFE_PATH the binary it
+# drives, and VAULT_VERSIONS the space-separated Vault versions to run
+# against. CI overrides all three; the defaults run the in-tree suite
+# against a freshly built binary over the suite's own default versions.
+TEST_PATH ?= ci/scripts/tests
+SAFE_PATH ?= ./$(BINARY_NAME)
+VAULT_VERSIONS ?=
+
 ##@ General
 
 .PHONY: help
@@ -76,6 +84,21 @@ test: ## Run all tests with race detector
 	@echo "$(GREEN)Running tests...$(RESET)"
 	@go test -race -v $(shell go list ./... | grep -v vendor)
 	@echo "$(GREEN)✓ Tests complete$(RESET)"
+
+.PHONY: test-integration
+test-integration: ## Run the end-to-end suite against real Vault servers
+	@echo "$(GREEN)Running integration suite...$(RESET)"
+	@test -x "$(TEST_PATH)" || { echo "$(YELLOW)No suite at $(TEST_PATH)$(RESET)"; exit 2; }
+# Rebuild when driving the in-tree binary so the suite never runs against a
+# stale build. An overridden SAFE_PATH is taken as-is: CI supplies the
+# release artifact it means to test.
+ifeq ($(SAFE_PATH),./$(BINARY_NAME))
+	@$(MAKE) --no-print-directory build
+else
+	@test -x "$(SAFE_PATH)" || { echo "$(YELLOW)No safe binary at $(SAFE_PATH)$(RESET)"; exit 2; }
+endif
+	@$(TEST_PATH) $(SAFE_PATH) $(VAULT_VERSIONS)
+	@echo "$(GREEN)✓ Integration suite complete$(RESET)"
 
 .PHONY: test-short
 test-short: ## Run tests in short mode (no race detector)

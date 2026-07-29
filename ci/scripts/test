@@ -1,0 +1,22 @@
+#!/bin/bash
+#
+# Gate for the pull-request job. No Vault server is available here, so this
+# runs the hermetic checks only: fmt, vet, staticcheck, and the unit tests.
+# The end-to-end suite runs in the test-vault-* jobs, which have a server.
+
+set -eu
+
+export GOPATH="${PWD}/gopath"
+export PATH="${PATH}:${GOPATH}/bin"
+
+test -n "${MODULE:-}" || {
+  echo >&2 "MODULE must be set to the Go module path.  Did you misconfigure Concourse?"
+  exit 2
+}
+
+cd "${GOPATH}/src/${MODULE}"
+
+go version
+echo
+
+make check

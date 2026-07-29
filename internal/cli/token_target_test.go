@@ -89,3 +89,31 @@ func TestCmdAuthStoresTheTokenOnTheTargetNamedByDashT(t *testing.T) {
 		t.Errorf("current target: got %q, want alpha", cfg.Current)
 	}
 }
+
+func TestCmdInitStoresTheRootTokenOnTheTargetNamedByDashT(t *testing.T) {
+	isolateHome(t)
+	alpha := newSealFake(t, false)
+	beta := newSealFake(t, true)
+	beta.rootToken = "beta-root"
+	writeSaferc(t, twoTargets(alpha, beta))
+
+	c := newTestCLI(t)
+	c.opt.UseTarget = "beta"
+	//Leaving the Vault sealed keeps the test to the one thing it is about:
+	// where the root token that initializing produced ends up.
+	c.opt.Init.Sealed = true
+
+	_ = captureStdout(t, func() {
+		if err := c.cmdInit("init"); err != nil {
+			t.Fatalf("cmdInit: %v", err)
+		}
+	})
+
+	cfg := readConfig(t)
+	if cfg.Vaults["beta"].Token != "beta-root" {
+		t.Errorf("beta token: got %q, want beta-root", cfg.Vaults["beta"].Token)
+	}
+	if cfg.Vaults["alpha"].Token != "token-alpha" {
+		t.Errorf("alpha token: got %q, want it untouched", cfg.Vaults["alpha"].Token)
+	}
+}

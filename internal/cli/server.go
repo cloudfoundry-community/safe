@@ -280,6 +280,10 @@ func (c *CLI) cmdInit(command string, args ...string) error {
 	if err != nil {
 		return err
 	}
+	tgt, err := cfg.Vault(opt.UseTarget)
+	if err != nil {
+		return err
+	}
 	v := connect(false)
 
 	if opt.Init.NKeys == 0 {
@@ -309,7 +313,15 @@ func (c *CLI) cmdInit(command string, args ...string) error {
 	}
 
 	/* auth with the new root token, transparently */
-	_ = cfg.SetToken(token)
+	//The token belongs to the Vault that was just initialized, which -T may
+	// have named rather than the current target.
+	target := cfg.Current
+	if opt.UseTarget != "" {
+		target = opt.UseTarget
+	}
+	if err := cfg.SetTokenFor(target, token); err != nil {
+		return err
+	}
 	if err := cfg.Write(); err != nil {
 		return err
 	}
@@ -369,7 +381,7 @@ func (c *CLI) cmdInit(command string, args ...string) error {
 	if !opt.Init.Sealed {
 		addrs := []string{}
 		gotStrongbox := false
-		if cfg.HasStrongbox() {
+		if usesStrongbox(tgt) {
 			if st, err := v.Strongbox(); err == nil {
 				gotStrongbox = true
 				for addr := range st {

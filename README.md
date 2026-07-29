@@ -180,9 +180,9 @@ cannot honour a key or a version say so rather than ignoring it:
   - Commands that write a whole secret — `set`, `ask`, `paste`, `ssh`,
     `rsa`, and `dhparam` — take a path only.
 
-  - Commands that walk a subtree — `tree`, `paths`, `values`, and
-    `export` — take a path only, since a key or a version cannot
-    scope a recursive walk.
+  - Commands that list what is under a path — `ls`, `tree`, `paths`,
+    `values`, and `export` — take a path only, since a key or a
+    version cannot scope a listing.
 
   - `gen` and `uuid` take `path:key`, which is how you name the key
     they are about to create.
@@ -215,13 +215,24 @@ safe get 'secret/dc1/we\\ird:password'
 ```
 
 `safe` prints paths in this same escaped form, so anything from `safe
-paths`, `safe paths --keys`, or `safe tree --keys` can be pasted
-straight back into another command:
+paths`, `safe paths --keys`, `safe tree --keys`, or `safe ls` can be
+pasted straight back into another command:
 
 ```
 safe paths --keys secret/dc1/admin
 secret/dc1/admin:password
 secret/dc1/admin:user\:name
+```
+
+`safe ls` prints one name per entry rather than a whole path, and
+escapes each name the same way, so joining a name to the path you
+listed gives a path `safe` accepts:
+
+```
+safe ls secret/dc1
+admin  we\:ird/
+safe ls 'secret/dc1/we\:ird'
+haproxy
 ```
 
 Quote these arguments, or your shell will eat the backslashes before
@@ -282,6 +293,24 @@ public: |
   -----BEGIN RSA PUBLIC KEY-----
   ...
   -----END RSA PRIVATE KEY-----
+```
+
+### ls \[-1|-q\] \[path ...\]
+
+List what sits directly under a path, one level deep: secrets plain,
+folders with a trailing slash.  With no path, the mounts are listed
+instead.  `-1` prints one entry per line, and `-q` skips checking
+whether each secret on a version 2 mount can still be read, which is
+quicker but shows secrets whose newest version has been deleted.
+
+```
+safe ls secret/dc1
+admin  concourse/
+
+safe ls -1 secret/dc1/concourse/pipeline-the-first
+aws
+dockerhub
+github
 ```
 
 ### tree path \[path ...\]

@@ -7,8 +7,10 @@ package cli
 // not ask them to clear.
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/cloudfoundry-community/safe/pkg/prompt"
 	"github.com/cloudfoundry-community/safe/pkg/rc"
 )
 
@@ -57,5 +59,33 @@ func TestCmdLogoutWithNothingTargetedReportsAnError(t *testing.T) {
 
 	if err := c.cmdLogout("logout"); err == nil {
 		t.Error("logging out with no target selected reported success")
+	}
+}
+
+func TestCmdAuthStoresTheTokenOnTheTargetNamedByDashT(t *testing.T) {
+	isolateHome(t)
+	alpha := newSealFake(t, false)
+	beta := newSealFake(t, false)
+	writeSaferc(t, twoTargets(alpha, beta))
+
+	prompt.SetReader(strings.NewReader("beta-token\n"))
+	t.Cleanup(func() { prompt.SetReader(nil) })
+
+	c := newTestCLI(t)
+	c.opt.UseTarget = "beta"
+
+	if err := c.cmdAuth("auth", "token"); err != nil {
+		t.Fatalf("cmdAuth: %v", err)
+	}
+
+	cfg := readConfig(t)
+	if cfg.Vaults["beta"].Token != "beta-token" {
+		t.Errorf("beta token: got %q, want beta-token", cfg.Vaults["beta"].Token)
+	}
+	if cfg.Vaults["alpha"].Token != "token-alpha" {
+		t.Errorf("alpha token: got %q, want it untouched", cfg.Vaults["alpha"].Token)
+	}
+	if cfg.Current != "alpha" {
+		t.Errorf("current target: got %q, want alpha", cfg.Current)
 	}
 }

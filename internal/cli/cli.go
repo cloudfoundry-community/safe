@@ -225,8 +225,9 @@ type Options struct {
 	} `cli:"tree"`
 
 	Values struct {
-		ShowKeys bool     `cli:"--keys"`
-		Paths    []string `cli:"-p, --path"`
+		ShowKeys    bool     `cli:"--keys"`
+		AllVersions bool     `cli:"-a, --all-versions"`
+		Paths       []string `cli:"-p, --path"`
 	} `cli:"values"`
 
 	Target struct {
@@ -774,7 +775,7 @@ vaults. This flag does nothing for kv v1 mounts.
 
 	r.Dispatch("values", &Help{
 		Summary: "Find secrets containing specified values",
-		Usage:   "safe values [--keys] [-p PATH ...] [VALUE ...]",
+		Usage:   "safe values [--keys] [-a] [-p PATH ...] [VALUE ...]",
 		Type:    NonDestructiveCommand,
 		Description: `
 Searches the hierarchy of secrets for any whose stored values equal one of
@@ -782,6 +783,15 @@ the given values. Matching is exact, case-sensitive, and against whole
 values; no substring or pattern matching is performed. Only the latest live
 version of each secret is inspected -- secrets whose newest version has been
 deleted or destroyed are not searched.
+
+-a (--all-versions) searches every readable version of each secret instead,
+which is what an audit of a leaked value wants: a credential that was
+rotated away still sits in the history. Each match is then reported as
+path^version, so a hit on a superseded version can be told apart from one on
+the value in use and read back exactly as printed. Deleted and destroyed
+versions are still not searched, since reading one would mean undeleting it.
+On a kv v1 mount, where a secret has only the one version, this reports
+every match as version 1.
 
 Search locations are given with -p (--path), which may be repeated to search
 several subtrees. The flag value must be a separate argument; the --path=x

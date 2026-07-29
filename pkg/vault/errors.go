@@ -35,6 +35,23 @@ func NewSecretNotFoundError(path string) error {
 	return secretNotFound{message: fmt.Sprintf("no secret exists at path `%s`", path)}
 }
 
+// NewVersionNotFoundError returns an error describing a version that could not
+// be read from a secret which does itself exist. state names why, in the
+// vocabulary `safe versions` prints — "deleted" or "destroyed" — or is empty
+// if the version was simply never created.
+//
+// The result is the same kind of error as NewSecretNotFoundError, since the
+// secret is still what could not be read; only the wording narrows. Callers
+// testing IsSecretNotFound or IsNotFound are unaffected.
+func NewVersionNotFoundError(path string, version uint64, state string) error {
+	if state != "" {
+		return secretNotFound{message: fmt.Sprintf(
+			"version %d of secret `%s` has been %s", version, path, state)}
+	}
+	return secretNotFound{message: fmt.Sprintf(
+		"no version %d of secret `%s` exists", version, path)}
+}
+
 // IsSecretNotFound returns true if the given error was created with
 // NewSecretNotFoundError(), including when the error is wrapped with %w.
 // False otherwise.

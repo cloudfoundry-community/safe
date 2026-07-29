@@ -513,13 +513,30 @@ expiry.
 Renews (re-signs) the certificate authority at `path`, without
 affecting the list of revoked certificates.
 
-### export path \[path ...\]
+### export \[-a|-d\] path \[path ...\]
 
 Export the given subtree(s) in a format suitable for migration
 (via a future `import` call), or long-term storage offline.
 Secrets will not be encrypted in this representation, so care
 should be taken in handling it.  Output will be printed to
 standard output.
+
+By default only the latest version of each secret is exported, which
+keeps the output readable by versions of `safe` before v1.0.0.  `-a`
+exports every version instead, in a newer format those versions cannot
+read.
+
+A secret is exported only if something in it can be read.  A plain
+export takes the latest version, so it skips a secret whose latest
+version has been deleted or destroyed; `-a` keeps any secret with at
+least one readable version, and records the unreadable ones in place
+as empty placeholders, so the versions around them keep their numbers.
+
+`-d` undeletes, reads, and re-deletes each deleted version so that it
+is exported with its value rather than as a placeholder, and it also
+brings in the secrets a plain export would have skipped entirely.  A
+destroyed version cannot be recovered and stays a placeholder either
+way.
 
 ### import <export.file
 

@@ -225,8 +225,10 @@ type Options struct {
 	} `cli:"tree"`
 
 	Values struct {
-		ShowKeys bool     `cli:"--keys"`
-		Paths    []string `cli:"-p, --path"`
+		ShowKeys    bool     `cli:"--keys"`
+		AllVersions bool     `cli:"-a, --all-versions"`
+		Deleted     bool     `cli:"-d, --deleted"`
+		Paths       []string `cli:"-p, --path"`
 	} `cli:"values"`
 
 	Target struct {
@@ -774,7 +776,7 @@ vaults. This flag does nothing for kv v1 mounts.
 
 	r.Dispatch("values", &Help{
 		Summary: "Find secrets containing specified values",
-		Usage:   "safe values [--keys] [-p PATH ...] [VALUE ...]",
+		Usage:   "safe values [--keys] [-ad] [-p PATH ...] [VALUE ...]",
 		Type:    NonDestructiveCommand,
 		Description: `
 Searches the hierarchy of secrets for any whose stored values equal one of
@@ -782,6 +784,23 @@ the given values. Matching is exact, case-sensitive, and against whole
 values; no substring or pattern matching is performed. Only the latest live
 version of each secret is inspected -- secrets whose newest version has been
 deleted or destroyed are not searched.
+
+-a (--all-versions) searches every readable version of each secret instead,
+which is what an audit of a leaked value wants: a credential that was
+rotated away still sits in the history. Each match is then reported as
+path^version, so a hit on a superseded version can be told apart from one on
+the value in use and read back exactly as printed. Only the versions that can
+be read without writing are searched; add -d for the deleted ones. On a kv v1
+mount, where a secret has only the one version, this reports every match as
+version 1.
+
+-d (--deleted) searches deleted versions too, by undeleting each one, reading
+it, and deleting it again -- the same cycle safe export -d uses. It writes to
+the Vault to answer the question, and an interrupted search can leave a
+version undeleted, so reach for it when a leaked credential has to be tracked
+down wherever it landed. Destroyed versions are gone and are searched by
+neither flag. Matches carry their version number under -d as well, since a
+match may be sitting in a version that is no longer live.
 
 Search locations are given with -p (--path), which may be repeated to search
 several subtrees. The flag value must be a separate argument; the --path=x

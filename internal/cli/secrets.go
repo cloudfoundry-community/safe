@@ -542,7 +542,11 @@ func (c *CLI) cmdValues(command string, args ...string) error {
 	paths = dedupeExportPaths(paths)
 
 	v := connect(true)
-	results, skipped, err := v.FindValueMatches(paths, values, opt.Values.ShowKeys)
+	results, skipped, err := v.FindValueMatches(paths, values, vault.ValueSearchOpts{
+		ShowKeys:    opt.Values.ShowKeys,
+		AllVersions: opt.Values.AllVersions,
+		Deleted:     opt.Values.Deleted,
+	})
 	//Partial results still print when some paths failed; err below makes
 	// main report the failure and exit non-zero.
 	for _, result := range results {

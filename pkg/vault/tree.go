@@ -1003,24 +1003,47 @@ func (w *treeWorker) workVersions(t secretTree) ([]secretTree, error) {
 	return ret, nil
 }
 
+// ValueSearchOpts tunes what FindValueMatches searches and what it reports.
+type ValueSearchOpts struct {
+	//ShowKeys reports each matching key of a secret rather than the path of
+	// the secret alone.
+	ShowKeys bool
+	//AllVersions searches every readable version of each secret rather than
+	// only the newest live one, and names the version each match came from.
+	AllVersions bool
+	//Deleted searches versions that have been deleted, by undeleting each
+	// one, reading it, and deleting it again. Destroyed versions are gone
+	// for good and are never searched.
+	Deleted bool
+}
+
 // FindValueMatches walks each of the given paths and reports the secrets
-// whose latest live version contains any of targetValues, compared exactly
-// and case-sensitively against whole stored values. With showKeys, each
-// match is rendered as escaped path:key exactly as Secrets.Paths() renders
-// keyed entries; otherwise the bare path of each matching secret is
-// reported once.
+// containing any of targetValues, compared exactly and case-sensitively
+// against whole stored values. With ShowKeys, each match is rendered as
+// escaped path:key exactly as Secrets.Paths() renders keyed entries;
+// otherwise the path of each matching secret is reported once.
 //
-// Results sort by PathLessThan on path with a bytewise key tiebreak.
-// skipped counts the subtrees the walk dropped because Vault denied access
-// to them. Walk errors are accumulated per path and returned joined,
+// Only the newest live version of a secret is searched unless AllVersions
+// is set, which searches the whole readable history and appends ^version to
+// every match, so that a match in a superseded version can be told from one
+// in the current value and read back as printed. Versions the walk cannot
+// read — deleted and destroyed ones — are searched in neither mode, since
+// reading them would mean writing to the Vault.
+//
+// Results sort by PathLessThan on path, then by version, then bytewise by
+// key. skipped counts the subtrees the walk dropped because Vault denied
+// access to them. Walk errors are accumulated per path and returned joined,
 // alongside whatever results the remaining paths produced.
-func (v *Vault) FindValueMatches(paths []string, targetValues []string, showKeys bool) (results []string, skipped uint64, err error) {
+func (v *Vault) FindValueMatches(paths []string, targetValues []string, opts ValueSearchOpts) (results []string, skipped uint64, err error) {
 	valueSet := make(map[string]bool, len(targetValues))
 	for _, value := range targetValues {
 		valueSet[value] = true
 	}
 
-	type valueMatch struct{ path, key string }
+	type valueMatch struct {
+		path, key string
+		version   uint64
+	}
 	var (
 		skipCount  atomic.Uint64
 		matches    []valueMatch
@@ -1029,8 +1052,11 @@ func (v *Vault) FindValueMatches(paths []string, targetValues []string, showKeys
 
 	for _, path := range paths {
 		secrets, cerr := v.ConstructSecrets(path, TreeOpts{
-			FetchKeys:        true,
-			SkippedForbidden: &skipCount,
+			FetchKeys:           true,
+			FetchAllVersions:    opts.AllVersions,
+			GetDeletedVersions:  opts.Deleted,
+			AllowDeletedSecrets: opts.Deleted,
+			SkippedForbidden:    &skipCount,
 		})
 		if cerr != nil {
 			err = errors.Join(err, fmt.Errorf("%s: %w", path, cerr))
@@ -1047,14 +1073,39 @@ func (v *Vault) FindValueMatches(paths []string, targetValues []string, showKeys
 				continue
 			}
 
-			data := secret.Versions[len(secret.Versions)-1].Data
-			for _, key := range data.Keys() {
-				if !valueSet[data.Get(key)] {
+			versions := secret.Versions
+			if !opts.AllVersions {
+				versions = versions[len(versions)-1:]
+			}
+
+			for _, version := range versions {
+				//Without Deleted the walk fetched no data for a version it
+				// could not read, so a deleted or destroyed one compares
+				// against nothing anyway; skipping it by state says so
+				// outright. With Deleted the walk undeleted and read them, and
+				// a destroyed version stays empty either way.
+				if !opts.Deleted && version.State != SecretStateAlive {
 					continue
 				}
-				matches = append(matches, valueMatch{path: secret.Path, key: key})
-				if !showKeys {
-					break
+
+				//Version 0 renders no ^suffix, which is what a search of the
+				// current value alone should print. Once more than the current
+				// value is in play, naming the version is what tells a match on
+				// a superseded or deleted one apart from a live match.
+				var number uint64
+				if opts.AllVersions || opts.Deleted {
+					number = uint64(version.Number)
+				}
+
+				data := version.Data
+				for _, key := range data.Keys() {
+					if !valueSet[data.Get(key)] {
+						continue
+					}
+					matches = append(matches, valueMatch{path: secret.Path, key: key, version: number})
+					if !opts.ShowKeys {
+						break
+					}
 				}
 			}
 		}
@@ -1064,16 +1115,19 @@ func (v *Vault) FindValueMatches(paths []string, targetValues []string, showKeys
 		if matches[i].path != matches[j].path {
 			return PathLessThan(matches[i].path, matches[j].path)
 		}
+		if matches[i].version != matches[j].version {
+			return matches[i].version < matches[j].version
+		}
 		return matches[i].key < matches[j].key
 	})
 
 	results = make([]string, 0, len(matches))
 	for _, match := range matches {
-		if showKeys {
-			results = append(results, EncodePath(match.path, match.key, 0))
-		} else {
-			results = append(results, EncodePath(match.path, "", 0))
+		key := ""
+		if opts.ShowKeys {
+			key = match.key
 		}
+		results = append(results, EncodePath(match.path, key, match.version))
 	}
 
 	return results, skipCount.Load(), err

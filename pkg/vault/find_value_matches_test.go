@@ -36,7 +36,7 @@ func TestFindValueMatchesShowKeys(t *testing.T) {
 	v, fv := newTestVault(t)
 	seedValueTree(fv)
 
-	got, skipped, err := v.FindValueMatches([]string{"secret"}, []string{"secret123"}, true)
+	got, skipped, err := v.FindValueMatches([]string{"secret"}, []string{"secret123"}, vault.ValueSearchOpts{ShowKeys: true})
 	if err != nil {
 		t.Fatalf("FindValueMatches: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestFindValueMatchesPathsOnly(t *testing.T) {
 	v, fv := newTestVault(t)
 	seedValueTree(fv)
 
-	got, _, err := v.FindValueMatches([]string{"secret"}, []string{"secret123"}, false)
+	got, _, err := v.FindValueMatches([]string{"secret"}, []string{"secret123"}, vault.ValueSearchOpts{})
 	if err != nil {
 		t.Fatalf("FindValueMatches: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestFindValueMatchesDeduplicatesPaths(t *testing.T) {
 	v, fv := newTestVault(t)
 	seedValueTree(fv)
 
-	got, _, err := v.FindValueMatches([]string{"secret"}, []string{"admin", "secret123"}, false)
+	got, _, err := v.FindValueMatches([]string{"secret"}, []string{"admin", "secret123"}, vault.ValueSearchOpts{})
 	if err != nil {
 		t.Fatalf("FindValueMatches: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestFindValueMatchesMultipleValues(t *testing.T) {
 	v, fv := newTestVault(t)
 	seedValueTree(fv)
 
-	got, _, err := v.FindValueMatches([]string{"secret"}, []string{"secret123", "abc123"}, true)
+	got, _, err := v.FindValueMatches([]string{"secret"}, []string{"secret123", "abc123"}, vault.ValueSearchOpts{ShowKeys: true})
 	if err != nil {
 		t.Fatalf("FindValueMatches: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestFindValueMatchesMultiplePaths(t *testing.T) {
 	seedValueTree(fv)
 
 	got, _, err := v.FindValueMatches(
-		[]string{"secret/test1", "secret/test2"}, []string{"admin", "user"}, true)
+		[]string{"secret/test1", "secret/test2"}, []string{"admin", "user"}, vault.ValueSearchOpts{ShowKeys: true})
 	if err != nil {
 		t.Fatalf("FindValueMatches: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestFindValueMatchesNoMatches(t *testing.T) {
 	v, fv := newTestVault(t)
 	seedValueTree(fv)
 
-	got, _, err := v.FindValueMatches([]string{"secret"}, []string{"nonexistent"}, true)
+	got, _, err := v.FindValueMatches([]string{"secret"}, []string{"nonexistent"}, vault.ValueSearchOpts{ShowKeys: true})
 	if err != nil {
 		t.Fatalf("FindValueMatches: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestFindValueMatchesIsExactNotSubstring(t *testing.T) {
 	v, fv := newTestVault(t)
 	fv.set("secret/app", map[string]string{"password": "secret123456"})
 
-	got, _, err := v.FindValueMatches([]string{"secret"}, []string{"secret123"}, true)
+	got, _, err := v.FindValueMatches([]string{"secret"}, []string{"secret123"}, vault.ValueSearchOpts{ShowKeys: true})
 	if err != nil {
 		t.Fatalf("FindValueMatches: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestFindValueMatchesValueWithColon(t *testing.T) {
 	fv.set("secret/app", map[string]string{"url": "https://example.com:8443"})
 
 	got, _, err := v.FindValueMatches(
-		[]string{"secret"}, []string{"https://example.com:8443"}, true)
+		[]string{"secret"}, []string{"https://example.com:8443"}, vault.ValueSearchOpts{ShowKeys: true})
 	if err != nil {
 		t.Fatalf("FindValueMatches: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestFindValueMatchesNonexistentPathErrors(t *testing.T) {
 	v, _ := newTestVault(t)
 
 	if _, _, err := v.FindValueMatches(
-		[]string{"nonexistent/path"}, []string{"value"}, true); err == nil {
+		[]string{"nonexistent/path"}, []string{"value"}, vault.ValueSearchOpts{ShowKeys: true}); err == nil {
 		t.Error("FindValueMatches on a missing path should return an error")
 	}
 }
@@ -193,7 +193,7 @@ func TestFindValueMatchesEmptyTargets(t *testing.T) {
 	v, fv := newTestVault(t)
 	seedValueTree(fv)
 
-	got, _, err := v.FindValueMatches([]string{"secret"}, nil, false)
+	got, _, err := v.FindValueMatches([]string{"secret"}, nil, vault.ValueSearchOpts{})
 	if err != nil {
 		t.Fatalf("FindValueMatches: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestFindValueMatchesEmptyStringValue(t *testing.T) {
 	v, fv := newTestVault(t)
 	fv.set("secret/app", map[string]string{"blank": "", "other": "x"})
 
-	got, _, err := v.FindValueMatches([]string{"secret"}, []string{""}, true)
+	got, _, err := v.FindValueMatches([]string{"secret"}, []string{""}, vault.ValueSearchOpts{ShowKeys: true})
 	if err != nil {
 		t.Fatalf("FindValueMatches: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestFindValueMatchesPartialFailure(t *testing.T) {
 	seedValueTree(fv)
 
 	got, _, err := v.FindValueMatches(
-		[]string{"secret", "nonexistent/x"}, []string{"secret123"}, false)
+		[]string{"secret", "nonexistent/x"}, []string{"secret123"}, vault.ValueSearchOpts{})
 	if err == nil {
 		t.Fatal("expected an error for the unwalkable path, got nil")
 	}
@@ -251,7 +251,7 @@ func TestFindValueMatchesOverlappingPaths(t *testing.T) {
 	seedValueTree(fv)
 
 	got, _, err := v.FindValueMatches(
-		[]string{"secret", "secret/nested"}, []string{"secret123"}, true)
+		[]string{"secret", "secret/nested"}, []string{"secret123"}, vault.ValueSearchOpts{ShowKeys: true})
 	if err != nil {
 		t.Fatalf("FindValueMatches: %v", err)
 	}
@@ -275,7 +275,7 @@ func TestFindValueMatchesSortsByPathLessThan(t *testing.T) {
 	fv.set("secret/a-b", map[string]string{"k": "match"})
 	fv.set("secret/a/x", map[string]string{"k": "match"})
 
-	got, _, err := v.FindValueMatches([]string{"secret"}, []string{"match"}, false)
+	got, _, err := v.FindValueMatches([]string{"secret"}, []string{"match"}, vault.ValueSearchOpts{})
 	if err != nil {
 		t.Fatalf("FindValueMatches: %v", err)
 	}
@@ -293,7 +293,7 @@ func TestFindValueMatchesEscapingMatchesPaths(t *testing.T) {
 	v, fv := newTestVault(t)
 	fv.set("secret/odd:colon", map[string]string{"od^d": "match"})
 
-	got, _, err := v.FindValueMatches([]string{"secret"}, []string{"match"}, true)
+	got, _, err := v.FindValueMatches([]string{"secret"}, []string{"match"}, vault.ValueSearchOpts{ShowKeys: true})
 	if err != nil {
 		t.Fatalf("FindValueMatches(--keys): %v", err)
 	}
@@ -311,7 +311,7 @@ func TestFindValueMatchesEscapingMatchesPaths(t *testing.T) {
 		t.Errorf("Secrets.Paths() = %v, want %v (escaping must stay in lockstep)", paths, want)
 	}
 
-	got, _, err = v.FindValueMatches([]string{"secret"}, []string{"match"}, false)
+	got, _, err = v.FindValueMatches([]string{"secret"}, []string{"match"}, vault.ValueSearchOpts{})
 	if err != nil {
 		t.Fatalf("FindValueMatches(paths): %v", err)
 	}
@@ -328,7 +328,7 @@ func TestFindValueMatchesCountsForbiddenSkips(t *testing.T) {
 	fv.set("secret/hidden/deep", map[string]string{"k": "secret123"})
 	fv.forbid("secret/hidden")
 
-	got, skipped, err := v.FindValueMatches([]string{"secret"}, []string{"secret123"}, false)
+	got, skipped, err := v.FindValueMatches([]string{"secret"}, []string{"secret123"}, vault.ValueSearchOpts{})
 	if err != nil {
 		t.Fatalf("FindValueMatches: %v", err)
 	}
@@ -339,5 +339,37 @@ func TestFindValueMatchesCountsForbiddenSkips(t *testing.T) {
 	want := []string{"secret/nested/path", "secret/test1", "secret/test2"}
 	if !slices.Equal(got, want) {
 		t.Errorf("FindValueMatches(forbidden sibling) = %v, want %v", got, want)
+	}
+}
+
+// A kv v1 secret has exactly one version, numbered 1. Asking for every
+// version there still names it, so the output shape does not depend on which
+// kind of mount was searched.
+func TestFindValueMatchesAllVersionsOnV1NamesVersionOne(t *testing.T) {
+	t.Parallel()
+	v, fv := newTestVault(t)
+	seedValueTree(fv)
+
+	got, _, err := v.FindValueMatches(
+		[]string{"secret"}, []string{"secret123"}, vault.ValueSearchOpts{AllVersions: true})
+	if err != nil {
+		t.Fatalf("FindValueMatches: %v", err)
+	}
+
+	want := []string{"secret/nested/path^1", "secret/test1^1", "secret/test2^1"}
+	if !slices.Equal(got, want) {
+		t.Errorf("FindValueMatches(--all-versions) = %v, want %v", got, want)
+	}
+
+	got, _, err = v.FindValueMatches(
+		[]string{"secret"}, []string{"secret123"},
+		vault.ValueSearchOpts{AllVersions: true, ShowKeys: true})
+	if err != nil {
+		t.Fatalf("FindValueMatches(--keys): %v", err)
+	}
+
+	want = []string{"secret/nested/path:password^1", "secret/test1:password^1", "secret/test2:token^1"}
+	if !slices.Equal(got, want) {
+		t.Errorf("FindValueMatches(--all-versions --keys) = %v, want %v", got, want)
 	}
 }

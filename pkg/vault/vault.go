@@ -500,6 +500,17 @@ func (v *Vault) canSemanticallyDelete(path string) error {
 func (v *Vault) Delete(path string, opts DeleteOpts) error {
 	path = Canonicalize(path)
 
+	//All works on every version, so a path that names one version asks for two
+	// different things at once. The version used to be dropped and the All
+	// taken: deleting every version of a secret when one was named, and, with
+	// Destroy, destroying every version and the metadata along with them --
+	// which cannot be undone, was reported as success, and happened just the
+	// same for a version that had never been written, since All also turns off
+	// the check that the named version exists.
+	if secretPath, _, version := ParsePath(path); opts.All && version != 0 {
+		return fmt.Errorf("cannot delete version %d of `%s' and every version of it at once: drop the version to keep --all, or drop --all to work on the one version", version, secretPath)
+	}
+
 	reqState := verifyStateAlive
 	if opts.Destroy {
 		reqState = verifyStateAliveOrDeleted

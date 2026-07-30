@@ -536,6 +536,23 @@ To get a shorter password, only 16 characters long:
 safe gen 16 secret/account password
 ```
 
+The length has to be at least one.  `safe gen 0 secret/account
+password` is refused, rather than storing an empty value under a
+name that reads like a credential.
+
+`--policy` limits the characters a password is made of.  It goes
+inside a regular expression character class, so it has to be one,
+and it has to keep at least one printable character:
+
+```
+safe gen 16 --policy a-z0-9 secret/account password
+```
+
+Several secrets can be named at once, as `path:key` or as `path
+key`, and the two forms can be mixed.  The whole list is read
+before the first password is generated, so an argument that
+cannot be used stops the command with nothing written.
+
 ### fmt format_type path oldKey newKey
 
 Take the key at `path:oldKey`, reformat it according to **format_type**,
@@ -576,6 +593,17 @@ By default, a 2048-bit key will be generated.  The `nbits`
 parameter allows you to change that.
 
 Each path gets a unique RSA keypair.
+
+### dhparam \[nbits\] path \[path ...\]
+
+Generate a set of Diffie-Hellman key exchange parameters, adding
+the key "dhparam-pem" to each path.
+
+By default, 2048-bit parameters will be generated.  The `nbits`
+parameter allows you to change that, to 1024 or 4096.
+
+Each path gets its own parameter set.  Generating one takes a
+while, so every path is read before the first set is generated.
 
 ### prompt ...
 

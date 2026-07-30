@@ -509,8 +509,21 @@ func (c *CLI) cmdX509Revoke(command string, args ...string) error {
 		return err
 	}
 
+	//A revocation list names serial numbers, and a serial number only
+	// identifies a certificate within the authority that issued it. safe
+	// numbers the certificates each of its CAs issues from one, so a serial
+	// borrowed from another CA is very likely to be one this CA handed out
+	// itself: revoking a foreign certificate would revoke an unrelated one
+	// of the CA's own, and say nothing about the certificate named here.
+	if err := ca.Certificate.CheckSignature(
+		cert.Certificate.SignatureAlgorithm,
+		cert.Certificate.RawTBSCertificate,
+		cert.Certificate.Signature,
+	); err != nil {
+		return fmt.Errorf("%s was not signed by %s", args[0], opt.X509.Revoke.SignedBy)
+	}
+
 	/* revoke the Certificate */
-	/* FIXME make sure the CA signed this cert */
 	ca.Revoke(cert)
 	s, err = ca.Secret(false) // SkipIfExists doesnt make sense in the context of revoke
 	if err != nil {

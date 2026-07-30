@@ -1260,6 +1260,18 @@ func (v *Vault) FindSigningCA(cert *X509, certPath string, signPath string) (*X5
 			if !ca.IsCA() {
 				return nil, "", fmt.Errorf("%s is not a certificate authority", caPath)
 			}
+			//The sibling is a guess. Signing under it when it is not the
+			// authority that issued the certificate hands back something
+			// with a different issuer than the one it went in with, which
+			// is not what renewing or reissuing was asked to do. Naming an
+			// authority explicitly still moves a certificate to a new one.
+			if err := ca.Certificate.CheckSignature(
+				cert.Certificate.SignatureAlgorithm,
+				cert.Certificate.RawTBSCertificate,
+				cert.Certificate.Signature,
+			); err != nil {
+				return nil, "", fmt.Errorf("%s did not sign %s; name its authority with --signed-by", caPath, certPath)
+			}
 			return ca, caPath, nil
 		}
 	}

@@ -396,16 +396,26 @@ func (c *CLI) cmdLs(command string, args ...string) error {
 					}
 
 					if mountVersion == 2 {
-						//Read parses the mini-language, so it takes the
-						// escaped form: a colon anywhere in the path would
-						// otherwise be read as a key separator.
-						_, err := v.Read(vault.EncodePath(child, "", 0))
+						//Version metadata answers whether the newest version
+						// can be read, which is all the listing needs to
+						// decide. Reading the secret answered the same
+						// question by fetching the value itself, so listing a
+						// folder pulled back every secret in it and logged a
+						// read of each one, for output that is names only.
+						//
+						//Versions takes a literal path rather than safe's own
+						// syntax, so a colon in a name needs no escaping round
+						// trip to survive the lookup.
+						versions, err := v.Versions(child)
 						if err != nil {
 							if vault.IsNotFound(err) {
 								continue
 							}
 
 							return err
+						}
+						if len(versions) == 0 || !versions[len(versions)-1].Alive() {
+							continue
 						}
 					}
 				}

@@ -304,9 +304,11 @@ instead.  `-1` prints one entry per line.
 A secret is listed only if its newest version can still be read, so
 one whose newest version has been deleted or destroyed is left out —
 even when an older version of it is still live.  Finding that out
-costs a read per secret, and `-q` skips the check and lists those
-secrets too.  Only a version 2 mount keeps versions, so neither the
-check nor `-q` does anything on a version 1 mount.
+costs a version lookup per secret, and `-q` skips the check and lists
+those secrets too.  The lookup reads version metadata rather than the
+secret, so listing a folder needs no access to the values in it.  Only
+a version 2 mount keeps versions, so neither the check nor `-q` does
+anything on a version 1 mount.
 
 ```
 safe ls secret/dc1
@@ -326,7 +328,8 @@ Vault.
 `-d` draws only the folders, which is a quicker way to get your
 bearings in an unfamiliar Vault.  `--keys` names the keys inside each
 secret beside it.  `-q` skips the liveness check, exactly as it does
-for `ls` above.
+for `ls` above; with `--keys` the lookup is made anyway, since that is
+how the keys are reached.
 
 ```
 safe tree secret/dc1
@@ -349,7 +352,8 @@ Provide a flat listing of all reachable keys in the Vault.
 
 `--keys` prints a line per key, as `path:key`, rather than a line per
 secret.  `-q` skips the liveness check, exactly as it does for `ls`
-above.
+above; with `--keys` the lookup is made anyway, since that is how the
+keys are reached.
 
 ```
 safe paths secret/dc1

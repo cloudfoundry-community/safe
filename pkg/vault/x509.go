@@ -843,7 +843,7 @@ func (x *X509) MakeCA() {
 	x.Serial = big.NewInt(1)
 	x.CRL = &x509.RevocationList{
 		RevokedCertificateEntries: make([]x509.RevocationListEntry, 0),
-		Number:                    big.NewInt(1),
+		Number:                    big.NewInt(0),
 	}
 }
 
@@ -885,7 +885,7 @@ func (x X509) Secret(skipIfExists bool) (*Secret, error) {
 		if x.CRL == nil {
 			x.CRL = &x509.RevocationList{
 				RevokedCertificateEntries: make([]x509.RevocationListEntry, 0),
-				Number:                    big.NewInt(1),
+				Number:                    big.NewInt(0),
 			}
 		}
 		if x.CRL.RevokedCertificateEntries == nil {
@@ -897,15 +897,24 @@ func (x X509) Secret(skipIfExists bool) (*Secret, error) {
 				x.Certificate.SubjectKeyId = kid
 			}
 		}
+		//RFC 5280 asks each CRL an issuer publishes to carry a number above
+		// the last one, and this method publishes a new CRL every time it
+		// runs. Reusing the stored number shipped every one of them as
+		// number one, so a relying party that keeps the highest-numbered
+		// CRL it has seen would never take a later one — including the one
+		// that carried a revocation.
+		next := big.NewInt(1)
+		if x.CRL.Number != nil {
+			next = next.Add(next, x.CRL.Number)
+		}
+		x.CRL.Number = next
+
 		now := time.Now()
 		template := &x509.RevocationList{
 			RevokedCertificateEntries: x.CRL.RevokedCertificateEntries,
-			Number:                    x.CRL.Number,
+			Number:                    next,
 			ThisUpdate:                now,
 			NextUpdate:                now.Add(10 * 365 * 24 * time.Hour),
-		}
-		if template.Number == nil {
-			template.Number = big.NewInt(1)
 		}
 		b, err := x509.CreateRevocationList(rand.Reader, template, x.Certificate, x.PrivateKey)
 		if err != nil {
@@ -1023,7 +1032,7 @@ func (ca *X509) Revoke(cert *X509) {
 	if ca.CRL == nil {
 		ca.CRL = &x509.RevocationList{
 			RevokedCertificateEntries: make([]x509.RevocationListEntry, 0),
-			Number:                    big.NewInt(1),
+			Number:                    big.NewInt(0),
 		}
 	}
 

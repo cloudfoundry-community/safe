@@ -841,8 +841,11 @@ each match is printed as path:key instead.
 		Description: `
 -d (--destroy) will cause KV v2 secrets to be destroyed instead of
 being marked as deleted. For KV v1 backends, this would do nothing.
--a (--all) will delete (or destroy) all versions of the secret instead
-of just the specified (or latest if unspecified) version.
+-a (--all) will delete (or destroy) every version of the secret instead
+of the latest one.
+-r (--recurse) removes a whole tree of secrets, asking first unless
+-f (--force) is given. -f also carries on past a path that holds no
+secret.
 
 A path may name a single key, and may name a version as well. Removing
 a key writes what is left of the secret as a new version; a version
@@ -851,11 +854,17 @@ version therefore only works when that version holds nothing but the
 key, and what goes is the version itself. Anything else is refused —
 safe copy is the command that reads a key out of an old version.
 
-Both flags above work on whole versions, so with a key they apply only
-when the key is the whole secret. Where the secret holds other keys the
-key would stay behind in the versions already written, and the request
-is refused rather than answered with a new version that leaves the old
+-d and -a work on whole versions, so with a key they apply only when
+the key is the whole secret. Where the secret holds other keys the key
+would stay behind in the versions already written, and the request is
+refused rather than answered with a new version that leaves the old
 value where it was.
+
+-a works on every version there is, and -r on a tree of secrets, so
+neither can be given a path that names one version, nor -r a path that
+names a key. Each pair asks for two different things at once and is
+refused. Every path given is read this way before any of them is
+removed, so a refusal on the last one leaves the rest where they were.
 `}, c.cmdDelete)
 
 	r.Dispatch("undelete", &Help{

@@ -472,6 +472,21 @@ they apply only when the key is the whole secret; otherwise the key would
 stay behind in the versions already written, and safe says so rather than
 writing a new version and calling it done.
 
+`-a` works on every version there is, so a path that names one version
+asks for two different things at once, and safe refuses the pair:
+
+```
+safe delete -a secret/db^3     # refused; drop the -a or drop the ^3
+```
+
+`-r` (`--recurse`) removes a whole tree of secrets, and refuses in the
+same way a path that names a key or a version, neither of which is a
+tree. `-f` (`--force`) skips the confirmation `-r` asks for, and carries
+on past a path that holds no secret.
+
+Every path given is read against the flags before any of them is
+removed, so a refusal on the last one leaves the rest where they were.
+
 ### move oldpath newpath
 
 Move a secret from `oldpath` to `newpath`, a rename of sorts.

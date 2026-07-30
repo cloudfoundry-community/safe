@@ -739,7 +739,14 @@ paths/keys.
 		Type:    NonDestructiveCommand,
 		Description: `
 	Specifying the -1 flag will print one result per line.
-	Specifying the -q flag will show secrets which have been marked as deleted.
+
+	A secret is listed only if its newest version can still be read, which
+	costs one version lookup per secret. The lookup reads version metadata
+	and not the secret, so listing a folder needs no access to the values
+	in it. Specifying the -q flag skips the lookup, which is quicker on a
+	large folder and lists the secrets that have been marked as deleted
+	along with the rest. Only a kv v2 mount keeps versions, so neither the
+	check nor -q does anything on a kv v1 mount.
 `,
 	}, c.cmdLs)
 
@@ -752,11 +759,14 @@ Walks the hierarchy of secrets stored underneath a given path, listing all
 reachable name/value pairs and displaying them in a tree format.  If '-d' is
 given, only the containing folders will be printed; this more concise output
 can be useful when you're trying to get your bearings. If '-q' is given, safe
-will not inspect each key in a v1 v2 mount backend to see if it has been marked
-as deleted. This may cause keys which would 404 in an attempt to read them to
-appear in the tree, but is often considerably quicker for larger vaults. This
-flag does nothing for kv v1 mounts. If '--keys' is given, the keys within each
-secret will be displayed inline with the secret name in the format:
+will not look up the versions of each secret on a kv v2 mount to see whether
+the newest one has been marked as deleted. This may cause secrets which would
+404 in an attempt to read them to appear in the tree, but is often considerably
+quicker for larger vaults. This flag does nothing for kv v1 mounts. With
+'--keys' the lookup is made anyway, since the keys are reached through it, so
+'-q' then changes which secrets are listed without saving any work. If '--keys'
+is given, the keys within each secret will be displayed inline with the secret
+name in the format:
 <secret-name>: key1, key2, key3
 `,
 	}, c.cmdTree)
@@ -768,10 +778,13 @@ secret will be displayed inline with the secret name in the format:
 		Description: `
 Walks the hierarchy of secrets stored underneath a given path, listing all
 reachable name/value pairs and displaying them in a list. If '-q' is given,
-safe will not inspect each key in a v1 v2 mount backend to see if it has been
-marked as deleted. This may cause keys which would 404 in an attempt to read
-them to appear in the tree, but is often considerably quicker for larger
-vaults. This flag does nothing for kv v1 mounts.
+safe will not look up the versions of each secret on a kv v2 mount to see
+whether the newest one has been marked as deleted. This may cause secrets which
+would 404 in an attempt to read them to appear in the listing, but is often
+considerably quicker for larger vaults. This flag does nothing for kv v1
+mounts. With '--keys' the lookup is made anyway, since the keys are reached
+through it, so '-q' then changes which secrets are listed without saving any
+work.
 `}, c.cmdPaths)
 
 	r.Dispatch("values", &Help{

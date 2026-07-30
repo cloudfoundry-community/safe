@@ -36,6 +36,12 @@ type cliFakeVault struct {
 	// destroyed version still occupies its number.
 	versions map[string][]*fakeVersion
 	v2       bool
+	//log holds every request served, as "METHOD /path?query", oldest first.
+	// What a command asks the Vault for is part of its behaviour: a listing
+	// that reads each secret to find out whether it is there hands back
+	// plaintext it never prints, and a flag that promises to skip a lookup
+	// has to actually skip it. Neither shows up in the output.
+	log []string
 }
 
 // fakeVersion is one version of a version 2 secret. A version is alive until
@@ -56,7 +62,30 @@ func (f *cliFakeVault) kvVersion() int {
 	return 1
 }
 
+// record notes one served request. It takes the lock and releases it before
+// the handlers take it themselves.
+func (f *cliFakeVault) record(r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.log = append(f.log, r.Method+" "+r.URL.RequestURI())
+}
+
+// requests returns a copy of the log.
+func (f *cliFakeVault) requests() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.log...)
+}
+
+// forgetRequests empties the log, so one test can measure two commands.
+func (f *cliFakeVault) forgetRequests() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.log = nil
+}
+
 func (f *cliFakeVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	f.record(r)
 	w.Header().Set("Content-Type", "application/json")
 	if strings.HasPrefix(r.URL.Path, "/v1/sys/internal/ui/mounts") {
 		//The client looks for the mount under data.secret; anything else

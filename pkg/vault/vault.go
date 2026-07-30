@@ -587,12 +587,16 @@ func (v *Vault) deleteEntireSecret(path string, destroy bool, all bool) error {
 }
 
 func (v *Vault) deleteSpecificKey(path string) error {
-	secretPath, key, _ := ParsePath(path)
+	secretPath, key, version := ParsePath(path)
 	//ParsePath unescaped the secret path. Read, Write, and deleteEntireSecret
 	// all parse their argument again, so they need the escaped form back or
 	// they split a second time at a colon that belongs to the path.
-	encodedPath := EncodePath(secretPath, "", 0)
-	secret, err := v.Read(encodedPath)
+	//
+	// The version goes back with it. Dropping it reads and removes the key from
+	// the latest version instead of the one that was named — an edit to a
+	// secret nobody asked about, leaving the named version as it was.
+	versionedPath := EncodePath(secretPath, "", version)
+	secret, err := v.Read(versionedPath)
 	if err != nil {
 		return err
 	}
@@ -607,9 +611,12 @@ func (v *Vault) deleteSpecificKey(path string) error {
 		//
 		//At some point, we should probably get Destroy routed into here so that we can destroy
 		// secrets through specifying keys
-		return v.deleteEntireSecret(encodedPath, false, false)
+		return v.deleteEntireSecret(versionedPath, false, false)
 	}
-	return v.Write(encodedPath, secret)
+	//What is left goes on as a new version. canSemanticallyDelete has already
+	// turned away anything but the latest version by this point, so this never
+	// writes an old version forward over a newer one.
+	return v.Write(EncodePath(secretPath, "", 0), secret)
 }
 
 // DeleteVersions marks the given versions of the given secret as deleted for

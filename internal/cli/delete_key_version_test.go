@@ -106,6 +106,63 @@ func TestCopyingAKeyOffAnOlderVersionIsAllowed(t *testing.T) {
 	assertVersionData(t, fv, "secret/app", 1, map[string]string{"password": "one", "username": "admin"})
 }
 
+func TestDeletingTheOnlyKeyOfAnOlderVersionDeletesThatVersion(t *testing.T) {
+	isolateHome(t)
+	fv := newCLIFakeV2(t)
+	fv.setV2("secret/app",
+		map[string]string{"password": "one"},
+		map[string]string{"password": "two"},
+	)
+
+	c := newTestCLI(t)
+	if err := c.cmdDelete("delete", "secret/app:password^1"); err != nil {
+		t.Fatalf("cmdDelete: %v", err)
+	}
+
+	//Version 1 was the one named, so version 1 is the one that goes.
+	got := fv.versionStates("secret/app")
+	want := []string{"deleted", "alive"}
+	if !equalStrings(got, want) {
+		t.Errorf("version states = %v, want %v", got, want)
+	}
+	assertVersionData(t, fv, "secret/app", 2, map[string]string{"password": "two"})
+}
+
+func TestMovingTheOnlyKeyOffAnOlderVersionTakesThatVersion(t *testing.T) {
+	isolateHome(t)
+	fv := newCLIFakeV2(t)
+	fv.setV2("secret/app",
+		map[string]string{"password": "one"},
+		map[string]string{"password": "two"},
+	)
+
+	c := newTestCLI(t)
+	if err := c.cmdMove("move", "secret/app:password^1", "secret/other:password"); err != nil {
+		t.Fatalf("cmdMove: %v", err)
+	}
+
+	assertVersionData(t, fv, "secret/other", 1, map[string]string{"password": "one"})
+	got := fv.versionStates("secret/app")
+	want := []string{"deleted", "alive"}
+	if !equalStrings(got, want) {
+		t.Errorf("version states = %v, want %v", got, want)
+	}
+}
+
+// Naming the latest version is the same request as naming no version at all.
+func TestDeletingAKeyOfTheLatestVersionNamedExplicitly(t *testing.T) {
+	isolateHome(t)
+	fv := newCLIFakeV2(t)
+	fv.setV2("secret/app", map[string]string{"password": "one", "username": "admin"})
+
+	c := newTestCLI(t)
+	if err := c.cmdDelete("delete", "secret/app:password^1"); err != nil {
+		t.Fatalf("cmdDelete: %v", err)
+	}
+
+	assertVersionData(t, fv, "secret/app", 2, map[string]string{"username": "admin"})
+}
+
 // A key that is not in the named version is a missing key, and saying so sends
 // the reader somewhere different than the refusal above does.
 func TestDeletingAKeyMissingFromTheNamedVersionSaysSo(t *testing.T) {

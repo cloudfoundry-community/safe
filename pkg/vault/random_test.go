@@ -12,7 +12,9 @@ import (
 func TestRandomLength(t *testing.T) {
 	t.Parallel()
 
-	lengths := []int{0, 1, 8, 16, 32, 64, 128}
+	//A length below one is refused rather than returned as an empty password;
+	// see TestRandomRefusesALengthBelowOne.
+	lengths := []int{1, 8, 16, 32, 64, 128}
 	for _, n := range lengths {
 		n := n
 		t.Run("", func(t *testing.T) {

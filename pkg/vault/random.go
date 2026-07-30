@@ -13,6 +13,13 @@ var (
 )
 
 func random(n int, policy string) (string, error) {
+	//No characters is not a password. `safe gen 0 secret/db pw' used to store
+	// the empty string under pw and report success, leaving something that
+	// reads like a generated credential and is not one.
+	if n < 1 {
+		return "", fmt.Errorf("cannot generate a password of %d characters: a length of at least one is needed", n)
+	}
+
 	//A policy is whatever was typed after --policy, and it is put inside a
 	// character class to say which characters to keep. Not every string is one:
 	// compiling it with MustCompile answered a mistyped policy with a panic and

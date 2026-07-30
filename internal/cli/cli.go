@@ -843,6 +843,19 @@ each match is printed as path:key instead.
 being marked as deleted. For KV v1 backends, this would do nothing.
 -a (--all) will delete (or destroy) all versions of the secret instead
 of just the specified (or latest if unspecified) version.
+
+A path may name a single key, and may name a version as well. Removing
+a key writes what is left of the secret as a new version; a version
+already written is never rewritten. Naming a key alongside an older
+version therefore only works when that version holds nothing but the
+key, and what goes is the version itself. Anything else is refused —
+safe copy is the command that reads a key out of an old version.
+
+Both flags above work on whole versions, so with a key they apply only
+when the key is the whole secret. Where the secret holds other keys the
+key would stay behind in the versions already written, and the request
+is refused rather than answered with a new version that leaves the old
+value where it was.
 `}, c.cmdDelete)
 
 	r.Dispatch("undelete", &Help{
@@ -898,6 +911,11 @@ rting garbage data and then destroying it (which is originally done to preserve 
 		Description: `
 Specifying the --deep (-d) flag will cause versions to be grabbed from the source
 and overwrite all versions of the secret at the destination.
+
+A move is a copy followed by a delete of the source, so it can only be asked
+for where the delete half of it is possible. Moving one key off an older
+version is not: that version cannot be rewritten to leave the key out. Use
+safe copy where the source is to stay as it is.
 `}, c.cmdMove)
 
 	r.Dispatch("copy", &Help{

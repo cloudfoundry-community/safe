@@ -410,6 +410,25 @@ Removes multiple paths from the Vault.
 safe delete secret/unused
 ```
 
+A path may name a single key, and on a version 2 backend it may name a
+version as well.
+
+```
+safe delete secret/db:password
+safe delete secret/db^3
+```
+
+Removing a key writes what is left of the secret as a new version. A
+version already written is never rewritten, so naming a key together with
+an older version only works when that version holds nothing but the key —
+in which case the version itself is what goes. Anything else is refused,
+and `safe copy` is the command that reads a key out of an old version.
+
+`-D` (`--destroy`) and `-a` (`--all`) work on whole versions. With a key,
+they apply only when the key is the whole secret; otherwise the key would
+stay behind in the versions already written, and safe says so rather than
+writing a new version and calling it done.
+
 ### move oldpath newpath
 
 Move a secret from `oldpath` to `newpath`, a rename of sorts.

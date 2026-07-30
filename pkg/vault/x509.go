@@ -989,6 +989,17 @@ func (ca *X509) Sign(x *X509, ttl time.Duration) error {
 		return fmt.Errorf("requested signature algorithm is not compatible with the signing CA key: %w", err)
 	}
 
+	//Signing itself with a key it did not have before: the certificate being
+	// replaced still carries the public key of the key that is going away, and
+	// both the authority key identifier and the signature have to name the key
+	// doing the signing. Left alone, the result claims to be self-signed while
+	// carrying a signature that only the discarded key can account for, and
+	// nothing can verify it.
+	if ca == x {
+		ca.Certificate.PublicKey = x.PrivateKey.Public()
+		ca.Certificate.SubjectKeyId, _ = getKeyIDFromPublicKey(x.PrivateKey.Public())
+	}
+
 	x.Certificate.AuthorityKeyId = ca.getKeyID()
 	x.Certificate.SubjectKeyId, _ = getKeyIDFromPublicKey(x.PrivateKey.Public())
 	raw, err := x509.CreateCertificate(rand.Reader, x.Certificate, ca.Certificate, x.PrivateKey.Public(), ca.PrivateKey)

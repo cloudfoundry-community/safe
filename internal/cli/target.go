@@ -253,10 +253,16 @@ func (c *CLI) cmdTarget(command string, args ...string) error {
 		if err != nil {
 			return err
 		}
+		//Saved before it is reported: a home directory that cannot be written
+		// to used to be answered with the new target on the screen and the old
+		// one still in the file.
+		if err := cfg.Write(); err != nil {
+			return err
+		}
 		if !opt.Quiet {
 			printTarget()
 		}
-		return cfg.Write()
+		return nil
 	}
 
 	if len(args) == 2 {
@@ -302,10 +308,13 @@ func (c *CLI) cmdTarget(command string, args ...string) error {
 		if err != nil {
 			return err
 		}
+		if err := cfg.Write(); err != nil {
+			return err
+		}
 		if !opt.Quiet {
 			printTarget()
 		}
-		return cfg.Write()
+		return nil
 	}
 
 	return r.Usage("target")

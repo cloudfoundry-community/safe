@@ -950,9 +950,13 @@ func (ca *X509) Sign(x *X509, ttl time.Duration) error {
 		}
 		x.Certificate.SerialNumber = serial
 	} else {
-		x.Certificate.SerialNumber = ca.Serial
 		ca.Serial.Add(ca.Serial, big.NewInt(1))
 		ca.Serial.Mod(ca.Serial, maxSerial)
+		//Take a copy rather than share the CA's counter. Revoke records the
+		// number it is handed by reference, and a certificate holding the
+		// counter itself would see its serial move every time the CA issued
+		// anything else.
+		x.Certificate.SerialNumber = new(big.Int).Set(ca.Serial)
 	}
 
 	x.Certificate.NotBefore = time.Now()

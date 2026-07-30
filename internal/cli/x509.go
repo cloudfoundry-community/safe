@@ -283,6 +283,15 @@ func (c *CLI) cmdX509Reissue(command string, args ...string) error {
 		return err
 	}
 
+	//Which authority signed this is a fact about the certificate as stored,
+	// and answering it reads the signature the certificate arrived with. The
+	// changes below overwrite the algorithm that signature was made with, so
+	// the authority has to be found before they are applied.
+	ca, caPath, err := v.FindSigningCA(cert, args[0], opt.X509.Reissue.SignedBy)
+	if err != nil {
+		return err
+	}
+
 	if len(opt.X509.Reissue.Name) > 0 {
 		ips, dns, email := vault.CategorizeSANs(uniq(opt.X509.Reissue.Name))
 		cert.Certificate.IPAddresses = ips
@@ -324,12 +333,6 @@ func (c *CLI) cmdX509Reissue(command string, args ...string) error {
 		// signing CA at signing time, rather than preserving the previous
 		// certificate's value, which may not match the new key.
 		cert.Certificate.SignatureAlgorithm = x509.UnknownSignatureAlgorithm
-	}
-
-	/* find the CA */
-	ca, caPath, err := v.FindSigningCA(cert, args[0], opt.X509.Reissue.SignedBy)
-	if err != nil {
-		return err
 	}
 
 	// Get new expiry date
@@ -411,6 +414,15 @@ func (c *CLI) cmdX509Renew(command string, args ...string) error {
 		return err
 	}
 
+	//Which authority signed this is a fact about the certificate as stored,
+	// and answering it reads the signature the certificate arrived with.
+	// --sig-algorithm overwrites the algorithm that signature was made with,
+	// so the authority has to be found before the changes below are applied.
+	ca, caPath, err := v.FindSigningCA(cert, args[0], opt.X509.Renew.SignedBy)
+	if err != nil {
+		return err
+	}
+
 	if len(opt.X509.Renew.Name) > 0 {
 		ips, dns, email := vault.CategorizeSANs(uniq(opt.X509.Renew.Name))
 		cert.Certificate.IPAddresses = ips
@@ -447,12 +459,6 @@ func (c *CLI) cmdX509Renew(command string, args ...string) error {
 		}
 
 		cert.Certificate.SignatureAlgorithm = sigAlgo
-	}
-
-	/* find the CA */
-	ca, caPath, err := v.FindSigningCA(cert, args[0], opt.X509.Renew.SignedBy)
-	if err != nil {
-		return err
 	}
 
 	// Get new expiry date

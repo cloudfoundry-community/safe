@@ -308,7 +308,13 @@ func (c *CLI) cmdTargetDelete(command string, args ...string) error {
 	}
 
 	delete(cfg.Vaults, alias)
-	if cfg.Current == alias {
+	//The selection is compared by resolving it rather than by matching the
+	// alias: a config written before it was recorded by alias names the current
+	// target by URL, and a URL stops naming anything once the target carrying
+	// it is gone. Left as it was, the selection would name a Vault that is not
+	// in the file, which every later command -- including the write below --
+	// reports as a missing current target.
+	if _, ok, _ := cfg.Alias(cfg.Current); !ok {
 		cfg.Current = ""
 	}
 

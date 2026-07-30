@@ -32,8 +32,15 @@ func TestRandomRefusesAPolicyThatIsNotACharacterClass(t *testing.T) {
 func TestRandomRefusesAnEmptyPolicy(t *testing.T) {
 	t.Parallel()
 
-	if got, err := random(16, ""); err == nil {
+	got, err := random(16, "")
+	if err == nil {
 		t.Fatalf("random(16, \"\") = %q, want a refusal", got)
+	}
+	//An empty policy compiles to `[^]', which the regexp parser refuses in its
+	// own words. Said in safe's words instead, since a reader who typed
+	// nothing is not helped by a complaint about a missing bracket.
+	if strings.Contains(err.Error(), "regexp") {
+		t.Errorf("error %q reads as a regexp parse failure, want it said plainly", err)
 	}
 }
 

@@ -522,7 +522,7 @@ func (v *Vault) Delete(path string, opts DeleteOpts) error {
 		return v.deleteEntireSecret(path, opts.Destroy, opts.All)
 	}
 
-	return v.deleteSpecificKey(path)
+	return v.deleteSpecificKey(path, opts)
 }
 
 func (v *Vault) deleteEntireSecret(path string, destroy bool, all bool) error {
@@ -586,7 +586,7 @@ func (v *Vault) deleteEntireSecret(path string, destroy bool, all bool) error {
 	return v.client.Delete(secret, &vaultkv.KVDeleteOpts{Versions: versions, V1Destroy: true})
 }
 
-func (v *Vault) deleteSpecificKey(path string) error {
+func (v *Vault) deleteSpecificKey(path string, opts DeleteOpts) error {
 	secretPath, key, version := ParsePath(path)
 	//ParsePath unescaped the secret path. Read, Write, and deleteEntireSecret
 	// all parse their argument again, so they need the escaped form back or
@@ -609,9 +609,21 @@ func (v *Vault) deleteSpecificKey(path string) error {
 		// We can only be here and not be on the latest version if this was the only key remaining
 		// and we're just trying to nuke the secret
 		//
-		//At some point, we should probably get Destroy routed into here so that we can destroy
-		// secrets through specifying keys
-		return v.deleteEntireSecret(versionedPath, false, false)
+		//The key was the whole secret, so removing it removes versions, which
+		// is what --destroy and --all are asking about. They used to be dropped
+		// here: a destroy reported success and left the value where an undelete
+		// would bring it straight back.
+		return v.deleteEntireSecret(versionedPath, opts.Destroy, opts.All)
+	}
+	//Destroying, and deleting every version, both work on whole versions.
+	// Neither can be done to one key of a secret that holds others: the key
+	// stays in every version already written. Writing a new version without
+	// the key and calling that a destroy is what safe used to do.
+	if opts.Destroy {
+		return fmt.Errorf("cannot destroy the key %s: %s holds other keys, and destroying removes whole versions", key, secretPath)
+	}
+	if opts.All {
+		return fmt.Errorf("cannot delete the key %s from every version: %s holds other keys, and a version already written cannot be rewritten", key, secretPath)
 	}
 	//What is left goes on as a new version. canSemanticallyDelete has already
 	// turned away anything but the latest version by this point, so this never

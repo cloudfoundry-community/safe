@@ -474,13 +474,22 @@ func (v *Vault) canSemanticallyDelete(path string) error {
 		return nil
 	}
 
-	s, err := v.Read(path)
+	//Read the version, not the key: a read of a path that names a key hands
+	// back that one key, so asking this way makes every version look as though
+	// it held nothing else, and the check below can never find anything to
+	// object to. ParsePath unescaped the secret path, and Read parses its
+	// argument again, so the escaped form goes back in.
+	s, err := v.Read(EncodePath(justSecret, "", version))
 	if err != nil {
 		return err
 	}
 
-	if len(s.data) != 1 || !s.Has(key) {
-		return fmt.Errorf("cannot delete specific non-isolated key of non-latest version")
+	if !s.Has(key) {
+		return NewKeyNotFoundError(justSecret, key)
+	}
+
+	if len(s.data) != 1 {
+		return fmt.Errorf("cannot delete %s from version %d: that version holds other keys, and a version already written cannot be rewritten", key, version)
 	}
 
 	return nil
@@ -513,7 +522,7 @@ func (v *Vault) Delete(path string, opts DeleteOpts) error {
 		return v.deleteEntireSecret(path, opts.Destroy, opts.All)
 	}
 
-	return v.deleteSpecificKey(path)
+	return v.deleteSpecificKey(path, opts)
 }
 
 func (v *Vault) deleteEntireSecret(path string, destroy bool, all bool) error {
@@ -577,13 +586,17 @@ func (v *Vault) deleteEntireSecret(path string, destroy bool, all bool) error {
 	return v.client.Delete(secret, &vaultkv.KVDeleteOpts{Versions: versions, V1Destroy: true})
 }
 
-func (v *Vault) deleteSpecificKey(path string) error {
-	secretPath, key, _ := ParsePath(path)
+func (v *Vault) deleteSpecificKey(path string, opts DeleteOpts) error {
+	secretPath, key, version := ParsePath(path)
 	//ParsePath unescaped the secret path. Read, Write, and deleteEntireSecret
 	// all parse their argument again, so they need the escaped form back or
 	// they split a second time at a colon that belongs to the path.
-	encodedPath := EncodePath(secretPath, "", 0)
-	secret, err := v.Read(encodedPath)
+	//
+	// The version goes back with it. Dropping it reads and removes the key from
+	// the latest version instead of the one that was named — an edit to a
+	// secret nobody asked about, leaving the named version as it was.
+	versionedPath := EncodePath(secretPath, "", version)
+	secret, err := v.Read(versionedPath)
 	if err != nil {
 		return err
 	}
@@ -596,11 +609,26 @@ func (v *Vault) deleteSpecificKey(path string) error {
 		// We can only be here and not be on the latest version if this was the only key remaining
 		// and we're just trying to nuke the secret
 		//
-		//At some point, we should probably get Destroy routed into here so that we can destroy
-		// secrets through specifying keys
-		return v.deleteEntireSecret(encodedPath, false, false)
+		//The key was the whole secret, so removing it removes versions, which
+		// is what --destroy and --all are asking about. They used to be dropped
+		// here: a destroy reported success and left the value where an undelete
+		// would bring it straight back.
+		return v.deleteEntireSecret(versionedPath, opts.Destroy, opts.All)
 	}
-	return v.Write(encodedPath, secret)
+	//Destroying, and deleting every version, both work on whole versions.
+	// Neither can be done to one key of a secret that holds others: the key
+	// stays in every version already written. Writing a new version without
+	// the key and calling that a destroy is what safe used to do.
+	if opts.Destroy {
+		return fmt.Errorf("cannot destroy the key %s: %s holds other keys, and destroying removes whole versions", key, secretPath)
+	}
+	if opts.All {
+		return fmt.Errorf("cannot delete the key %s from every version: %s holds other keys, and a version already written cannot be rewritten", key, secretPath)
+	}
+	//What is left goes on as a new version. canSemanticallyDelete has already
+	// turned away anything but the latest version by this point, so this never
+	// writes an old version forward over a newer one.
+	return v.Write(EncodePath(secretPath, "", 0), secret)
 }
 
 // DeleteVersions marks the given versions of the given secret as deleted for

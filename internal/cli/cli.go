@@ -997,7 +997,7 @@ be PEM-encoded.
 
 	r.Dispatch("dhparam", &Help{
 		Summary: "Generate Diffie-Helman key exchange parameters",
-		Usage:   "safe dhparam [NBITS] PATH",
+		Usage:   "safe dhparam [NBITS] PATH [PATH ...]",
 		Type:    DestructiveCommand,
 		Description: `
 NBITS defaults to 2048.

@@ -298,24 +298,37 @@ func (c *CLI) cmdDhparam(command string, args ...string) error {
 		return r.Usage("dhparam")
 	}
 
-	path := args[0]
-	if err := assertWritablePath(path); err != nil {
-		return err
-	}
-	v := connect(true)
-	s, err := v.Read(path)
-	if err != nil && !vault.IsNotFound(err) {
-		return err
-	}
-	exists := (err == nil)
-	if opt.SkipIfExists && exists && s.Has("dhparam-pem") {
-		if !opt.Quiet {
-			_, _ = fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to generate a Diffie-Hellman key exchange parameter set at} @C{%s} @R{as it is already present in Vault}\n", path)
+	//Every path is read before any set of parameters is generated. Generating
+	// one takes long enough that a refusal on the second path used to arrive
+	// well after the first had been written.
+	for _, path := range args {
+		if err := assertWritablePath(path); err != nil {
+			return err
 		}
-		return nil
 	}
-	if err = s.DHParam(bits, opt.SkipIfExists); err != nil {
-		return err
+
+	v := connect(true)
+	//A path after the first used to be dropped without a word, so
+	// `safe dhparam secret/a secret/b' generated one set of parameters and
+	// reported the success of both.
+	for _, path := range args {
+		s, err := v.Read(path)
+		if err != nil && !vault.IsNotFound(err) {
+			return err
+		}
+		exists := (err == nil)
+		if opt.SkipIfExists && exists && s.Has("dhparam-pem") {
+			if !opt.Quiet {
+				_, _ = fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to generate a Diffie-Hellman key exchange parameter set at} @C{%s} @R{as it is already present in Vault}\n", path)
+			}
+			continue
+		}
+		if err = s.DHParam(bits, opt.SkipIfExists); err != nil {
+			return err
+		}
+		if err = v.Write(path, s); err != nil {
+			return err
+		}
 	}
-	return v.Write(path, s)
+	return nil
 }

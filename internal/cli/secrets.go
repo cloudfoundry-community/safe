@@ -594,10 +594,21 @@ func (c *CLI) cmdDelete(command string, args ...string) error {
 	}
 
 	for _, path := range args {
-		_, key, version := vault.ParsePath(path)
+		secretPath, key, version := vault.ParsePath(path)
 
-		//Ignore -r if path has a version or key because that seems like a mistake
-		if opt.Delete.Recurse && key == "" && version == 0 {
+		//-r takes a tree of secrets; a key or a version names one thing inside
+		// one secret. Asking for both was read as a mistake and answered by
+		// dropping the -r, so `safe rm -r secret/app:password' deleted the one
+		// key and `safe rm -r secret/app^2' the one version, both reporting the
+		// success of something nobody asked for.
+		if opt.Delete.Recurse {
+			switch {
+			case key != "":
+				return fmt.Errorf("cannot %s `%s' recursively: -r takes a tree of secrets, and the path names the key %s", verb, secretPath, key)
+			case version != 0:
+				return fmt.Errorf("cannot %s `%s' recursively: -r takes a tree of secrets, and the path names version %d", verb, secretPath, version)
+			}
+
 			if !opt.Delete.Force && !recursively(verb, path) {
 				continue /* skip this command, process the next */
 			}

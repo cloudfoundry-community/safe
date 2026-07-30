@@ -519,6 +519,10 @@ The private key for the CA must be present in the Vault for this
 to work.  Revoked certificates will be appended to the CA's
 certificate revocation list (CRL), stored at `path/to/ca:crl`
 
+A CRL names serial numbers, and a serial number only identifies a
+certificate within the authority that issued it, so `safe` refuses
+to revoke a certificate the named CA did not sign.
+
 ### x509 validate \[OPTIONS\] path
 
 Run a variety of validation checks against a certificate in the
@@ -528,10 +532,16 @@ stored at `path:certificate`.  Options control more powerful
 validations, like checking for revocation, SAN validity, and
 expiry.
 
+`--signed-by` reads only the CA's certificate, so an authority whose
+private key is held offline or by another team can still be validated
+against.
+
 ### x509 crl --renew path
 
 Renews (re-signs) the certificate authority at `path`, without
-affecting the list of revoked certificates.
+affecting the list of revoked certificates.  Each CRL is numbered
+above the one before it, as RFC 5280 requires, so a relying party
+can tell which of two to keep.
 
 ### export \[-a|-d\] path \[path ...\]
 

@@ -660,11 +660,6 @@ func (v *Vault) DeleteVersions(path string, versions []uint) error {
 	return v.client.Delete(path, &vaultkv.KVDeleteOpts{Versions: versions, V1Destroy: true})
 }
 
-// DestroyVersions irrevocably destroys the given versions of the given secret
-func (v *Vault) DestroyVersions(path string, versions []uint) error {
-	return v.client.Destroy(path, versions)
-}
-
 func (v *Vault) Undelete(path string) error {
 	secret, key, version := ParsePath(path)
 	if key != "" {

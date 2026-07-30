@@ -575,6 +575,32 @@ func (c *CLI) cmdValues(command string, args ...string) error {
 	return err
 }
 
+// checkDeletePath reads one argument to safe delete against the options it
+// arrived with, and says so when the two ask for different things. It makes no
+// request, so the whole argument list can go past it first.
+func checkDeletePath(path, verb string, opt *Options) error {
+	secretPath, key, version := vault.ParsePath(path)
+
+	//-r takes a tree of secrets; a key or a version names one thing inside one
+	// secret. Asking for both was read as a mistake and answered by dropping
+	// the -r, so `safe rm -r secret/app:password' deleted the one key and
+	// `safe rm -r secret/app^2' the one version, each reporting the success of
+	// something nobody asked for.
+	if opt.Delete.Recurse {
+		switch {
+		case key != "":
+			return fmt.Errorf("cannot %s `%s' recursively: -r takes a tree of secrets, and the path names the key %s", verb, secretPath, key)
+		case version != 0:
+			return fmt.Errorf("cannot %s `%s' recursively: -r takes a tree of secrets, and the path names version %d", verb, secretPath, version)
+		}
+	}
+
+	return vault.CheckDeletePath(path, vault.DeleteOpts{
+		Destroy: opt.Delete.Destroy,
+		All:     opt.Delete.All,
+	})
+}
+
 func (c *CLI) cmdDelete(command string, args ...string) error {
 	opt := c.opt
 	r := c.r
@@ -586,29 +612,25 @@ func (c *CLI) cmdDelete(command string, args ...string) error {
 	if len(args) < 1 {
 		return r.Usage("delete")
 	}
-	v := connect(true)
-
 	verb := "delete"
 	if opt.Delete.Destroy {
 		verb = "destroy"
 	}
 
+	//Every path is read before any of them is deleted, and before anything is
+	// connected to. A refusal on the third argument used to arrive with the
+	// first two already gone, and a destroy cannot be taken back to try the
+	// command again.
 	for _, path := range args {
-		secretPath, key, version := vault.ParsePath(path)
+		if err := checkDeletePath(path, verb, opt); err != nil {
+			return err
+		}
+	}
 
-		//-r takes a tree of secrets; a key or a version names one thing inside
-		// one secret. Asking for both was read as a mistake and answered by
-		// dropping the -r, so `safe rm -r secret/app:password' deleted the one
-		// key and `safe rm -r secret/app^2' the one version, both reporting the
-		// success of something nobody asked for.
+	v := connect(true)
+
+	for _, path := range args {
 		if opt.Delete.Recurse {
-			switch {
-			case key != "":
-				return fmt.Errorf("cannot %s `%s' recursively: -r takes a tree of secrets, and the path names the key %s", verb, secretPath, key)
-			case version != 0:
-				return fmt.Errorf("cannot %s `%s' recursively: -r takes a tree of secrets, and the path names version %d", verb, secretPath, version)
-			}
-
 			if !opt.Delete.Force && !recursively(verb, path) {
 				continue /* skip this command, process the next */
 			}

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -168,7 +169,11 @@ func StartSSHTunnel(conf SOCKS5SSHConfig) (*ssh.Client, error) {
 			if os.Getenv("HOME") == "" {
 				return nil, fmt.Errorf("no home directory set and no known hosts file explicitly given; cannot validate host key")
 			}
-			conf.KnownHostsFile = fmt.Sprintf("%s/.ssh/known_hosts", os.Getenv("HOME"))
+			conf.KnownHostsFile = filepath.Join(os.Getenv("HOME"), ".ssh", "known_hosts")
+		}
+
+		if err = ensureKnownHostsFile(conf.KnownHostsFile); err != nil {
+			return nil, err
 		}
 
 		hostKeyCallback, err = knownHostsPromptCallback(conf.KnownHostsFile)
@@ -217,6 +222,42 @@ func StartSOCKS5Server(dialFn func(string, string) (net.Conn, error)) (addr stri
 	}()
 
 	return socks5Listener.Addr().String(), socks5Listener.Close, nil
+}
+
+// ensureKnownHostsFile creates an empty known_hosts file, and the directory
+// holding it, if there is nothing there yet. Reading the file is how host keys
+// are checked, and a file that does not exist cannot be read, so without this
+// a machine that has never run ssh could not reach a host through the SSH
+// proxy at all -- the connection failed before it was tried, and the advice in
+// the error was to open a file that nothing was ever going to write. ssh
+// itself creates the file on first use; so does safe now, and the first
+// connection asks about the host key as it does under ssh.
+func ensureKnownHostsFile(path string) error {
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("could not read known_hosts file at `%s': %w", path, err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return fmt.Errorf("could not create directory for known_hosts file at `%s': %w", path, err)
+	}
+
+	//O_EXCL so that a file written between the check above and here is left
+	// alone rather than emptied.
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600) // #nosec G304 -- known_hosts path from user-controlled SAFE_KNOWN_HOSTS_FILE env var
+	if err != nil {
+		if os.IsExist(err) {
+			return nil
+		}
+		return fmt.Errorf("could not create known_hosts file at `%s': %w", path, err)
+	}
+
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("could not create known_hosts file at `%s': %w", path, err)
+	}
+
+	return nil
 }
 
 func knownHostsPromptCallback(knownHostsFile string) (ssh.HostKeyCallback, error) {

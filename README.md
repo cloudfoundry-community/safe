@@ -512,6 +512,35 @@ Issues a new X.509 TLS/SSL certificate, and stores the new RSA
 private key and the certificate in the Vault at _path_, in PEM
 format.
 
+`--signed-by` has to name a certificate authority, and cannot name
+_path_ itself.  Issuing writes the signing CA back, to record the
+serial number it handed out, and then writes the new certificate
+over whatever _path_ held.
+
+Where `path:certificate` holds the issuers above the certificate as
+well as the certificate itself, they stay with it: every command
+that writes a certificate back keeps the whole chain.
+
+### x509 reissue \[OPTIONS\] path
+
+Reissues the certificate at _path_ with a freshly generated key,
+keeping its subject, its names, and the rest of its details unless
+options ask for something else.
+
+The signing authority comes from `--signed-by`, which has to name a
+certificate authority.  Naming one moves the certificate to it, so
+it does not have to be the authority that signed the certificate
+originally.  Without the option, `safe` looks for a sibling secret
+named `ca` and uses it only if it is the authority that signed the
+certificate, since it is a guess rather than an instruction.  A
+certificate that signed itself signs itself again, with the new key.
+
+### x509 renew \[OPTIONS\] path
+
+Renews the certificate at _path_, keeping its existing key, and
+resets its validity period.  The signing authority is found the same
+way as for `x509 reissue`.
+
 ### x509 revoke \[OPTIONS\] --signed-by path/to/ca path/to/cert
 
 Revoke a certificate that was signed by a Certificate Authority.

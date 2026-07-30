@@ -854,6 +854,17 @@ func (x X509) Secret(skipIfExists bool) (*Secret, error) {
 		Type:  "CERTIFICATE",
 		Bytes: x.Certificate.Raw,
 	}))
+	//A certificate attribute may hold the issuers above it as well as the
+	// certificate itself, and reading one keeps them. Writing only the
+	// leading certificate would drop the rest of the chain from the secret
+	// every time anything saved it — issuing under a CA, revoking, or
+	// regenerating a revocation list all write the authority back.
+	for _, issuer := range x.Intermediaries {
+		cert += string(pem.EncodeToMemory(&pem.Block{
+			Type:  "CERTIFICATE",
+			Bytes: issuer.Raw,
+		}))
+	}
 	key, err := marshalPrivateKeyPEM(x.PrivateKey)
 	if err != nil {
 		return s, err

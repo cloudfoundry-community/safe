@@ -449,7 +449,12 @@ func (c *CLI) cmdTree(command string, args ...string) error {
 			return err
 		}
 		secrets, err := v.ConstructSecrets(root, vault.TreeOpts{
-			FetchKeys:           opt.Tree.ShowKeys,
+			FetchKeys: opt.Tree.ShowKeys,
+			//Version metadata is what the liveness check reads, and the tree
+			// renders none of it, so a quick walk has no reason to fetch it.
+			// ConstructSecrets turns this back on whenever it still has to
+			// decide what to drop, which is every walk without -q.
+			SkipVersionInfo:     !opt.Tree.ShowKeys,
 			AllowDeletedSecrets: opt.Tree.Quick,
 		})
 

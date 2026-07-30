@@ -78,6 +78,49 @@ safe auth okta
 For each type (token, ldap, okta or github), you will be prompted for
 the necessary credentials to authenticated against the Vault.
 
+Proxies
+-------
+
+`safe` reads the usual proxy environment variables — `HTTP_PROXY`,
+`HTTPS_PROXY`, and `NO_PROXY`, in either case — and honours them when
+talking to a Vault.  `SAFE_ALL_PROXY` overrides the first two, for when
+both should go the same way.
+
+A Vault that is only reachable from inside a network can be reached
+through an SSH tunnel, by giving a proxy variable an `ssh+socks5://`
+URL naming a host to log into and a private key to log in with:
+
+```
+export SAFE_ALL_PROXY=ssh+socks5://you@bastion.example.com/home/you/.ssh/id_ed25519
+export SAFE_ALL_PROXY=ssh+socks5://you@bastion.example.com?private-key=/home/you/.ssh/id_ed25519
+```
+
+Both forms mean the same thing; use the second one when the path to the
+key is relative.  Naming the key both ways at once is an error, as is
+naming none.  The port defaults to 22, and the key must not be one that
+needs a passphrase to read.  `safe` opens the tunnel, runs a SOCKS5
+proxy on a local port for as long as the command lasts, and sends its
+Vault traffic through it.
+
+The host key of the machine being logged into is checked against a
+`known_hosts` file, the way `ssh` checks it:
+
+  - `SAFE_KNOWN_HOSTS_FILE` names the file to check against.  It
+    defaults to `$HOME/.ssh/known_hosts`, and is created empty if it
+    does not exist yet.
+
+  - A host that is not in the file is offered for you to accept, and is
+    written to the file if you answer `yes`.  Where there is nothing to
+    answer with — a script, a CI job — the host is refused.
+
+  - A host whose key has changed is always refused, and the entry that
+    the new key conflicts with is named by line.
+
+  - `SAFE_SKIP_HOST_KEY_VALIDATION` set to `true`, `yes`, `1`, or `on`
+    turns the check off and accepts whatever key is offered.  This
+    leaves the tunnel open to being intercepted, so `safe` warns on
+    stderr whenever it is set.
+
 Usage
 -----
 

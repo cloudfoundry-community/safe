@@ -177,6 +177,13 @@ func (c *CLI) cmdX509Issue(command string, args ...string) error {
 		if err != nil {
 			return err
 		}
+
+		//Signing with a certificate that is not an authority produces one no
+		// relying party will accept, and nothing further along says so: the
+		// certificate is written, looks ordinary, and fails at the far end.
+		if !ca.IsCA() {
+			return fmt.Errorf("%s is not a certificate authority", opt.X509.Issue.SignedBy)
+		}
 	}
 
 	if len(opt.X509.Issue.KeyUsage) == 0 {

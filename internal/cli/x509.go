@@ -46,7 +46,12 @@ func (c *CLI) cmdX509Validate(command string, args ...string) error {
 		if err != nil {
 			return err
 		}
-		ca, err = s.X509(true)
+		//Checking a signature and reading a revocation list both need the
+		// CA's certificate and neither needs its key, so validating against
+		// a CA whose private key is held somewhere else — an offline root,
+		// or one belonging to another team — works rather than failing on
+		// the missing attribute.
+		ca, err = s.X509(false)
 		if err != nil {
 			return err
 		}

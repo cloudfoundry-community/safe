@@ -843,7 +843,7 @@ func (x *X509) MakeCA() {
 	x.Serial = big.NewInt(1)
 	x.CRL = &x509.RevocationList{
 		RevokedCertificateEntries: make([]x509.RevocationListEntry, 0),
-		Number:                    big.NewInt(1),
+		Number:                    big.NewInt(0),
 	}
 }
 
@@ -885,7 +885,7 @@ func (x X509) Secret(skipIfExists bool) (*Secret, error) {
 		if x.CRL == nil {
 			x.CRL = &x509.RevocationList{
 				RevokedCertificateEntries: make([]x509.RevocationListEntry, 0),
-				Number:                    big.NewInt(1),
+				Number:                    big.NewInt(0),
 			}
 		}
 		if x.CRL.RevokedCertificateEntries == nil {
@@ -897,15 +897,24 @@ func (x X509) Secret(skipIfExists bool) (*Secret, error) {
 				x.Certificate.SubjectKeyId = kid
 			}
 		}
+		//RFC 5280 asks each CRL an issuer publishes to carry a number above
+		// the last one, and this method publishes a new CRL every time it
+		// runs. Reusing the stored number shipped every one of them as
+		// number one, so a relying party that keeps the highest-numbered
+		// CRL it has seen would never take a later one — including the one
+		// that carried a revocation.
+		next := big.NewInt(1)
+		if x.CRL.Number != nil {
+			next = next.Add(next, x.CRL.Number)
+		}
+		x.CRL.Number = next
+
 		now := time.Now()
 		template := &x509.RevocationList{
 			RevokedCertificateEntries: x.CRL.RevokedCertificateEntries,
-			Number:                    x.CRL.Number,
+			Number:                    next,
 			ThisUpdate:                now,
 			NextUpdate:                now.Add(10 * 365 * 24 * time.Hour),
-		}
-		if template.Number == nil {
-			template.Number = big.NewInt(1)
 		}
 		b, err := x509.CreateRevocationList(rand.Reader, template, x.Certificate, x.PrivateKey)
 		if err != nil {
@@ -941,9 +950,13 @@ func (ca *X509) Sign(x *X509, ttl time.Duration) error {
 		}
 		x.Certificate.SerialNumber = serial
 	} else {
-		x.Certificate.SerialNumber = ca.Serial
 		ca.Serial.Add(ca.Serial, big.NewInt(1))
 		ca.Serial.Mod(ca.Serial, maxSerial)
+		//Take a copy rather than share the CA's counter. Revoke records the
+		// number it is handed by reference, and a certificate holding the
+		// counter itself would see its serial move every time the CA issued
+		// anything else.
+		x.Certificate.SerialNumber = new(big.Int).Set(ca.Serial)
 	}
 
 	x.Certificate.NotBefore = time.Now()
@@ -1017,6 +1030,16 @@ func (ca *X509) Revoke(cert *X509) {
 		return
 	}
 
+	//A CA read back out of the Vault carries no revocation list unless one
+	// was stored alongside it. Secret() writes a fresh list in that case, so
+	// starting one here keeps the first revocation from being dropped.
+	if ca.CRL == nil {
+		ca.CRL = &x509.RevocationList{
+			RevokedCertificateEntries: make([]x509.RevocationListEntry, 0),
+			Number:                    big.NewInt(0),
+		}
+	}
+
 	ca.CRL.RevokedCertificateEntries = append(ca.CRL.RevokedCertificateEntries, x509.RevocationListEntry{
 		SerialNumber:   cert.Certificate.SerialNumber,
 		RevocationTime: time.Now(),
@@ -1024,6 +1047,14 @@ func (ca *X509) Revoke(cert *X509) {
 }
 
 func (ca *X509) HasRevoked(cert *X509) bool {
+	//A certificate with no revocation list has revoked nothing. The list is
+	// absent from anything that is not a CA, and reading a secret as a
+	// certificate does not require one, so this is reachable with any path
+	// the caller names as a signing authority.
+	if ca.CRL == nil {
+		return false
+	}
+
 	for _, rvk := range ca.CRL.RevokedCertificateEntries {
 		if rvk.SerialNumber.Cmp(cert.Certificate.SerialNumber) == 0 {
 			return true

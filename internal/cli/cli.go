@@ -1206,6 +1206,11 @@ The following options are recognized:
                       (and signing key) can be found.
                       Without this option, 'x509 issue' creates
                       self-signed certificates.
+                      The path must hold a certificate authority,
+                      and cannot be the path the new certificate
+                      is written to: issuing writes the signing CA
+                      back, then writes the new certificate over
+                      whatever was there.
 
   -n, --name          Subject Alternate Name(s) for this
                       certificate.  These can be domain names,
@@ -1294,11 +1299,16 @@ The following options are recognized:
                       existing certificate's curve.
 
   -i, --signed-by     Path in the Vault where the CA certificate
-                      (and signing key) can be found.  If this is not
-                      provided, a sibling secret named 'ca' will used
-                      if it exists. This should be the same CA that
-                      originally signed the certificate, but does not
-                      have to be.
+                      (and signing key) can be found.  The path must
+                      hold a certificate authority.  Naming one here
+                      moves the certificate to it, so it does not
+                      have to be the CA that signed it originally.
+                      If this is not provided, a sibling secret named
+                      'ca' is used, and that one does have to be the
+                      CA that signed the certificate, since it is a
+                      guess rather than an instruction.  A certificate
+                      that signed itself signs itself again, and no
+                      sibling is looked for.
 
   -t, --ttl           How long the new certificate will be valid
                       for.  Specified in units h (hours), m (months)
@@ -1355,11 +1365,16 @@ The following options are recognized:
                       it would for a new issue command.
 
   -i, --signed-by   	Path in the Vault where the CA certificate
-                      (and signing key) can be found.  If this is not
-                      provided, a sibling secret named 'ca' will used
-                      if it exists.  This should be the same CA that
-                      originally signed the certificate, but does not
-                      have to be.
+                      (and signing key) can be found.  The path must
+                      hold a certificate authority.  Naming one here
+                      moves the certificate to it, so it does not
+                      have to be the CA that signed it originally.
+                      If this is not provided, a sibling secret named
+                      'ca' is used, and that one does have to be the
+                      CA that signed the certificate, since it is a
+                      guess rather than an instruction.  A certificate
+                      that signed itself signs itself again, and no
+                      sibling is looked for.
 
   -t, --ttl           How long the new certificate will be valid
                       for.  Specified in units h (hours), m (months)

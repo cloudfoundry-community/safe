@@ -854,6 +854,17 @@ func (x X509) Secret(skipIfExists bool) (*Secret, error) {
 		Type:  "CERTIFICATE",
 		Bytes: x.Certificate.Raw,
 	}))
+	//A certificate attribute may hold the issuers above it as well as the
+	// certificate itself, and reading one keeps them. Writing only the
+	// leading certificate would drop the rest of the chain from the secret
+	// every time anything saved it — issuing under a CA, revoking, or
+	// regenerating a revocation list all write the authority back.
+	for _, issuer := range x.Intermediaries {
+		cert += string(pem.EncodeToMemory(&pem.Block{
+			Type:  "CERTIFICATE",
+			Bytes: issuer.Raw,
+		}))
+	}
 	key, err := marshalPrivateKeyPEM(x.PrivateKey)
 	if err != nil {
 		return s, err
@@ -976,6 +987,17 @@ func (ca *X509) Sign(x *X509, ttl time.Duration) error {
 		x.Certificate.SignatureAlgorithm = defaultSigAlgo
 	} else if err := validateSigAlgoForKey(ca.PrivateKey, x.Certificate.SignatureAlgorithm); err != nil {
 		return fmt.Errorf("requested signature algorithm is not compatible with the signing CA key: %w", err)
+	}
+
+	//Signing itself with a key it did not have before: the certificate being
+	// replaced still carries the public key of the key that is going away, and
+	// both the authority key identifier and the signature have to name the key
+	// doing the signing. Left alone, the result claims to be self-signed while
+	// carrying a signature that only the discarded key can account for, and
+	// nothing can verify it.
+	if ca == x {
+		ca.Certificate.PublicKey = x.PrivateKey.Public()
+		ca.Certificate.SubjectKeyId, _ = getKeyIDFromPublicKey(x.PrivateKey.Public())
 	}
 
 	x.Certificate.AuthorityKeyId = ca.getKeyID()

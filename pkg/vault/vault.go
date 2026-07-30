@@ -1211,6 +1211,12 @@ func (v *Vault) CheckPKIBackend(backend string) error {
 	return nil
 }
 
+// FindSigningCA returns the authority that should sign cert, and the path it
+// was read from. A certificate signs itself when it is named as its own
+// authority or when it already carries its own signature; otherwise the
+// authority is read from the Vault, and has to be one — signing with a plain
+// certificate produces something no relying party will accept, and nothing
+// further along reports it.
 func (v *Vault) FindSigningCA(cert *X509, certPath string, signPath string) (*X509, string, error) {
 	/* find the CA */
 	if signPath != "" {
@@ -1224,6 +1230,9 @@ func (v *Vault) FindSigningCA(cert *X509, certPath string, signPath string) (*X5
 			ca, err := s.X509(true)
 			if err != nil {
 				return nil, "", err
+			}
+			if !ca.IsCA() {
+				return nil, "", fmt.Errorf("%s is not a certificate authority", signPath)
 			}
 			return ca, signPath, nil
 		}
@@ -1247,6 +1256,21 @@ func (v *Vault) FindSigningCA(cert *X509, certPath string, signPath string) (*X5
 			ca, err := s.X509(true)
 			if err != nil {
 				return nil, "", err
+			}
+			if !ca.IsCA() {
+				return nil, "", fmt.Errorf("%s is not a certificate authority", caPath)
+			}
+			//The sibling is a guess. Signing under it when it is not the
+			// authority that issued the certificate hands back something
+			// with a different issuer than the one it went in with, which
+			// is not what renewing or reissuing was asked to do. Naming an
+			// authority explicitly still moves a certificate to a new one.
+			if err := ca.Certificate.CheckSignature(
+				cert.Certificate.SignatureAlgorithm,
+				cert.Certificate.RawTBSCertificate,
+				cert.Certificate.Signature,
+			); err != nil {
+				return nil, "", fmt.Errorf("%s did not sign %s; name its authority with --signed-by", caPath, certPath)
 			}
 			return ca, caPath, nil
 		}

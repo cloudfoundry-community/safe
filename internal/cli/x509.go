@@ -151,6 +151,15 @@ func (c *CLI) cmdX509Issue(command string, args ...string) error {
 		return err
 	}
 
+	//Issuing writes the new certificate over whatever the path held. Naming
+	// the signing authority as the destination — a slip of one word on the
+	// command line — replaces the authority with the certificate it just
+	// signed, taking its private key, its serial number, and its revocation
+	// list with it, and everything it ever issued becomes unverifiable.
+	if args[0] == opt.X509.Issue.SignedBy {
+		return fmt.Errorf("refusing to overwrite the signing authority %s with the certificate it signs", args[0])
+	}
+
 	if opt.X509.Issue.Subject == "" {
 		opt.X509.Issue.Subject = fmt.Sprintf("CN=%s", opt.X509.Issue.Name[0])
 	}
@@ -176,6 +185,13 @@ func (c *CLI) cmdX509Issue(command string, args ...string) error {
 		ca, err = secret.X509(true)
 		if err != nil {
 			return err
+		}
+
+		//Signing with a certificate that is not an authority produces one no
+		// relying party will accept, and nothing further along says so: the
+		// certificate is written, looks ordinary, and fails at the far end.
+		if !ca.IsCA() {
+			return fmt.Errorf("%s is not a certificate authority", opt.X509.Issue.SignedBy)
 		}
 	}
 
@@ -267,6 +283,15 @@ func (c *CLI) cmdX509Reissue(command string, args ...string) error {
 		return err
 	}
 
+	//Which authority signed this is a fact about the certificate as stored,
+	// and answering it reads the signature the certificate arrived with. The
+	// changes below overwrite the algorithm that signature was made with, so
+	// the authority has to be found before they are applied.
+	ca, caPath, err := v.FindSigningCA(cert, args[0], opt.X509.Reissue.SignedBy)
+	if err != nil {
+		return err
+	}
+
 	if len(opt.X509.Reissue.Name) > 0 {
 		ips, dns, email := vault.CategorizeSANs(uniq(opt.X509.Reissue.Name))
 		cert.Certificate.IPAddresses = ips
@@ -308,12 +333,6 @@ func (c *CLI) cmdX509Reissue(command string, args ...string) error {
 		// signing CA at signing time, rather than preserving the previous
 		// certificate's value, which may not match the new key.
 		cert.Certificate.SignatureAlgorithm = x509.UnknownSignatureAlgorithm
-	}
-
-	/* find the CA */
-	ca, caPath, err := v.FindSigningCA(cert, args[0], opt.X509.Reissue.SignedBy)
-	if err != nil {
-		return err
 	}
 
 	// Get new expiry date
@@ -395,6 +414,15 @@ func (c *CLI) cmdX509Renew(command string, args ...string) error {
 		return err
 	}
 
+	//Which authority signed this is a fact about the certificate as stored,
+	// and answering it reads the signature the certificate arrived with.
+	// --sig-algorithm overwrites the algorithm that signature was made with,
+	// so the authority has to be found before the changes below are applied.
+	ca, caPath, err := v.FindSigningCA(cert, args[0], opt.X509.Renew.SignedBy)
+	if err != nil {
+		return err
+	}
+
 	if len(opt.X509.Renew.Name) > 0 {
 		ips, dns, email := vault.CategorizeSANs(uniq(opt.X509.Renew.Name))
 		cert.Certificate.IPAddresses = ips
@@ -431,12 +459,6 @@ func (c *CLI) cmdX509Renew(command string, args ...string) error {
 		}
 
 		cert.Certificate.SignatureAlgorithm = sigAlgo
-	}
-
-	/* find the CA */
-	ca, caPath, err := v.FindSigningCA(cert, args[0], opt.X509.Renew.SignedBy)
-	if err != nil {
-		return err
 	}
 
 	// Get new expiry date

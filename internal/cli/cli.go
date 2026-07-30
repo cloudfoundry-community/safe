@@ -938,16 +938,26 @@ and overwrite all versions of the secret at the destination.
 
 	r.Dispatch("gen", &Help{
 		Summary: "Generate a random password",
-		Usage:   "safe gen [-l <length>] [-p] PATH:KEY [PATH:KEY ...]",
+		Usage:   "safe gen [LENGTH] PATH:KEY [PATH:KEY ...]",
 		Type:    DestructiveCommand,
 		Description: `
-LENGTH defaults to 64 characters.
+LENGTH defaults to 64 characters, and can be given either as the first
+argument or with -l.  It has to be at least one; a password of no characters
+is refused rather than stored as an empty value.
+
+A secret and the key to write the password to can be named as PATH:KEY, or as
+two arguments, PATH KEY.  The two forms can be mixed.  The whole list is read
+before the first password is generated, so an argument that cannot be used
+stops the command with nothing written.
 
 The following options are recognized:
 
   -l, --length  Specify the length of the random string to generate
-	-p, --policy  Specify a regex character grouping for limiting characters used
-	              to generate the password (e.g --policy a-z0-9)
+  -p, --policy  Specify a regex character grouping for limiting characters used
+                to generate the password (e.g --policy a-z0-9).  It goes
+                inside a character class, so it has to be one, and it has to
+                keep at least one printable character; a policy that does
+                neither is refused.
 `,
 	}, c.cmdGen)
 
@@ -997,10 +1007,14 @@ be PEM-encoded.
 
 	r.Dispatch("dhparam", &Help{
 		Summary: "Generate Diffie-Helman key exchange parameters",
-		Usage:   "safe dhparam [NBITS] PATH",
+		Usage:   "safe dhparam [NBITS] PATH [PATH ...]",
 		Type:    DestructiveCommand,
 		Description: `
-NBITS defaults to 2048.
+NBITS defaults to 2048, and has to be 1024, 2048, or 4096.
+
+For each PATH given, a parameter set is generated and stored under the
+'dhparam-pem' name.  Every path is read before the first set is generated,
+since generating one takes a while.
 `,
 	}, c.cmdDhparam)
 

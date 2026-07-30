@@ -66,13 +66,15 @@ func TestCmdGen_ZeroArgs_ReturnsUsageError(t *testing.T) {
 	assertUsageError(t, err, "gen")
 }
 
-// cmdGen with a numeric-only arg treats it as the length, leaving zero paths —
-// the inner loop guard fires.
+// cmdGen with a numeric-only arg treats it as the length, leaving zero paths.
+// The argument list is read before anything is connected to, so this is a
+// usage error; it used to connect and return, which reads as a success and
+// leaves no password anywhere.
 func TestCmdGen_LengthOnlyNoPath_ReturnsUsageError(t *testing.T) {
-	// "32" is parsed as length; no path follows → inner loop guard fires.
-	// The loop calls connect() before the inner guard, so this requires Vault presence.
-	// The zero-arg case above covers the outer guard.
-	t.Skip("inner loop guard runs after connect(); requires live Vault")
+	isolateHome(t)
+	c := newKeygenCLI(t)
+	err := c.cmdGen("gen", "32")
+	assertUsageError(t, err, "gen")
 }
 
 // ---------------------------------------------------------------------------

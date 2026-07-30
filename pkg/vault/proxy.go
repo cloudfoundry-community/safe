@@ -241,10 +241,18 @@ func knownHostsPromptCallback(knownHostsFile string) (ssh.HostKeyCallback, error
 		//If the error has hostnames listed under Want, it means that there was
 		// a conflicting host key
 		if len(errAsKeyError.Want) > 0 {
+			//Point at the entry that conflicts with the key the host offered,
+			// which is the one of the host's own type. Testing the candidate
+			// already chosen rather than the one in hand named whichever entry
+			// came last when the first happened to match and the first when it
+			// did not, so the line reported was the wrong one either way, and
+			// the reader who acted on it deleted a host key that was fine and
+			// left the conflicting entry where it was.
 			wantedKey := errAsKeyError.Want[0]
 			for _, k := range errAsKeyError.Want {
-				if wantedKey.Key.Type() == key.Type() {
+				if k.Key.Type() == key.Type() {
 					wantedKey = k
+					break
 				}
 			}
 
@@ -259,11 +267,15 @@ The fingerprint for the %[1]s key sent by the remote host is
 %[2]s.
 Please contact your system administrator.
 Add correct host key in %[3]s to get rid of this message.
-Offending %[1]s key in %[3]s:%[4]d
+Offending %[6]s key in %[3]s:%[4]d
 %[1]s host key for %[5]s has changed and safe uses strict checking.
 Host key verification failed`
+			//The offending line is named with the type of the key written on it,
+			// which is the type of the key the host offered whenever there is an
+			// entry of that type to conflict with.
 			return fmt.Errorf(hostKeyConflictError,
-				key.Type(), ssh.FingerprintSHA256(key), knownHostsFile, wantedKey.Line, hostname)
+				key.Type(), ssh.FingerprintSHA256(key), knownHostsFile, wantedKey.Line,
+				hostname, wantedKey.Key.Type())
 		}
 
 		//If not, then the key doesn't exist in the host key file

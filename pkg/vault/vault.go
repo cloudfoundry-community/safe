@@ -455,6 +455,25 @@ type DeleteOpts struct {
 	All     bool
 }
 
+// CheckDeletePath reports whether a path and the options it is to be deleted
+// under ask for the same thing. It reads the path alone and makes no request,
+// so a caller holding several paths can put all of them past it before any one
+// of them is deleted.
+func CheckDeletePath(path string, opts DeleteOpts) error {
+	//All works on every version, so a path that names one version asks for two
+	// different things at once. The version used to be dropped and the All
+	// taken: deleting every version of a secret when one was named, and, with
+	// Destroy, destroying every version and the metadata along with them --
+	// which cannot be undone, was reported as success, and happened just the
+	// same for a version that had never been written, since All also turns off
+	// the check that the named version exists.
+	if secretPath, _, version := ParsePath(path); opts.All && version != 0 {
+		return fmt.Errorf("cannot delete version %d of `%s' and every version of it at once: drop the version to keep --all, or drop --all to work on the one version", version, secretPath)
+	}
+
+	return nil
+}
+
 func (v *Vault) canSemanticallyDelete(path string) error {
 	justSecret, key, version := ParsePath(path)
 	if key == "" || version == 0 {
@@ -499,6 +518,10 @@ func (v *Vault) canSemanticallyDelete(path string) error {
 // If destroy is true and the mount is v2, the latest version is destroyed instead
 func (v *Vault) Delete(path string, opts DeleteOpts) error {
 	path = Canonicalize(path)
+
+	if err := CheckDeletePath(path, opts); err != nil {
+		return err
+	}
 
 	reqState := verifyStateAlive
 	if opts.Destroy {
@@ -635,11 +658,6 @@ func (v *Vault) deleteSpecificKey(path string, opts DeleteOpts) error {
 // a v2 backend or actually deletes it for a v1 backend.
 func (v *Vault) DeleteVersions(path string, versions []uint) error {
 	return v.client.Delete(path, &vaultkv.KVDeleteOpts{Versions: versions, V1Destroy: true})
-}
-
-// DestroyVersions irrevocably destroys the given versions of the given secret
-func (v *Vault) DestroyVersions(path string, versions []uint) error {
-	return v.client.Destroy(path, versions)
 }
 
 func (v *Vault) Undelete(path string) error {

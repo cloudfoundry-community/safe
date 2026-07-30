@@ -106,6 +106,36 @@ func (c *CLI) cmdTargets(command string, args ...string) error {
 	return nil
 }
 
+// isVaultAddress reports whether s reads as the address of a Vault rather than
+// as a name for one. safe speaks to Vault over HTTP, so an address is what
+// carries one of those two schemes and a host to reach.
+func isVaultAddress(s string) bool {
+	u, err := url.Parse(s)
+	if err != nil {
+		return false
+	}
+	//A scheme is case-insensitive and comes back from url.Parse in lower case,
+	// so HTTPS:// is read as the address it is.
+	return (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
+}
+
+// targetArgs reads the two-argument form of `safe target', which gives an
+// address a name, in either order. The two used to be told apart by looking
+// for a literal http:// or https:// on the second one and swapping when it was
+// missing, so an address typed without its scheme was taken for a name and the
+// name for an address: the target was filed under the address, pointing at the
+// alias, and every command run against it went to port 80 of nowhere in
+// particular.
+func targetArgs(first, second string) (alias, address string, err error) {
+	switch {
+	case isVaultAddress(second):
+		return first, second, nil
+	case isVaultAddress(first):
+		return second, first, nil
+	}
+	return "", "", fmt.Errorf("neither `%s' nor `%s' is the address of a Vault: an address carries the scheme it is reached over, as in `safe target https://vault.example.com %s'", first, second, first)
+}
+
 func (c *CLI) cmdTarget(command string, args ...string) error {
 	opt := c.opt
 	r := c.r
@@ -223,18 +253,22 @@ func (c *CLI) cmdTarget(command string, args ...string) error {
 		if err != nil {
 			return err
 		}
+		//Saved before it is reported: a home directory that cannot be written
+		// to used to be answered with the new target on the screen and the old
+		// one still in the file.
+		if err := cfg.Write(); err != nil {
+			return err
+		}
 		if !opt.Quiet {
 			printTarget()
 		}
-		return cfg.Write()
+		return nil
 	}
 
 	if len(args) == 2 {
-		var err error
-		alias, url := args[0], args[1]
-		if !strings.HasPrefix(args[1], "http://") &&
-			!strings.HasPrefix(args[1], "https://") {
-			alias, url = url, alias
+		alias, url, err := targetArgs(args[0], args[1])
+		if err != nil {
+			return err
 		}
 
 		caCerts := []string{}
@@ -274,10 +308,13 @@ func (c *CLI) cmdTarget(command string, args ...string) error {
 		if err != nil {
 			return err
 		}
+		if err := cfg.Write(); err != nil {
+			return err
+		}
 		if !opt.Quiet {
 			printTarget()
 		}
-		return cfg.Write()
+		return nil
 	}
 
 	return r.Usage("target")
@@ -308,7 +345,13 @@ func (c *CLI) cmdTargetDelete(command string, args ...string) error {
 	}
 
 	delete(cfg.Vaults, alias)
-	if cfg.Current == alias {
+	//The selection is compared by resolving it rather than by matching the
+	// alias: a config written before it was recorded by alias names the current
+	// target by URL, and a URL stops naming anything once the target carrying
+	// it is gone. Left as it was, the selection would name a Vault that is not
+	// in the file, which every later command -- including the write below --
+	// reports as a missing current target.
+	if _, ok, _ := cfg.Alias(cfg.Current); !ok {
 		cfg.Current = ""
 	}
 

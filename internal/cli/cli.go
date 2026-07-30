@@ -399,9 +399,17 @@ func Main(version, buildTime, gitCommit string) {
 
 	r.Dispatch("target", &Help{
 		Summary: "Target a new Vault, or set your current Vault target",
-		Description: `Target a new Vault if URL and ALIAS are provided, or set
-your current Vault target if just ALIAS is given. If the single argument form
-if provided, the following flags are valid:
+		Description: `Target a new Vault by giving its URL and an ALIAS to call
+it by, or set your current target by naming a Vault that is already known. A
+name is either the alias a target was given or the URL it is at.
+
+A URL carries the scheme it is reached over, as in https://vault.example.com,
+and that is how it is told apart from the alias: the two may be given in either
+order. Two arguments where neither is a URL are refused rather than guessed at.
+
+The flags below apply to the two-argument form, which is where a target is
+described. -k also applies on its own, where it marks an already-known target
+as skipping validation from then on.
 
 -k (--insecure) specifies to skip x509 certificate validation. This only has an
 effect if the given URL uses an HTTPS scheme.
@@ -424,8 +432,16 @@ provided multiple times to provide multiple CA certificates.
 
 	r.Dispatch("target delete", &Help{
 		Summary: "Forget about a targeted Vault",
-		Usage:   "safe target delete ALIAS",
-		Type:    DestructiveCommand,
+		Description: `Remove a target, and the token stored with it, from
+~/.saferc. The target is named the way it is named everywhere else: by its
+alias or by its URL. A name that reaches no target is an error rather than a
+success.
+
+Deleting the current target leaves nothing targeted; the other targets are
+left alone.
+`,
+		Usage: "safe target delete ALIAS",
+		Type:  DestructiveCommand,
 	}, c.cmdTargetDelete)
 
 	r.Dispatch("status", &Help{

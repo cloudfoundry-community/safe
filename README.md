@@ -56,6 +56,16 @@ Vault with just:
 safe target myvault
 ```
 
+The two arguments may be given in either order: what makes one of
+them the URL is the scheme it carries.  An address typed without
+its `http://` or `https://` is not a URL, and `safe` says so
+rather than filing the target under it.
+
+A target can be named by its alias or by the URL it is at,
+anywhere a name is taken -- retargeting, `-T`, and
+`safe target delete`.  What gets recorded as the current target is
+always the alias.
+
 You can see what Vaults you have targeted by running
 
 ```
@@ -63,6 +73,16 @@ safe targets
 ```
 
 All commands will be run against the currently targeted Vault.
+
+To forget a target, along with the token saved with it:
+
+```
+safe target delete myvault
+```
+
+Deleting the target you are currently on leaves nothing targeted,
+so the next command will ask you to target a Vault rather than
+report a target that is no longer there.
 
 To authenticate:
 

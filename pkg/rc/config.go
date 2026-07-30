@@ -249,17 +249,22 @@ func (c *Config) Apply(use string) error {
 	return nil
 }
 
-func (c *Config) SetCurrent(alias string, reskip bool) error {
-	v, ok, err := c.Find(alias)
+// SetCurrent selects the target named by either its alias or its URL. What it
+// records is the alias, because that is the name the rest of the config is
+// keyed by: a URL stored here resolves only for as long as exactly one target
+// still carries it, so deleting that target leaves a selection that names
+// nothing and every later command reporting a missing current target.
+func (c *Config) SetCurrent(name string, reskip bool) error {
+	alias, ok, err := c.Alias(name)
 	if err != nil {
 		return err
 	}
 	if !ok {
-		return fmt.Errorf("Unknown target '%s'", alias)
+		return fmt.Errorf("Unknown target '%s'", name)
 	}
 	c.Current = alias
 	if reskip {
-		v.SkipVerify = true
+		c.Vaults[alias].SkipVerify = true
 	}
 	return nil
 }

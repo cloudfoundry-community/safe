@@ -99,6 +99,67 @@ func TestTargetDeleteClearsTheCurrentTargetItRemoved(t *testing.T) {
 	}
 }
 
+// A config written before the current target was recorded by alias names it
+// by URL instead. Deleting that target by alias left the selection naming a
+// Vault that is no longer in the file, which every later command -- including
+// the write that stores this deletion -- reports as a missing current target.
+func TestTargetDeleteClearsACurrentTargetNamedByURL(t *testing.T) {
+	isolateHome(t)
+	writeSaferc(t, `version: 1
+current: https://alpha.example.com
+vaults:
+  alpha:
+    url: https://alpha.example.com
+    token: token-alpha
+  beta:
+    url: https://beta.example.com
+    token: token-beta
+`)
+	c := newTestCLI(t)
+
+	if err := c.cmdTargetDelete("target delete", "alpha"); err != nil {
+		t.Fatalf("cmdTargetDelete: %v", err)
+	}
+
+	cfg := readConfig(t)
+	if cfg.Current != "" {
+		t.Errorf("current = %q, want it cleared along with the target it named", cfg.Current)
+	}
+	if _, err := cfg.Vault(""); err != nil {
+		t.Errorf("reading the current target: %v", err)
+	}
+}
+
+// Deleting one target leaves the selection on another alone, whichever way
+// that selection names it.
+func TestTargetDeleteKeepsACurrentTargetItDidNotRemove(t *testing.T) {
+	isolateHome(t)
+	writeSaferc(t, `version: 1
+current: https://beta.example.com
+vaults:
+  alpha:
+    url: https://alpha.example.com
+    token: token-alpha
+  beta:
+    url: https://beta.example.com
+    token: token-beta
+`)
+	c := newTestCLI(t)
+
+	if err := c.cmdTargetDelete("target delete", "alpha"); err != nil {
+		t.Fatalf("cmdTargetDelete: %v", err)
+	}
+
+	cfg := readConfig(t)
+	v, err := cfg.Vault("")
+	if err != nil {
+		t.Fatalf("reading the current target: %v", err)
+	}
+	if v.URL != "https://beta.example.com" {
+		t.Errorf("current target is %s, want beta", v.URL)
+	}
+}
+
 // Two aliases for one Vault leave a URL ambiguous, and guessing which to
 // delete is worse than saying so.
 func TestTargetDeleteRefusesAnAmbiguousURL(t *testing.T) {

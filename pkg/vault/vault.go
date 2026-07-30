@@ -474,13 +474,22 @@ func (v *Vault) canSemanticallyDelete(path string) error {
 		return nil
 	}
 
-	s, err := v.Read(path)
+	//Read the version, not the key: a read of a path that names a key hands
+	// back that one key, so asking this way makes every version look as though
+	// it held nothing else, and the check below can never find anything to
+	// object to. ParsePath unescaped the secret path, and Read parses its
+	// argument again, so the escaped form goes back in.
+	s, err := v.Read(EncodePath(justSecret, "", version))
 	if err != nil {
 		return err
 	}
 
-	if len(s.data) != 1 || !s.Has(key) {
-		return fmt.Errorf("cannot delete specific non-isolated key of non-latest version")
+	if !s.Has(key) {
+		return NewKeyNotFoundError(justSecret, key)
+	}
+
+	if len(s.data) != 1 {
+		return fmt.Errorf("cannot delete %s from version %d: that version holds other keys, and a version already written cannot be rewritten", key, version)
 	}
 
 	return nil

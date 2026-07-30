@@ -1017,6 +1017,16 @@ func (ca *X509) Revoke(cert *X509) {
 		return
 	}
 
+	//A CA read back out of the Vault carries no revocation list unless one
+	// was stored alongside it. Secret() writes a fresh list in that case, so
+	// starting one here keeps the first revocation from being dropped.
+	if ca.CRL == nil {
+		ca.CRL = &x509.RevocationList{
+			RevokedCertificateEntries: make([]x509.RevocationListEntry, 0),
+			Number:                    big.NewInt(1),
+		}
+	}
+
 	ca.CRL.RevokedCertificateEntries = append(ca.CRL.RevokedCertificateEntries, x509.RevocationListEntry{
 		SerialNumber:   cert.Certificate.SerialNumber,
 		RevocationTime: time.Now(),
@@ -1024,6 +1034,14 @@ func (ca *X509) Revoke(cert *X509) {
 }
 
 func (ca *X509) HasRevoked(cert *X509) bool {
+	//A certificate with no revocation list has revoked nothing. The list is
+	// absent from anything that is not a CA, and reading a secret as a
+	// certificate does not require one, so this is reachable with any path
+	// the caller names as a signing authority.
+	if ca.CRL == nil {
+		return false
+	}
+
 	for _, rvk := range ca.CRL.RevokedCertificateEntries {
 		if rvk.SerialNumber.Cmp(cert.Certificate.SerialNumber) == 0 {
 			return true

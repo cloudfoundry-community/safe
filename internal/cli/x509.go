@@ -50,6 +50,14 @@ func (c *CLI) cmdX509Validate(command string, args ...string) error {
 		if err != nil {
 			return err
 		}
+
+		//Only a certificate authority keeps a revocation list, so a
+		// revocation check against anything else has no answer to give.
+		if opt.X509.Validate.Revoked || opt.X509.Validate.NotRevoked {
+			if !ca.IsCA() {
+				return fmt.Errorf("%s is not a certificate authority", opt.X509.Validate.SignedBy)
+			}
+		}
 	}
 
 	for _, path := range args {
@@ -484,6 +492,11 @@ func (c *CLI) cmdX509Revoke(command string, args ...string) error {
 	ca, err := s.X509(true)
 	if err != nil {
 		return err
+	}
+	//Revocation is recorded on the CA's revocation list, and only a
+	// certificate authority carries one.
+	if !ca.IsCA() {
+		return fmt.Errorf("%s is not a certificate authority", opt.X509.Revoke.SignedBy)
 	}
 
 	/* find the Certificate */

@@ -151,6 +151,15 @@ func (c *CLI) cmdX509Issue(command string, args ...string) error {
 		return err
 	}
 
+	//Issuing writes the new certificate over whatever the path held. Naming
+	// the signing authority as the destination — a slip of one word on the
+	// command line — replaces the authority with the certificate it just
+	// signed, taking its private key, its serial number, and its revocation
+	// list with it, and everything it ever issued becomes unverifiable.
+	if args[0] == opt.X509.Issue.SignedBy {
+		return fmt.Errorf("refusing to overwrite the signing authority %s with the certificate it signs", args[0])
+	}
+
 	if opt.X509.Issue.Subject == "" {
 		opt.X509.Issue.Subject = fmt.Sprintf("CN=%s", opt.X509.Issue.Name[0])
 	}

@@ -8,10 +8,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	socks5 "github.com/armon/go-socks5"
+	"github.com/cloudfoundry-community/safe/pkg/prompt"
 	isatty "github.com/mattn/go-isatty"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
@@ -167,7 +169,11 @@ func StartSSHTunnel(conf SOCKS5SSHConfig) (*ssh.Client, error) {
 			if os.Getenv("HOME") == "" {
 				return nil, fmt.Errorf("no home directory set and no known hosts file explicitly given; cannot validate host key")
 			}
-			conf.KnownHostsFile = fmt.Sprintf("%s/.ssh/known_hosts", os.Getenv("HOME"))
+			conf.KnownHostsFile = filepath.Join(os.Getenv("HOME"), ".ssh", "known_hosts")
+		}
+
+		if err = ensureKnownHostsFile(conf.KnownHostsFile); err != nil {
+			return nil, err
 		}
 
 		hostKeyCallback, err = knownHostsPromptCallback(conf.KnownHostsFile)
@@ -218,6 +224,42 @@ func StartSOCKS5Server(dialFn func(string, string) (net.Conn, error)) (addr stri
 	return socks5Listener.Addr().String(), socks5Listener.Close, nil
 }
 
+// ensureKnownHostsFile creates an empty known_hosts file, and the directory
+// holding it, if there is nothing there yet. Reading the file is how host keys
+// are checked, and a file that does not exist cannot be read, so without this
+// a machine that has never run ssh could not reach a host through the SSH
+// proxy at all -- the connection failed before it was tried, and the advice in
+// the error was to open a file that nothing was ever going to write. ssh
+// itself creates the file on first use; so does safe now, and the first
+// connection asks about the host key as it does under ssh.
+func ensureKnownHostsFile(path string) error {
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("could not read known_hosts file at `%s': %w", path, err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return fmt.Errorf("could not create directory for known_hosts file at `%s': %w", path, err)
+	}
+
+	//O_EXCL so that a file written between the check above and here is left
+	// alone rather than emptied.
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600) // #nosec G304 -- known_hosts path from user-controlled SAFE_KNOWN_HOSTS_FILE env var
+	if err != nil {
+		if os.IsExist(err) {
+			return nil
+		}
+		return fmt.Errorf("could not create known_hosts file at `%s': %w", path, err)
+	}
+
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("could not create known_hosts file at `%s': %w", path, err)
+	}
+
+	return nil
+}
+
 func knownHostsPromptCallback(knownHostsFile string) (ssh.HostKeyCallback, error) {
 	tmpCallback, err := knownhosts.New(knownHostsFile)
 	if err != nil {
@@ -241,10 +283,18 @@ func knownHostsPromptCallback(knownHostsFile string) (ssh.HostKeyCallback, error
 		//If the error has hostnames listed under Want, it means that there was
 		// a conflicting host key
 		if len(errAsKeyError.Want) > 0 {
+			//Point at the entry that conflicts with the key the host offered,
+			// which is the one of the host's own type. Testing the candidate
+			// already chosen rather than the one in hand named whichever entry
+			// came last when the first happened to match and the first when it
+			// did not, so the line reported was the wrong one either way, and
+			// the reader who acted on it deleted a host key that was fine and
+			// left the conflicting entry where it was.
 			wantedKey := errAsKeyError.Want[0]
 			for _, k := range errAsKeyError.Want {
-				if wantedKey.Key.Type() == key.Type() {
+				if k.Key.Type() == key.Type() {
 					wantedKey = k
+					break
 				}
 			}
 
@@ -259,11 +309,15 @@ The fingerprint for the %[1]s key sent by the remote host is
 %[2]s.
 Please contact your system administrator.
 Add correct host key in %[3]s to get rid of this message.
-Offending %[1]s key in %[3]s:%[4]d
+Offending %[6]s key in %[3]s:%[4]d
 %[1]s host key for %[5]s has changed and safe uses strict checking.
 Host key verification failed`
+			//The offending line is named with the type of the key written on it,
+			// which is the type of the key the host offered whenever there is an
+			// entry of that type to conflict with.
 			return fmt.Errorf(hostKeyConflictError,
-				key.Type(), ssh.FingerprintSHA256(key), knownHostsFile, wantedKey.Line, hostname)
+				key.Type(), ssh.FingerprintSHA256(key), knownHostsFile, wantedKey.Line,
+				hostname, wantedKey.Key.Type())
 		}
 
 		//If not, then the key doesn't exist in the host key file
@@ -287,14 +341,27 @@ func promptAddNewKnownHost(hostname string, remote net.Addr, key ssh.PublicKey) 
 %[3]s key fingerprint is %[4]s
 Are you sure you want to continue connecting (yes/no)? `, hostname, remote.String(), key.Type(), ssh.FingerprintSHA256(key))
 
-	var response string
-	_, _ = fmt.Scanln(&response)
-	for response != "yes" && response != "no" {
-		fmt.Fprintf(os.Stderr, "Please type 'yes' or 'no': ")
-		_, _ = fmt.Scanln(&response)
-	}
+	for {
+		//A read that fails is the end of the matter. Answering nothing used to
+		// leave the answer as it was and ask again, so stdin at its end -- a
+		// pipe that is done, a job with no input attached -- spun here without
+		// stopping, writing the prompt to stderr as fast as it could. No answer
+		// is no.
+		response, err := prompt.ReadLine()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "")
+			return false
+		}
 
-	return response == "yes"
+		switch strings.TrimSpace(response) {
+		case "yes":
+			return true
+		case "no":
+			return false
+		}
+
+		fmt.Fprintf(os.Stderr, "Please type 'yes' or 'no': ")
+	}
 }
 
 func writeKnownHosts(knownHostsFile, hostname string, key ssh.PublicKey) error {

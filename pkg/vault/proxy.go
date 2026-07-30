@@ -12,6 +12,7 @@ import (
 	"time"
 
 	socks5 "github.com/armon/go-socks5"
+	"github.com/cloudfoundry-community/safe/pkg/prompt"
 	isatty "github.com/mattn/go-isatty"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
@@ -299,14 +300,27 @@ func promptAddNewKnownHost(hostname string, remote net.Addr, key ssh.PublicKey) 
 %[3]s key fingerprint is %[4]s
 Are you sure you want to continue connecting (yes/no)? `, hostname, remote.String(), key.Type(), ssh.FingerprintSHA256(key))
 
-	var response string
-	_, _ = fmt.Scanln(&response)
-	for response != "yes" && response != "no" {
-		fmt.Fprintf(os.Stderr, "Please type 'yes' or 'no': ")
-		_, _ = fmt.Scanln(&response)
-	}
+	for {
+		//A read that fails is the end of the matter. Answering nothing used to
+		// leave the answer as it was and ask again, so stdin at its end -- a
+		// pipe that is done, a job with no input attached -- spun here without
+		// stopping, writing the prompt to stderr as fast as it could. No answer
+		// is no.
+		response, err := prompt.ReadLine()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "")
+			return false
+		}
 
-	return response == "yes"
+		switch strings.TrimSpace(response) {
+		case "yes":
+			return true
+		case "no":
+			return false
+		}
+
+		fmt.Fprintf(os.Stderr, "Please type 'yes' or 'no': ")
+	}
 }
 
 func writeKnownHosts(knownHostsFile, hostname string, key ssh.PublicKey) error {

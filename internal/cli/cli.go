@@ -1499,6 +1499,13 @@ prints out information about a certificate, including:
   - What names / IPs is it valid for?
   - When does it expire?
 
+Only the certificate is read, so a path that holds no private key can
+still be shown.
+
+Each path is reported in turn.  A path that holds no certificate, or that
+cannot be read, is reported as such and the paths after it are still
+shown; the command exits non-zero if any path could not be shown.
+
 `,
 	}, c.cmdX509Show)
 

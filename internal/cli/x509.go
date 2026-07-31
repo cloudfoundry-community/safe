@@ -6,6 +6,7 @@ import (
 	"io"
 	"math/big"
 	"os"
+	"strings"
 	"time"
 
 	fmt "github.com/jhunt/go-ansi"
@@ -578,23 +579,53 @@ func (c *CLI) cmdX509Show(command string, args ...string) error {
 	}
 	v := connect(true)
 
-	for _, path := range args {
-		s, err := v.Read(path)
-		if err != nil {
-			return err
-		}
+	//A path that holds no certificate was reported on the screen and nowhere
+	// else, so a run that showed nothing at all still exited 0 and a script
+	// checking a batch of paths was told they were fine. A path that could
+	// not be read ended the run where it stood, leaving the paths after it
+	// unreported. Both are now said as they are reached, and the run answers
+	// for them at the end.
+	var unshown []string
 
+	for _, path := range args {
 		_, _ = fmt.Printf("%s:\n", path)
-		cert, err := s.X509(false)
+
+		var cert *vault.X509
+		s, err := v.Read(path)
+		if err == nil {
+			cert, err = s.X509(false)
+		}
 		if err != nil {
 			_, _ = fmt.Printf("  !! %s\n\n", err)
+			unshown = append(unshown, path)
 			continue
 		}
 
 		printX509(os.Stdout, cert)
 	}
 
+	if len(unshown) > 0 {
+		return fmt.Errorf("no certificate to show at %s", strings.Join(unshown, ", "))
+	}
 	return nil
+}
+
+const day = 24 * time.Hour
+
+// daysAway rounds a span of time still to come to the nearest whole day, so
+// that a span of very nearly n days is reported as n rather than as the n-1
+// whole days it technically holds.
+func daysAway(d time.Duration) int {
+	return int((d + day/2) / day)
+}
+
+// count names a quantity of something, in the singular when there is one of
+// it.
+func count(n int, noun string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, noun)
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
 }
 
 // printX509 renders the human-readable detail block for a single
@@ -614,34 +645,61 @@ func printX509(w io.Writer, cert *vault.X509) {
 	toStart := time.Until(cert.Certificate.NotBefore)
 	toEnd := time.Until(cert.Certificate.NotAfter)
 
-	days := int(toStart.Hours() / 24)
-	if days == 1 {
-		_, _ = fmt.Fprintf(w, "  @Y{not valid for another day}\n")
-	} else if days > 1 {
+	//A wait or a countdown is reported to the nearest day rather than in
+	// whole days elapsed. A certificate issued to run for 30 days is a moment
+	// short of 30 days old the instant it is written, and counting whole days
+	// reported every one of them one day short.
+	switch days := daysAway(toStart); {
+	case toStart <= 0:
+		//Already in force; nothing to say about it starting.
+	case days <= 1:
+		//Rounding a wait of a few hours to no days at all said nothing at
+		// all, and a certificate that cannot be used yet read as usable.
+		if toStart < day {
+			_, _ = fmt.Fprintf(w, "  @Y{not valid yet}\n")
+		} else {
+			_, _ = fmt.Fprintf(w, "  @Y{not valid for another day}\n")
+		}
+	default:
 		_, _ = fmt.Fprintf(w, "  @Y{not valid for another %d days}\n", days)
 	}
 
-	days = int(toEnd.Hours() / 24)
-	if days < -1 {
-		_, _ = fmt.Fprintf(w, "  @R{EXPIRED %d days ago}\n", -1*days)
-	} else if days < 0 {
+	//Time already spent is counted in whole days, which is how "expired two
+	// days ago" is read; time still to come is rounded, as above.
+	switch days := daysAway(toEnd); {
+	case toEnd <= -2*day:
+		_, _ = fmt.Fprintf(w, "  @R{EXPIRED %d days ago}\n", int(-toEnd/day))
+	case toEnd <= -day:
 		_, _ = fmt.Fprintf(w, "  @R{EXPIRED a day ago}\n")
-	} else if days < 1 {
+	case toEnd <= 0:
 		_, _ = fmt.Fprintf(w, "  @R{EXPIRED}\n")
-	} else if days == 1 {
+	case toEnd < day:
+		//The case whole days cannot tell from an expired certificate: still
+		// valid, and out of days. It used to be reported as EXPIRED.
+		_, _ = fmt.Fprintf(w, "  @Y{expires in less than a day}\n")
+	case days <= 1:
 		_, _ = fmt.Fprintf(w, "  @Y{expires in a day}\n")
-	} else if days < 30 {
+	case days < 30:
 		_, _ = fmt.Fprintf(w, "  @Y{expires in %d days}\n", days)
-	} else {
+	default:
 		_, _ = fmt.Fprintf(w, "  expires in @G{%d days}\n", days)
 	}
 	_, _ = fmt.Fprintf(w, "  valid from @C{%s} - @C{%s}", cert.Certificate.NotBefore.Format("Jan 2 2006"), cert.Certificate.NotAfter.Format("Jan 2 2006"))
 
-	life := int(cert.Certificate.NotAfter.Sub(cert.Certificate.NotBefore).Hours())
-	if life < 360*24 {
-		_, _ = fmt.Fprintf(w, " (@M{~%d days})\n", life/24)
-	} else {
-		_, _ = fmt.Fprintf(w, " (@M{~%d years})\n", life/365/24)
+	//The life a certificate was issued for is given in the largest unit that
+	// counts it. Years and days used to be the only two, divided at 360 days
+	// -- five short of the year the years are counted in -- so a life of 360
+	// to 364 days divided to nothing and was reported as `~0 years'. A life
+	// of a few hours, which `--ttl 12h' asks for, had the same nothing to say
+	// for itself in days.
+	life := cert.Certificate.NotAfter.Sub(cert.Certificate.NotBefore)
+	switch {
+	case life < day:
+		_, _ = fmt.Fprintf(w, " (@M{~%s})\n", count(int(life/time.Hour), "hour"))
+	case life < 365*day:
+		_, _ = fmt.Fprintf(w, " (@M{~%s})\n", count(int(life/day), "day"))
+	default:
+		_, _ = fmt.Fprintf(w, " (@M{~%s})\n", count(int(life/(365*day)), "year"))
 	}
 	_, _ = fmt.Fprintf(w, "\n")
 
@@ -734,7 +792,14 @@ func printX509(w io.Writer, cert *vault.X509) {
 		x509.SHA384WithRSAPSS:          "SHA384 With RSAPSS",
 		x509.SHA512WithRSAPSS:          "SHA512 With RSAPSS",
 	}
-	sigAlgo := sigView[cert.Certificate.SignatureAlgorithm]
+	//An algorithm the table above does not name is named the way Go names it,
+	// which for Ed25519 -- what `safe x509 issue --type ed25519' signs with --
+	// is `Ed25519'. Reading the table alone, the line came out with nothing
+	// after it.
+	sigAlgo, ok := sigView[cert.Certificate.SignatureAlgorithm]
+	if !ok {
+		sigAlgo = cert.Certificate.SignatureAlgorithm.String()
+	}
 	_, _ = fmt.Fprintf(w, "@G{%s}\n", sigAlgo)
 	_, _ = fmt.Fprintf(w, "\n")
 

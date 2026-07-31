@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"errors"
 	"strings"
 	"testing"
@@ -52,21 +53,49 @@ func TestRunner_Dispatch_RegistersHandlerAndTopic(t *testing.T) {
 	}
 }
 
-// TestRunner_Dispatch_HiddenCommand verifies that HIDEME commands are not added
-// to Topics (so they won't appear in help listings).
+// A hidden command is one the listing of commands leaves out. Its help is
+// still meant to be reachable: `safe x509' is hidden and prints its own topic
+// to say what its sub-commands are.
 func TestRunner_Dispatch_HiddenCommand(t *testing.T) {
 	t.Parallel()
 	r := NewRunner()
 	r.Dispatch("secret-internal", &Help{
-		Summary: "hidden",
-		Type:    HiddenCommand,
+		Summary:     "hidden",
+		Usage:       "safe secret-internal",
+		Description: "what the hidden command is for",
+		Type:        HiddenCommand,
 	}, func(cmd string, args ...string) error { return nil })
 
-	if _, inTopics := r.Topics["secret-internal"]; inTopics {
-		t.Error("hidden command should not appear in Topics")
-	}
 	if _, inHandlers := r.Handlers["secret-internal"]; !inHandlers {
 		t.Error("hidden command should still be in Handlers")
+	}
+
+	var help bytes.Buffer
+	r.Help(&help, "secret-internal")
+	if !strings.Contains(help.String(), "what the hidden command is for") {
+		t.Errorf("help for a hidden command = %q, want its description", help.String())
+	}
+
+	var listing bytes.Buffer
+	r.Help(&listing, "commands")
+	if strings.Contains(listing.String(), "secret-internal") {
+		t.Errorf("listing = %q, want a hidden command left out of it", listing.String())
+	}
+}
+
+// The listing keeps the commands that are not hidden.
+func TestRunner_Help_ListsVisibleCommands(t *testing.T) {
+	t.Parallel()
+	r := NewRunner()
+	r.Dispatch("ping", &Help{
+		Summary: "ping summary",
+		Type:    NonDestructiveCommand,
+	}, func(cmd string, args ...string) error { return nil })
+
+	var listing bytes.Buffer
+	r.Help(&listing, "commands")
+	if !strings.Contains(listing.String(), "ping") {
+		t.Errorf("listing = %q, want it to name ping", listing.String())
 	}
 }
 

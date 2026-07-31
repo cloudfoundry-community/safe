@@ -14,16 +14,18 @@ import (
 
 func (c *CLI) cmdVersion(command string, args ...string) error {
 
+	//Which safe is running is an answer to a question that was asked, so it
+	// goes where output goes. On standard error, safe -v | cut said nothing.
 	if Version != "" {
-		_, _ = fmt.Fprintf(os.Stderr, "safe v%s\n", Version)
+		_, _ = fmt.Fprintf(os.Stdout, "safe v%s\n", Version)
 	} else {
-		_, _ = fmt.Fprintf(os.Stderr, "safe (development build)\n")
+		_, _ = fmt.Fprintf(os.Stdout, "safe (development build)\n")
 	}
 	if GitCommit != "" {
-		_, _ = fmt.Fprintf(os.Stderr, "  commit %s\n", GitCommit)
+		_, _ = fmt.Fprintf(os.Stdout, "  commit %s\n", GitCommit)
 	}
 	if BuildTime != "" {
-		_, _ = fmt.Fprintf(os.Stderr, "  built  %s\n", BuildTime)
+		_, _ = fmt.Fprintf(os.Stdout, "  built  %s\n", BuildTime)
 	}
 	rc.Cleanup()
 	os.Exit(0)

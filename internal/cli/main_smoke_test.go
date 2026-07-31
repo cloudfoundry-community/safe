@@ -184,6 +184,21 @@ func TestHelpIsWrittenToStandardOutput(t *testing.T) {
 	}
 }
 
+// So is the version. safe -v | cut told you nothing about which safe you are
+// running, because the version was on standard error.
+func TestVersionIsWrittenToStandardOutput(t *testing.T) {
+	for _, args := range [][]string{{"version"}, {"-v"}} {
+		stdout, stderr, status := run(t, args...)
+		if status != 0 {
+			t.Errorf("safe %s exited %d, want 0", strings.Join(args, " "), status)
+		}
+		if !strings.Contains(stdout, "safe") {
+			t.Errorf("safe %s wrote %q to standard output; standard error had:\n%s",
+				strings.Join(args, " "), stdout, stderr)
+		}
+	}
+}
+
 // A command in the listing is a command safe help can answer for.
 func TestHelpAnswersForEveryCommandListed(t *testing.T) {
 	stdout, stderr, _ := run(t, "commands")

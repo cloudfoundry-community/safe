@@ -125,6 +125,75 @@ vaults:
 	}
 }
 
+// A target that cannot be connected to at all -- one carrying no address, or
+// an address that will not parse -- used to end the whole run where it stood,
+// with a message telling the user to target a Vault. The targets after it went
+// unrenewed and unmentioned, and the count of what failed was never printed.
+func TestRenewAllCarriesOnPastATargetItCannotConnectTo(t *testing.T) {
+	isolateHome(t)
+	good := newRenewFake(t)
+	writeSaferc(t, `version: 1
+current: zulu
+vaults:
+  aaa-broken:
+    url: ""
+    token: token-broken
+  zulu:
+    url: `+good.url+`
+    token: token-zulu
+`)
+
+	c := newRenewCLI(t)
+	var err error
+	problems := captureStderr(t, func() {
+		_ = captureStdout(t, func() { err = c.cmdRenew("renew", "all") })
+	})
+
+	if err == nil {
+		t.Fatal("renew all over a broken target = nil, want an error")
+	}
+	if !strings.Contains(problems, "aaa-broken") {
+		t.Errorf("the target that failed should be named\n---\n%s", problems)
+	}
+	if got := good.served(); len(got) != 1 {
+		t.Errorf("the target after the broken one served %d renewals, want 1", len(got))
+	}
+}
+
+// A token the Vault will not renew is counted, and the targets after it are
+// still renewed.
+func TestRenewAllCountsTheTokensItCouldNotRenew(t *testing.T) {
+	isolateHome(t)
+	alpha, beta := newRenewFake(t), newRenewFake(t)
+	alpha.reject = true
+	writeSaferc(t, `version: 1
+current: alpha
+vaults:
+  alpha:
+    url: `+alpha.url+`
+    token: token-alpha
+  beta:
+    url: `+beta.url+`
+    token: token-beta
+`)
+
+	c := newRenewCLI(t)
+	var err error
+	_ = captureStderr(t, func() {
+		_ = captureStdout(t, func() { err = c.cmdRenew("renew", "all") })
+	})
+
+	if err == nil {
+		t.Fatal("renew all over a rejected token = nil, want an error")
+	}
+	if !strings.Contains(err.Error(), "1") {
+		t.Errorf("error %q should count the one token it could not renew", err)
+	}
+	if got := beta.served(); len(got) != 1 {
+		t.Errorf("beta served %d renewals, want 1", len(got))
+	}
+}
+
 // Targets were renewed in whatever order the config map happened to hand
 // them over, so two runs over the same config reported them differently and
 // neither could be read against the last.

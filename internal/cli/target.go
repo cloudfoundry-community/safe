@@ -682,7 +682,17 @@ func (c *CLI) cmdRenew(command string, args ...string) error {
 				continue
 			}
 			_, _ = fmt.Printf("renewing token against @C{%s}...\n", vault)
-			v := connect(true)
+			//A target that cannot be connected to is one more failure to
+			// report at the end. connect would print advice about targeting a
+			// Vault -- which names no target and makes no sense here -- and
+			// end the run where it stood, leaving the targets after it
+			// unrenewed and unmentioned.
+			v, err := connectOrErr(true)
+			if err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "@R{failed to connect to %s: %s}\n", vault, err)
+				failed++
+				continue
+			}
 			if err := v.RenewLease(); err != nil {
 				_, _ = fmt.Fprintf(os.Stderr, "@R{failed to renew token against %s: %s}\n", vault, err)
 				failed++

@@ -779,7 +779,14 @@ func printX509(w io.Writer, cert *vault.X509) {
 		x509.SHA384WithRSAPSS:          "SHA384 With RSAPSS",
 		x509.SHA512WithRSAPSS:          "SHA512 With RSAPSS",
 	}
-	sigAlgo := sigView[cert.Certificate.SignatureAlgorithm]
+	//An algorithm the table above does not name is named the way Go names it,
+	// which for Ed25519 -- what `safe x509 issue --type ed25519' signs with --
+	// is `Ed25519'. Reading the table alone, the line came out with nothing
+	// after it.
+	sigAlgo, ok := sigView[cert.Certificate.SignatureAlgorithm]
+	if !ok {
+		sigAlgo = cert.Certificate.SignatureAlgorithm.String()
+	}
 	_, _ = fmt.Fprintf(w, "@G{%s}\n", sigAlgo)
 	_, _ = fmt.Fprintf(w, "\n")
 

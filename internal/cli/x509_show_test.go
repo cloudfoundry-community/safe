@@ -8,6 +8,7 @@ package cli
 
 import (
 	"bytes"
+	"crypto/x509"
 	"strings"
 	"testing"
 	"time"
@@ -163,6 +164,55 @@ func TestPrintX509_ReportsTheLifeItWasIssuedFor(t *testing.T) {
 				t.Errorf("output should report a life of %q\n---\n%s", tc.want, out)
 			}
 		})
+	}
+}
+
+// Every algorithm safe will sign with has a name to report. Ed25519 -- which
+// `safe x509 issue --type ed25519' produces, and which --sig-algorithm names
+// as well -- had none, and the line reporting it came out with nothing after
+// it.
+func TestPrintX509_NamesTheAlgorithmItWasSignedWith(t *testing.T) {
+	for _, tc := range []struct {
+		keyType string
+		curve   string
+		bits    int
+		want    string
+	}{
+		{keyType: "rsa", bits: 2048, want: "signed with the algorithm SHA512 With RSA"},
+		{keyType: "ec", curve: "p256", want: "signed with the algorithm ECDSA With SHA256"},
+		{keyType: "ed25519", want: "signed with the algorithm Ed25519"},
+	} {
+		t.Run(tc.keyType, func(t *testing.T) {
+			spec, err := vault.ResolveKeySpec(tc.keyType, tc.bits, tc.curve, nil)
+			if err != nil {
+				t.Fatalf("ResolveKeySpec(%s): %v", tc.keyType, err)
+			}
+			cert, err := vault.NewCertificate("CN=leaf.example.com",
+				[]string{"leaf.example.com"}, []string{"server_auth"}, "", spec)
+			if err != nil {
+				t.Fatalf("NewCertificate(%s): %v", tc.keyType, err)
+			}
+			if err := cert.Sign(cert, 30*day); err != nil {
+				t.Fatalf("Sign(%s): %v", tc.keyType, err)
+			}
+
+			if out := showOutput(t, cert); !strings.Contains(out, tc.want) {
+				t.Errorf("output should report %q\n---\n%s", tc.want, out)
+			}
+		})
+	}
+}
+
+// An algorithm safe has no name of its own for is reported by the name Go
+// gives it, rather than as a blank.
+func TestPrintX509_NamesAnAlgorithmItDoesNotKnow(t *testing.T) {
+	now := time.Now()
+	cert := showCert(t, now, now.Add(30*day))
+	cert.Certificate.SignatureAlgorithm = x509.SignatureAlgorithm(0xff)
+
+	want := "signed with the algorithm " + x509.SignatureAlgorithm(0xff).String()
+	if out := showOutput(t, cert); !strings.Contains(out, want) {
+		t.Errorf("output should report %q\n---\n%s", want, out)
 	}
 }
 

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"io"
+	"net/http"
 	"net/http/httputil"
 	"os"
 	"slices"
@@ -228,8 +229,20 @@ func (c *CLI) cmdCurl(command string, args ...string) error {
 		_, _ = fmt.Fprintf(os.Stdout, "%s\n", string(b))
 
 	} else {
-		r, _ := httputil.DumpResponse(res, true)
-		_, _ = fmt.Fprintf(os.Stdout, "%s\n", r)
+		dump, err := httputil.DumpResponse(res, true)
+		if err != nil {
+			return fmt.Errorf("could not read the response to %s %s: %w", method, url, err)
+		}
+		_, _ = fmt.Fprintf(os.Stdout, "%s\n", dump)
+	}
+
+	//A request the Vault refused left safe exiting 0, so a script asking for
+	// a path it may not read, or one that is not there, could not tell that
+	// apart from a request that worked. Under --data-only, where the status
+	// line is not printed either, nothing at all said so. What Vault answered
+	// is printed either way: reading it is what the command is for.
+	if res.StatusCode >= http.StatusBadRequest {
+		return fmt.Errorf("%s %s: %s", method, url, res.Status)
 	}
 	return nil
 }

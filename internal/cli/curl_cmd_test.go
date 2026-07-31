@@ -101,6 +101,62 @@ func TestCmdCurlTakesALoneURIAsAGet(t *testing.T) {
 	}
 }
 
+// A refused request used to leave safe exiting 0, so a script could not tell
+// it from one that worked.
+func TestCmdCurlFailsWhenTheVaultRefuses(t *testing.T) {
+	c, _ := newCurlCLI(t)
+
+	var err error
+	out := captureStdout(t, func() { err = c.cmdCurl("curl", "GET", "/nowhere") })
+
+	if err == nil {
+		t.Fatal("a 404 from the Vault returned no error")
+	}
+	if !strings.Contains(err.Error(), "404") {
+		t.Errorf("error was %q, want it to name the status", err)
+	}
+	//What the Vault said is the answer to the question that was asked, and it
+	// is printed whether or not the status was one safe reports as a failure.
+	if !strings.Contains(out, "404") {
+		t.Errorf("printed %q, want the response the Vault sent", out)
+	}
+}
+
+// --data-only hides the status line, so without an exit code there is nothing
+// left to say the request was refused.
+func TestCmdCurlDataOnlyFailsWhenTheVaultRefuses(t *testing.T) {
+	c, _ := newCurlCLI(t)
+	c.opt.Curl.DataOnly = true
+
+	var err error
+	out := captureStdout(t, func() { err = c.cmdCurl("curl", "GET", "/nowhere") })
+
+	if err == nil {
+		t.Fatal("a 404 from the Vault returned no error")
+	}
+	if !strings.Contains(out, `"errors"`) {
+		t.Errorf("printed %q, want the body the Vault sent", out)
+	}
+	if strings.Contains(out, "HTTP/") {
+		t.Errorf("printed %q, want the body alone under --data-only", out)
+	}
+}
+
+// A request the Vault answered is a success, and stays one.
+func TestCmdCurlSucceedsWhenTheVaultAnswers(t *testing.T) {
+	c, _ := newCurlCLI(t)
+
+	var err error
+	out := captureStdout(t, func() { err = c.cmdCurl("curl", "GET", "/secret/handshake") })
+
+	if err != nil {
+		t.Fatalf("cmdCurl: %v", err)
+	}
+	if !strings.Contains(out, "200 OK") {
+		t.Errorf("printed %q, want the status line", out)
+	}
+}
+
 // A method is sent as it is named, whatever case it was written in.
 func TestCmdCurlUppercasesTheMethod(t *testing.T) {
 	c, fv := newCurlCLI(t)

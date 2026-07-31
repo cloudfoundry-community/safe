@@ -1,0 +1,71 @@
+#!/bin/bash
+set -eu
+
+# Concourse task entry point for the safe round-trip suite. Runs the built safe
+# binary against a live HashiCorp Vault or OpenBao server across one or more
+# engine versions.
+#
+# ENGINE selects the server (vault by default). The version list comes from
+# VAULT_VERSIONS or OPENBAO_VERSIONS to match, so a job's params read as the
+# engine it is testing.
+
+# Resource Directories
+export REPO_ROOT="git"
+export BUILD_ROOT="build"
+export CI_ROOT="git-ci"
+export VERSION_FROM="version/number"
+export ROOT_PATH="$(pwd)"
+
+header() {
+	echo
+	echo "================================================================================"
+	echo "$1"
+	echo "--------------------------------------------------------------------------------"
+	echo
+}
+
+bail() {
+	echo >&2 "$*  Did you misconfigure Concourse?"
+	exit 2
+}
+
+ENGINE="${ENGINE:-vault}"
+case "${ENGINE}" in
+	vault)
+		VERSIONS="${VAULT_VERSIONS:-}"
+		test -n "${VERSIONS}" || bail "VAULT_VERSIONS must be set to the version(s) of HashiCorp Vault to test against."
+		;;
+	bao)
+		VERSIONS="${OPENBAO_VERSIONS:-}"
+		test -n "${VERSIONS}" || bail "OPENBAO_VERSIONS must be set to the version(s) of OpenBao to test against."
+		;;
+	*)
+		bail "ENGINE must be one of: vault, bao (got '${ENGINE}')."
+		;;
+esac
+
+test -n "${PROJECT:-}"    || bail "PROJECT must be set to the name of this package."
+
+test -f "${VERSION_FROM}" || bail "Version file (${VERSION_FROM}) not found."
+VERSION=$(cat "${VERSION_FROM}")
+test -n "${VERSION}"      || bail "Version file (${VERSION_FROM}) was empty."
+
+OS=$(uname -s | tr A-Z a-z)
+ARCH=$(uname -m | sed -e 's/^x86_/amd/')
+
+[[ -e "$BUILD_ROOT/$PROJECT-$VERSION-$OS-$ARCH" ]] || \
+  bail "Cannot find safe executable for v$VERSION on $OS/$ARCH"
+
+header "Testing $PROJECT v$VERSION ($OS/$ARCH) against ${ENGINE} $VERSIONS"
+
+cd "$REPO_ROOT"
+make test-integration \
+  ENGINE="$ENGINE" \
+  TEST_PATH="../$CI_ROOT/ci/scripts/tests" \
+  SAFE_PATH="../$BUILD_ROOT/$PROJECT-$VERSION-$OS-$ARCH" \
+  VERSIONS="$VERSIONS"
+
+echo
+echo "================================================================================"
+echo "SUCCESS!"
+exit 0

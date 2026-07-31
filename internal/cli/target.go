@@ -645,12 +645,48 @@ func (c *CLI) cmdRenew(command string, args ...string) error {
 		if len(args) != 1 || args[0] != "all" {
 			return r.Usage("renew")
 		}
-		cfg, err := rc.Apply("")
+		//Naming one target and asking for all of them says two things at
+		// once. The rest of safe says which one it went with; this said
+		// nothing and renewed them all.
+		if opt.UseTarget != "" {
+			_, _ = fmt.Fprintf(os.Stderr, "@Y{Specifying --target while renewing all targets makes no sense; ignoring...}\n")
+		}
+		//Reading the config rather than applying it: what the current target
+		// is has no bearing on renewing every target, and applying it here
+		// would leave its settings standing over the first target renewed.
+		cfg, err := rc.Read()
 		if err != nil {
 			return err
 		}
+		//Renewing every one of no targets printed nothing and succeeded, so a
+		// run against a config that had been lost said as much as one that
+		// had renewed everything.
+		if len(cfg.Vaults) == 0 {
+			_, _ = fmt.Fprintf(os.Stderr, "@Y{no targets to renew.}\n")
+			_, _ = fmt.Fprintf(os.Stderr, "Try @C{safe renew} to renew the token in your environment,\n")
+			_, _ = fmt.Fprintf(os.Stderr, " or @C{safe target https://your-vault alias} to configure one.\n")
+			return nil
+		}
+		//Each target is applied to the environment the command started with,
+		// not to the one the target before it left behind. A target that says
+		// nothing about certificate verification, a CA bundle, or a namespace
+		// was otherwise talked to on the terms of whichever target happened to
+		// be renewed before it.
+		env := rc.SnapshotEnv()
+		defer env.Restore()
+
+		//In the order the targets are named everywhere else. Walking the
+		// config gave them over in whatever order it held them, so two runs
+		// over the same targets reported them differently.
+		aliases := make([]string, 0, len(cfg.Vaults))
+		for alias := range cfg.Vaults {
+			aliases = append(aliases, alias)
+		}
+		sort.Strings(aliases)
+
 		failed := 0
-		for vault := range cfg.Vaults {
+		for _, vault := range aliases {
+			env.Restore()
 			if _, err := rc.Apply(vault); err != nil {
 				_, _ = fmt.Fprintf(os.Stderr, "@R{failed to apply config for %s: %s}\n", vault, err)
 				failed++
@@ -661,7 +697,17 @@ func (c *CLI) cmdRenew(command string, args ...string) error {
 				continue
 			}
 			_, _ = fmt.Printf("renewing token against @C{%s}...\n", vault)
-			v := connect(true)
+			//A target that cannot be connected to is one more failure to
+			// report at the end. connect would print advice about targeting a
+			// Vault -- which names no target and makes no sense here -- and
+			// end the run where it stood, leaving the targets after it
+			// unrenewed and unmentioned.
+			v, err := connectOrErr(true)
+			if err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "@R{failed to connect to %s: %s}\n", vault, err)
+				failed++
+				continue
+			}
 			if err := v.RenewLease(); err != nil {
 				_, _ = fmt.Fprintf(os.Stderr, "@R{failed to renew token against %s: %s}\n", vault, err)
 				failed++

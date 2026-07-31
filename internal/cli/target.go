@@ -446,16 +446,21 @@ type envVar struct {
 
 func (c *CLI) cmdEnv(command string, args ...string) error {
 	opt := c.opt
-	r := c.r
 
 	if _, err := rc.Apply(opt.UseTarget); err != nil {
 		return err
 	}
-	if opt.Env.ForBash && opt.Env.ForFish && opt.Env.ForJSON {
-		_ = r.Help(os.Stderr, "env")
-		_, _ = fmt.Fprintf(os.Stderr, "@R{Only specify one of --json, --bash OR --fish.}\n")
-		rc.Cleanup()
-		os.Exit(1)
+	//Two formats were a mistake only when all three were named, so safe env
+	// --bash --fish printed one of them and said nothing about the other,
+	// leaving the caller to find out which it had picked.
+	formats := 0
+	for _, named := range []bool{opt.Env.ForBash, opt.Env.ForFish, opt.Env.ForJSON} {
+		if named {
+			formats++
+		}
+	}
+	if formats > 1 {
+		return fmt.Errorf("Only specify one of --json, --bash OR --fish")
 	}
 	addr := os.Getenv("VAULT_ADDR")
 	token := os.Getenv("VAULT_TOKEN")

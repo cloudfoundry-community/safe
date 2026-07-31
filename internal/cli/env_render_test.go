@@ -242,6 +242,66 @@ set -x VAULT_NAMESPACE 'ns/dev';
 }
 
 // ---------------------------------------------------------------------------
+// conflicting formats
+// ---------------------------------------------------------------------------
+
+// Naming two formats was a mistake only when all three were given, so safe
+// env --bash --fish printed the bash form and succeeded without saying which
+// of the two it had chosen.
+func TestCmdEnv_TwoFormatsIsAnError(t *testing.T) {
+	cases := []struct {
+		name                string
+		bash, fish, jsonFmt bool
+		wantErr             bool
+	}{
+		{name: "bash", bash: true},
+		{name: "fish", fish: true},
+		{name: "json", jsonFmt: true},
+		{name: "none"},
+		{name: "bash and fish", bash: true, fish: true, wantErr: true},
+		{name: "bash and json", bash: true, jsonFmt: true, wantErr: true},
+		{name: "fish and json", fish: true, jsonFmt: true, wantErr: true},
+		{name: "all three", bash: true, fish: true, jsonFmt: true, wantErr: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateHome(t)
+			t.Setenv("VAULT_ADDR", "https://vault.example.com")
+			t.Setenv("VAULT_TOKEN", "")
+			t.Setenv("VAULT_SKIP_VERIFY", "")
+			t.Setenv("VAULT_NAMESPACE", "")
+
+			c := newEnvCLI(t)
+			c.opt.Env.ForBash = tc.bash
+			c.opt.Env.ForFish = tc.fish
+			c.opt.Env.ForJSON = tc.jsonFmt
+
+			var err error
+			out := captureStdout(t, func() { err = c.cmdEnv("env") })
+
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatalf("cmdEnv: unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("cmdEnv gave no error and printed:\n%s", out)
+			}
+			if !strings.Contains(err.Error(), "one of") {
+				t.Errorf("error = %q, want it to say only one format may be given", err)
+			}
+			//Nothing is printed: a caller reading the output cannot tell one
+			// format from another once it is written.
+			if out != "" {
+				t.Errorf("cmdEnv printed a format anyway:\n%s", out)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
 // quoting
 // ---------------------------------------------------------------------------
 

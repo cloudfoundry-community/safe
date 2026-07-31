@@ -1577,6 +1577,17 @@ Currently, only the --renew option is supported, and it is required:
 		}
 
 		if p.Command == "" { //No recognized command was found
+			//A word safe has no command for is a mistake to report, and the
+			// word itself is the useful half of the report. Printing the whole
+			// listing said nothing about which word was wrong, and the run
+			// ended in success, so a mistyped command in a script read as one
+			// that had done its work.
+			if len(p.Args) > 0 {
+				_, _ = fmt.Fprintf(os.Stderr, "@R{!! unrecognized command '%s'}\n", p.Args[0])
+				_, _ = fmt.Fprintf(os.Stderr, "Try 'safe commands' for a list of valid commands\n")
+				rc.Cleanup()
+				os.Exit(1)
+			}
 			_ = r.Execute("help")
 			return
 		}

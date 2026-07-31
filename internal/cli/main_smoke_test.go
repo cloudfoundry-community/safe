@@ -125,6 +125,34 @@ func TestCommandsIsACommandOfItsOwn(t *testing.T) {
 	}
 }
 
+// A command safe does not have was not a failure: the whole listing came back
+// and the run ended in success, so a mistyped command in a script read as one
+// that had done its work.
+func TestAnUnrecognizedCommandIsNamedAndFails(t *testing.T) {
+	stdout, stderr, status := run(t, "gett", "secret/handshake")
+	if status == 0 {
+		t.Errorf("safe gett exited 0, want a failure")
+	}
+	if !strings.Contains(stderr, "gett") {
+		t.Errorf("stderr = %q, want the word safe did not recognize named", stderr)
+	}
+	if strings.Contains(stdout+stderr, "Valid commands are:") {
+		t.Errorf("one mistyped command brought back the whole listing:\n%s", stdout+stderr)
+	}
+}
+
+// Nothing at all is not a mistake to report -- it is someone asking what safe
+// can do.
+func TestNoCommandAtAllGivesTheListing(t *testing.T) {
+	stdout, stderr, status := run(t)
+	if status != 0 {
+		t.Errorf("safe with no arguments exited %d, want 0", status)
+	}
+	if !strings.Contains(stdout+stderr, "Valid commands are:") {
+		t.Errorf("safe with no arguments printed no listing:\n%s", stdout+stderr)
+	}
+}
+
 // A command in the listing is a command safe help can answer for.
 func TestHelpAnswersForEveryCommandListed(t *testing.T) {
 	stdout, stderr, _ := run(t, "commands")

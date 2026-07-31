@@ -606,6 +606,15 @@ func daysAway(d time.Duration) int {
 	return int((d + day/2) / day)
 }
 
+// count names a quantity of something, in the singular when there is one of
+// it.
+func count(n int, noun string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, noun)
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
+}
+
 // printX509 renders the human-readable detail block for a single
 // certificate to w. Output is identical to the original inline
 // rendering in cmdX509Show (go-ansi Printf is Fprintf to os.Stdout).
@@ -664,11 +673,20 @@ func printX509(w io.Writer, cert *vault.X509) {
 	}
 	_, _ = fmt.Fprintf(w, "  valid from @C{%s} - @C{%s}", cert.Certificate.NotBefore.Format("Jan 2 2006"), cert.Certificate.NotAfter.Format("Jan 2 2006"))
 
-	life := int(cert.Certificate.NotAfter.Sub(cert.Certificate.NotBefore).Hours())
-	if life < 360*24 {
-		_, _ = fmt.Fprintf(w, " (@M{~%d days})\n", life/24)
-	} else {
-		_, _ = fmt.Fprintf(w, " (@M{~%d years})\n", life/365/24)
+	//The life a certificate was issued for is given in the largest unit that
+	// counts it. Years and days used to be the only two, divided at 360 days
+	// -- five short of the year the years are counted in -- so a life of 360
+	// to 364 days divided to nothing and was reported as `~0 years'. A life
+	// of a few hours, which `--ttl 12h' asks for, had the same nothing to say
+	// for itself in days.
+	life := cert.Certificate.NotAfter.Sub(cert.Certificate.NotBefore)
+	switch {
+	case life < day:
+		_, _ = fmt.Fprintf(w, " (@M{~%s})\n", count(int(life/time.Hour), "hour"))
+	case life < 365*day:
+		_, _ = fmt.Fprintf(w, " (@M{~%s})\n", count(int(life/day), "day"))
+	default:
+		_, _ = fmt.Fprintf(w, " (@M{~%s})\n", count(int(life/(365*day)), "year"))
 	}
 	_, _ = fmt.Fprintf(w, "\n")
 

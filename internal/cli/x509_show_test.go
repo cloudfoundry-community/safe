@@ -136,6 +136,36 @@ func TestPrintX509_ReportsACertificateThatIsNotInForceYet(t *testing.T) {
 	}
 }
 
+// The life a certificate was issued for is reported alongside its dates, in
+// years for a life of a year or more and in days for anything shorter. The
+// two were divided at 360 days, five days below the year the first of them
+// divides by, so a life between the two reported as no time at all -- as did
+// a life of a few hours, which `--ttl 12h' asks for and which no count of
+// days can express.
+func TestPrintX509_ReportsTheLifeItWasIssuedFor(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name string
+		life time.Duration
+		want string
+	}{
+		{name: "an hour", life: time.Hour, want: "(~1 hour)"},
+		{name: "half a day", life: 12 * time.Hour, want: "(~12 hours)"},
+		{name: "ninety days", life: 90 * day, want: "(~90 days)"},
+		{name: "just under a year", life: 363 * day, want: "(~363 days)"},
+		{name: "a year", life: 365 * day, want: "(~1 year)"},
+		{name: "two years", life: 730 * day, want: "(~2 years)"},
+		{name: "ten years", life: 3650 * day, want: "(~10 years)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := showOutput(t, showCert(t, now, now.Add(tc.life)))
+			if !strings.Contains(out, tc.want) {
+				t.Errorf("output should report a life of %q\n---\n%s", tc.want, out)
+			}
+		})
+	}
+}
+
 // A certificate already in force says nothing about coming into force.
 func TestPrintX509_SaysNothingAboutForceForACertificateInForce(t *testing.T) {
 	now := time.Now()

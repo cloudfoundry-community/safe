@@ -1,0 +1,9 @@
+resources:
+- name: github-openbao-2.6
+  type: github-release
+  check_every: 1h
+  source:
+    user:         openbao
+    repository:   openbao
+    access_token: (( grab meta.github.access_token ))
+    tag_filter: v?(2.6.[^v].*)

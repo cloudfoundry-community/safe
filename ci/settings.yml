@@ -1,4 +1,13 @@
 ---
+# base.yml is marked DO NOT MODIFY, so the OpenBao job is appended to the
+# release group from here rather than listed alongside the test-vault-* jobs
+# there.
+groups:
+- name: (( concat "build-" meta.pipeline "-releases" ))
+  jobs:
+  - (( append ))
+  - test-openbao-2.6
+
 meta:
   name:    safe
   release: Safe

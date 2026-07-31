@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http/httputil"
 	"os"
+	"slices"
 	"strings"
 
 	fmt "github.com/jhunt/go-ansi"
@@ -167,6 +168,15 @@ func (c *CLI) cmdFmt(command string, args ...string) error {
 	return v.Write(path, s)
 }
 
+// curlMethods are the methods safe curl will send. LIST is Vault's own; the
+// rest are the ones a Vault endpoint answers to.
+var curlMethods = []string{"GET", "LIST", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
+
+// isCurlMethod reports whether s names an HTTP method, whatever its case.
+func isCurlMethod(s string) bool {
+	return slices.Contains(curlMethods, strings.ToUpper(s))
+}
+
 func (c *CLI) cmdCurl(command string, args ...string) error {
 	opt := c.opt
 	r := c.r
@@ -180,13 +190,25 @@ func (c *CLI) cmdCurl(command string, args ...string) error {
 		data        []byte
 	)
 
+	//Whatever was given first was taken for the method and whatever was given
+	// alone was taken for the URI, neither of them read. So safe curl GET
+	// asked the Vault for /v1/GET, and safe curl /sys/health '{}' sent a
+	// request whose method was /SYS/HEALTH.
 	method = "GET"
-	if len(args) < 1 {
+	switch {
+	case len(args) < 1:
 		return r.Usage("curl")
-	} else if len(args) == 1 {
+	case len(args) == 1:
+		if isCurlMethod(args[0]) {
+			return fmt.Errorf("no REL-URI given to %s", strings.ToUpper(args[0]))
+		}
 		url = args[0]
-	} else {
+	default:
 		method = strings.ToUpper(args[0])
+		if !isCurlMethod(method) {
+			return fmt.Errorf("%s is not an HTTP method: give one of %s",
+				args[0], strings.Join(curlMethods, ", "))
+		}
 		url = args[1]
 		data = []byte(strings.Join(args[2:], " "))
 	}

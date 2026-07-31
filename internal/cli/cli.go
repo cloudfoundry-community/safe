@@ -622,6 +622,21 @@ Flags:
 		Summary: "Renew one or more authentication tokens",
 		Usage:   "safe renew [all]\n",
 		Type:    AdministrativeCommand,
+		Description: `
+Puts off the expiry of the token 'safe' authenticated with, without
+authenticating again. It extends the life of the token already saved
+for the target; it does not obtain a new one, and a token that has
+already expired cannot be renewed.
+
+Without arguments, the token renewed is the one belonging to the
+target you are on, or to the target named by --target.
+
+With 'all', every configured target is renewed, in the order that
+'safe targets' lists them. A target with no saved token is skipped.
+A target that could not be renewed is reported and the rest are
+renewed anyway; the command then exits non-zero with a count of what
+failed. --target names a single target and is ignored in this form.
+`,
 	}, c.cmdRenew)
 
 	r.Dispatch("ask", &Help{

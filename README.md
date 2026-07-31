@@ -98,6 +98,30 @@ safe auth okta
 For each type (token, ldap, okta or github), you will be prompted for
 the necessary credentials to authenticated against the Vault.
 
+A token does not last forever.  To put off its expiry, without
+authenticating again:
+
+```
+safe renew
+```
+
+That renews the token of the target you are on, or of the one
+`-T` names.  It extends the life of the token already saved; it
+does not obtain a new one, and a token that has already expired
+cannot be renewed.
+
+To renew the token of every target at once:
+
+```
+safe renew all
+```
+
+Targets are renewed in the order `safe targets` lists them.  A
+target with no saved token is skipped, and one that could not be
+renewed is reported and the rest are renewed anyway; the command
+exits non-zero with a count of what failed.  `-T` names a single
+target and is ignored here.
+
 Proxies
 -------
 

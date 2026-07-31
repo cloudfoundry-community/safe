@@ -29,7 +29,7 @@ export SAFE_ENGINE="$ENGINE"
 SAFE_CMD=$1 ; shift
 declare -a versions;
 if [[ $# > 0 ]] ; then
-  versions=$@
+  versions=("$@")
 else
   # The fallback list is per engine; a Vault version number asked of OpenBao
   # (or vice versa) has nothing behind it to download.

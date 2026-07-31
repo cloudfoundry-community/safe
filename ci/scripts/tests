@@ -300,14 +300,23 @@ kill_running_engine() {
 }
 
 cleanup() {
+  # $? is the status the script was exiting with when the EXIT trap fired.
+  # It must survive this handler: exiting with ${rc} alone would turn the
+  # explicit exits (bail's 2, the startup paths' 3) into success whenever no
+  # assertion had failed yet -- a suite that could not even download its
+  # server would report green.
+  local status=$?
   export HOME=${old_home}
   rm -rf t/
   kill_running_engine
 
-  if [[ ${done_testing} -eq 1 && ${rc} -eq 0 ]]; then
+  if [[ ${status} -eq 0 && ${done_testing} -eq 1 && ${rc} -eq 0 ]]; then
     tests_passed
   else
     tests_failed
+  fi
+  if [[ ${status} -ne 0 ]]; then
+    exit ${status}
   fi
   exit ${rc}
 }

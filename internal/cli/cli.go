@@ -1145,15 +1145,21 @@ The following OPTIONS are recognized:
 
   --data-only         Show only the response body, hiding the response headers.
 
-METHOD must be one of GET, LIST, POST, or PUT.
+METHOD must be one of GET, LIST, POST, PUT, PATCH, DELETE, HEAD or OPTIONS.
+Given on its own, without a REL-URI to ask for, it is an error.
 
-REL-URI is the relative URI (the path component, starting with the first
-forward slash) of the resource you wish to access.
+REL-URI names the resource you wish to access, and does @B{not} carry the
+@C{/v1} that every Vault API path begins with: safe adds it for you.  Ask for
+@C{/sys/health}, not @C{/v1/sys/health}, which reaches @C{/v1/v1/sys/health} and is
+not there.
 
 DATA should be a JSON string, since almost all of the Vault API handlers
 deal exclusively in JSON payloads.  GET requests should not have DATA.
 Query string parameters should be appended to REL-URI, instead of being
 sent as DATA.
+
+A response the Vault refused is printed as it arrived, and safe exits
+non-zero for it.
 `,
 	}, c.cmdCurl)
 

@@ -20,12 +20,17 @@ BINARY_NAME := safe
 GO_FILES := $(shell find . -name '*.go' -type f -not -path "./vendor/*")
 
 # Integration suite. TEST_PATH is the suite script, SAFE_PATH the binary it
-# drives, and VAULT_VERSIONS the space-separated Vault versions to run
-# against. CI overrides all three; the defaults run the in-tree suite
-# against a freshly built binary over the suite's own default versions.
+# drives, ENGINE the server to run against (vault or bao), and VERSIONS the
+# space-separated engine versions to test. CI overrides all of them; the
+# defaults run the in-tree suite against a freshly built binary over the
+# suite's own default versions.
 TEST_PATH ?= ci/scripts/tests
 SAFE_PATH ?= ./$(BINARY_NAME)
+ENGINE ?= vault
+# VAULT_VERSIONS is the older, engine-specific spelling of VERSIONS, kept so
+# existing invocations keep working.
 VAULT_VERSIONS ?=
+VERSIONS ?= $(VAULT_VERSIONS)
 
 ##@ General
 
@@ -86,8 +91,8 @@ test: ## Run all tests with race detector
 	@echo "$(GREEN)✓ Tests complete$(RESET)"
 
 .PHONY: test-integration
-test-integration: ## Run the end-to-end suite against real Vault servers
-	@echo "$(GREEN)Running integration suite...$(RESET)"
+test-integration: ## Run the end-to-end suite against a real server (ENGINE=vault|bao VERSIONS="1.13.13")
+	@echo "$(GREEN)Running integration suite (ENGINE=$(ENGINE))...$(RESET)"
 	@test -x "$(TEST_PATH)" || { echo "$(YELLOW)No suite at $(TEST_PATH)$(RESET)"; exit 2; }
 # Rebuild when driving the in-tree binary so the suite never runs against a
 # stale build. An overridden SAFE_PATH is taken as-is: CI supplies the
@@ -97,8 +102,14 @@ ifeq ($(SAFE_PATH),./$(BINARY_NAME))
 else
 	@test -x "$(SAFE_PATH)" || { echo "$(YELLOW)No safe binary at $(SAFE_PATH)$(RESET)"; exit 2; }
 endif
-	@$(TEST_PATH) $(SAFE_PATH) $(VAULT_VERSIONS)
+	@ENGINE=$(ENGINE) $(TEST_PATH) $(SAFE_PATH) $(VERSIONS)
 	@echo "$(GREEN)✓ Integration suite complete$(RESET)"
+
+.PHONY: test-engine-lib
+test-engine-lib: ## Run the engine helper unit tests (fast, offline)
+	@echo "$(GREEN)Running engine helper unit tests...$(RESET)"
+	@bash ci/scripts/t/engine_test.sh
+	@echo "$(GREEN)✓ Engine helper tests passed$(RESET)"
 
 .PHONY: test-short
 test-short: ## Run tests in short mode (no race detector)
@@ -196,7 +207,7 @@ security: govulncheck gosec trivy ## Run all security scans (govulncheck, gosec,
 	@echo "$(GREEN)✓ All security scans complete$(RESET)"
 
 .PHONY: check
-check: lint vet staticcheck test ## Run basic checks (lint, vet, staticcheck, test)
+check: lint vet staticcheck test test-engine-lib ## Run basic checks (lint, vet, staticcheck, tests)
 	@echo "$(GREEN)✓ Basic checks passed$(RESET)"
 
 .PHONY: check-all
@@ -292,5 +303,5 @@ deps-tidy: ## Clean up go.mod and go.sum
 	@echo "$(GREEN)✓ Dependencies tidied$(RESET)"
 
 # Include all phony targets
-.PHONY: build linux linux-arm64 darwin darwin-arm64 windows build-all test test-short test-race test-all coverage coverage-html report fmt vet lint \
+.PHONY: build linux linux-arm64 darwin darwin-arm64 windows build-all test test-short test-race test-integration test-engine-lib test-all coverage coverage-html report fmt vet lint \
         govulncheck gosec staticcheck trivy security check check-all clean shipit version install install-user deps deps-update deps-tidy help

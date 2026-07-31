@@ -690,6 +690,17 @@ expiry.
 private key is held offline or by another team can still be validated
 against.
 
+### x509 show path \[path ...\]
+
+Print what is known about the certificate at each _path_: who issued
+it, what names it is valid for, what its key is, how long it was
+issued for, and how much of that is left.  Only the certificate is
+read, so a path holding no private key can still be shown.
+
+Each path is reported in turn.  A path that holds no certificate, or
+that cannot be read, is reported as such and the rest are still shown;
+the command exits non-zero if any path could not be shown.
+
 ### x509 crl --renew path
 
 Renews (re-signs) the certificate authority at `path`, without

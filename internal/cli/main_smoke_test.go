@@ -172,6 +172,18 @@ func TestNoCommandAtAllGivesTheListing(t *testing.T) {
 	}
 }
 
+// Help is output that was asked for, so it goes where output goes. It was
+// written to standard error, so safe commands | grep came back with nothing.
+func TestHelpIsWrittenToStandardOutput(t *testing.T) {
+	for _, args := range [][]string{{"commands"}, {"help"}, {"help", "get"}, {"-h"}} {
+		stdout, stderr, _ := run(t, args...)
+		if stdout == "" {
+			t.Errorf("safe %s wrote nothing to standard output; standard error had:\n%s",
+				strings.Join(args, " "), stderr)
+		}
+	}
+}
+
 // A command in the listing is a command safe help can answer for.
 func TestHelpAnswersForEveryCommandListed(t *testing.T) {
 	stdout, stderr, _ := run(t, "commands")

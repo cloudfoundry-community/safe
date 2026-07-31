@@ -36,7 +36,9 @@ func (c *CLI) cmdHelp(command string, args ...string) error {
 	if len(args) == 0 {
 		args = append(args, "commands")
 	}
-	r.Help(os.Stderr, strings.Join(args, " "))
+	//Help is output that was asked for. Written to standard error, it could
+	// not be piped anywhere: safe commands | grep came back with nothing.
+	r.Help(os.Stdout, strings.Join(args, " "))
 	rc.Cleanup()
 	os.Exit(0)
 	return nil

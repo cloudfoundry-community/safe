@@ -1,16 +1,23 @@
 // Package vault_test provides a fake Vault HTTP server for black-box tests.
-// The helper stands up a KV v1 backend (all secrets live under /secret/)
-// and wires a *Vault to it via the vaultkv client's VaultURL field.
+// The helper stands up a KV v1 backend at /secret/ and wires a *Vault to it
+// via the vaultkv client's VaultURL field. Further mounts can be added with
+// mount(), which is what the mount listing and the walk of a whole Vault are
+// tested against.
 //
 // Endpoints handled:
 //
-//	GET  /v1/sys/internal/ui/mounts — mount discovery (returns /secret/ as KV v1)
+//	GET  /v1/sys/internal/ui/mounts — mount discovery, with each mount's version
 //	GET  /v1/auth/token/lookup-self — token validity check (200 OK)
 //	GET  /v1/sys/mounts            — list mounts (used by IsMounted/PKI checks)
-//	GET  /v1/secret/*              — read secret
-//	POST /v1/secret/*              — write secret
-//	DELETE /v1/secret/*            — delete secret
-//	LIST /v1/secret/*              — list secrets (uses X-List-Method or PROPFIND-style)
+//	POST /v1/sys/mounts/<path>     — enable a mount (used by AddMount)
+//	GET  /v1/<mount>/*             — read secret
+//	POST /v1/<mount>/*             — write secret
+//	DELETE /v1/<mount>/*           — delete secret
+//	LIST /v1/<mount>/*             — list secrets (uses X-List-Method or PROPFIND-style)
+//
+// Every KV mount the fake serves is version 1. A version 2 mount answers on
+// different paths again -- data/, metadata/, delete/, undelete/, destroy/ --
+// and is not modelled here.
 package vault_test
 
 import (
@@ -19,6 +26,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -27,10 +35,22 @@ import (
 	"github.com/cloudfoundry-community/vaultkv"
 )
 
+// fakeMount is a secrets backend the fake serves. Version is the KV version,
+// and is 1 for every mount the fake can actually answer for.
+type fakeMount struct {
+	typ     string
+	version int
+}
+
 // fakeVault is an in-memory key-value store that mimics a Vault KV v1 backend.
 type fakeVault struct {
 	mu   sync.RWMutex
 	data map[string]map[string]string // path → key → value
+
+	// mounts holds the KV mounts the fake serves, keyed by mount name with no
+	// slashes. A Vault has more than one mount and safe reaches all of them
+	// when it is asked to walk the whole thing.
+	mounts map[string]fakeMount
 
 	// forbidden marks secret paths whose list and get requests return 403,
 	// modeling a token whose policy denies part of the tree.
@@ -66,11 +86,34 @@ type fakeVault struct {
 
 func newFakeVault() *fakeVault {
 	return &fakeVault{
-		data:        make(map[string]map[string]string),
-		forbidden:   make(map[string]bool),
-		pki:         make(map[string]bool),
+		data:      make(map[string]map[string]string),
+		mounts:    map[string]fakeMount{"secret": {typ: "kv", version: 1}},
+		forbidden: make(map[string]bool),
+		pki:       make(map[string]bool),
+
 		initialized: true,
 	}
+}
+
+// mount adds a KV mount of the given type ("kv" or "generic"). Secrets are
+// stored under it by their full path, the same as for the default mount.
+func (f *fakeVault) mount(name, typ string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.mounts[strings.Trim(name, "/")] = fakeMount{typ: typ, version: 1}
+}
+
+// mountFor returns the mount a request path belongs to, and the path within
+// it. The path given is what follows /v1/.
+func (f *fakeVault) mountFor(path string) (name string, sub string, ok bool) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	path = strings.TrimLeft(path, "/")
+	name, sub, _ = strings.Cut(path, "/")
+	if _, ok = f.mounts[name]; !ok {
+		return "", "", false
+	}
+	return name, strings.Trim(sub, "/"), true
 }
 
 // forbid makes list and get requests for a secret path return 403.
@@ -152,13 +195,17 @@ func (f *fakeVault) sysMountsForListJSON() []byte {
 		Description string `json:"description"`
 		Config      any    `json:"config"`
 	}
-	mounts := map[string]mountEntry{
-		"secret/": {Type: "kv", Config: map[string]any{}},
+	mounts := map[string]mountEntry{}
+	for name, m := range f.mounts {
+		mounts[name+"/"] = mountEntry{Type: m.typ, Config: map[string]any{}}
 	}
 	for name := range f.pki {
 		mounts[name+"/"] = mountEntry{Type: "pki", Config: map[string]any{}}
 	}
-	b, _ := json.Marshal(mounts)
+	//Vault 1.10 and later repeat the mounts under a data key, with other
+	// metadata beside them at the top level. The client reads the data key
+	// and gives back nothing at all for the older shape.
+	b, _ := json.Marshal(map[string]any{"data": mounts})
 	return b
 }
 
@@ -173,8 +220,12 @@ func (f *fakeVault) uiMountsJSON() []byte {
 		Type    string   `json:"type"`
 		Options optEntry `json:"options"`
 	}
-	secretMap := map[string]secretMount{
-		"secret/": {Type: "kv", Options: optEntry{Version: "1"}},
+	secretMap := map[string]secretMount{}
+	for name, m := range f.mounts {
+		secretMap[name+"/"] = secretMount{
+			Type:    m.typ,
+			Options: optEntry{Version: strconv.Itoa(m.version)},
+		}
 	}
 	for name := range f.pki {
 		secretMap[name+"/"] = secretMount{Type: "pki"}
@@ -211,6 +262,9 @@ func (f *fakeVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(f.sysMountsForListJSON())
 
+	case strings.HasPrefix(p, "/v1/sys/mounts/") && r.Method == http.MethodPost:
+		f.handleEnableMount(w, r)
+
 	case p == "/v1/sys/health",
 		p == "/v1/sys/seal-status",
 		p == "/v1/sys/init",
@@ -220,27 +274,58 @@ func (f *fakeVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p == "/v1/sys/rekey/update":
 		f.handleSys(w, r)
 
-	case strings.HasPrefix(p, "/v1/secret/") || p == "/v1/secret":
-		f.handleKV(w, r)
-
 	default:
+		if mount, subpath, ok := f.mountFor(strings.TrimPrefix(p, "/v1/")); ok {
+			f.handleKV(w, r, mount, subpath)
+			return
+		}
 		// PKI issue / revoke
 		f.handlePKI(w, r)
 	}
 }
 
-func (f *fakeVault) handleKV(w http.ResponseWriter, r *http.Request) {
-	// Strip /v1/secret prefix to get the subpath.
-	subpath := strings.TrimPrefix(r.URL.Path, "/v1/secret")
-	subpath = strings.Trim(subpath, "/")
+// handleEnableMount records the mount a POST to sys/mounts/<path> asks for,
+// which is what AddMount sends.
+func (f *fakeVault) handleEnableMount(w http.ResponseWriter, r *http.Request) {
+	name := strings.Trim(strings.TrimPrefix(r.URL.Path, "/v1/sys/mounts/"), "/")
+	if name == "" {
+		jsonErr(w, http.StatusBadRequest, "no mount path given")
+		return
+	}
 
+	var body struct {
+		Type    string `json:"type"`
+		Options struct {
+			Version string `json:"version"`
+		} `json:"options"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, taken := f.mounts[name]; taken {
+		jsonErr(w, http.StatusBadRequest, "path is already in use at "+name+"/")
+		return
+	}
+	version, err := strconv.Atoi(body.Options.Version)
+	if err != nil || version == 0 {
+		version = 1
+	}
+	f.mounts[name] = fakeMount{typ: body.Type, version: version}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (f *fakeVault) handleKV(w http.ResponseWriter, r *http.Request, mount, subpath string) {
 	// LIST is sent as GET with ?list=true or as PROPFIND-alike.
 	// vaultkv sends it as a GET with ?list=true query param for v1.
 	isList := r.Method == "LIST" || r.URL.Query().Get("list") == "true"
 
 	switch {
 	case isList:
-		prefix := "secret/" + subpath
+		prefix := mount + "/" + subpath
 		if f.isForbidden(strings.TrimRight(prefix, "/")) {
 			jsonErr(w, http.StatusForbidden, "permission denied")
 			return
@@ -258,7 +343,7 @@ func (f *fakeVault) handleKV(w http.ResponseWriter, r *http.Request) {
 		})
 
 	case r.Method == http.MethodGet:
-		secretPath := "secret/" + subpath
+		secretPath := strings.TrimRight(mount+"/"+subpath, "/")
 		if f.isForbidden(secretPath) {
 			jsonErr(w, http.StatusForbidden, "permission denied")
 			return
@@ -274,7 +359,7 @@ func (f *fakeVault) handleKV(w http.ResponseWriter, r *http.Request) {
 		})
 
 	case r.Method == http.MethodPost || r.Method == http.MethodPut:
-		secretPath := "secret/" + subpath
+		secretPath := strings.TrimRight(mount+"/"+subpath, "/")
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			jsonErr(w, http.StatusBadRequest, "invalid json")
@@ -295,7 +380,7 @@ func (f *fakeVault) handleKV(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 
 	case r.Method == http.MethodDelete:
-		secretPath := "secret/" + subpath
+		secretPath := strings.TrimRight(mount+"/"+subpath, "/")
 		f.del(secretPath)
 		w.WriteHeader(http.StatusNoContent)
 

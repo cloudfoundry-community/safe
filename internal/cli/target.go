@@ -652,6 +652,15 @@ func (c *CLI) cmdRenew(command string, args ...string) error {
 		if err != nil {
 			return err
 		}
+		//Renewing every one of no targets printed nothing and succeeded, so a
+		// run against a config that had been lost said as much as one that
+		// had renewed everything.
+		if len(cfg.Vaults) == 0 {
+			_, _ = fmt.Fprintf(os.Stderr, "@Y{no targets to renew.}\n")
+			_, _ = fmt.Fprintf(os.Stderr, "Try @C{safe renew} to renew the token in your environment,\n")
+			_, _ = fmt.Fprintf(os.Stderr, " or @C{safe target https://your-vault alias} to configure one.\n")
+			return nil
+		}
 		//Each target is applied to the environment the command started with,
 		// not to the one the target before it left behind. A target that says
 		// nothing about certificate verification, a CA bundle, or a namespace

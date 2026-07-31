@@ -125,6 +125,32 @@ vaults:
 	}
 }
 
+// With no targets configured there is nothing for `renew all' to renew, and
+// it used to say so by printing nothing at all and succeeding. The token in
+// the environment, which plain `safe renew' does renew, is not a target and is
+// not covered by all.
+func TestRenewAllSaysWhenThereIsNothingToRenew(t *testing.T) {
+	isolateHome(t)
+	fv := newRenewFake(t)
+	t.Setenv("VAULT_ADDR", fv.url)
+	t.Setenv("VAULT_TOKEN", "token-from-the-environment")
+
+	c := newRenewCLI(t)
+	var err error
+	said := captureStderr(t, func() {
+		_ = captureStdout(t, func() { err = c.cmdRenew("renew", "all") })
+	})
+	if err != nil {
+		t.Fatalf("renew all with no targets: %v", err)
+	}
+	if !strings.Contains(said, "no targets") {
+		t.Errorf("output should say there are no targets to renew\n---\n%s", said)
+	}
+	if got := fv.served(); len(got) != 0 {
+		t.Errorf("the environment is not a target, and served %v", got)
+	}
+}
+
 // A target that cannot be connected to at all -- one carrying no address, or
 // an address that will not parse -- used to end the whole run where it stood,
 // with a message telling the user to target a Vault. The targets after it went

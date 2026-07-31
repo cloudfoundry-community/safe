@@ -388,7 +388,11 @@ func Main(version, buildTime, gitCommit string) {
 		Type:    AdministrativeCommand,
 	}, c.cmdVersion)
 
-	r.Dispatch("help", nil, c.cmdHelp)
+	r.Dispatch("help", &Help{
+		Summary: "Print help for safe, or for one of its commands",
+		Usage:   "safe help [command]",
+		Type:    MiscellaneousCommand,
+	}, c.cmdHelp)
 
 	r.Dispatch("commands", &Help{
 		Summary: "List the commands safe knows",
@@ -396,7 +400,12 @@ func Main(version, buildTime, gitCommit string) {
 		Type:    MiscellaneousCommand,
 	}, c.cmdCommands)
 
-	r.Dispatch("envvars", nil, c.cmdEnvvars)
+	r.Dispatch("envvars", &Help{
+		Summary:     "Print the environment variables safe reads",
+		Usage:       "safe envvars",
+		Type:        MiscellaneousCommand,
+		Description: envvarsHelp,
+	}, c.cmdEnvvars)
 
 	r.Dispatch("targets", &Help{
 		Summary: "List all targeted Vaults",

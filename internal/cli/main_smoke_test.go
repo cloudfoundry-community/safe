@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -114,14 +115,32 @@ func TestCommandsIsACommandOfItsOwn(t *testing.T) {
 		t.Fatalf("safe commands printed no listing:\n%s", listing)
 	}
 
-	found := false
-	for _, name := range listedCommands(t, listing) {
-		if name == "commands" {
-			found = true
+	if !slices.Contains(listedCommands(t, listing), "commands") {
+		t.Errorf("the listing leaves out commands itself:\n%s", listing)
+	}
+}
+
+// safe's own listing points at safe envvars for what the environment
+// variables are, and safe help had no topic for it, nor for help itself.
+// Neither was in the listing either.
+func TestHelpAnswersForEnvvarsAndForItself(t *testing.T) {
+	stdout, stderr, _ := run(t, "commands")
+	listed := listedCommands(t, stdout+stderr)
+
+	for _, name := range []string{"envvars", "help"} {
+		if !slices.Contains(listed, name) {
+			t.Errorf("the listing leaves out %s:\n%s", name, stdout+stderr)
+		}
+		out, errOut, status := run(t, "help", name)
+		if status != 0 {
+			t.Errorf("safe help %s exited %d, want 0:\n%s", name, status, out+errOut)
 		}
 	}
-	if !found {
-		t.Errorf("the listing leaves out commands itself:\n%s", listing)
+
+	//The topic is the documentation itself, not a line saying it exists.
+	out, errOut, _ := run(t, "help", "envvars")
+	if !strings.Contains(out+errOut, "SAFE_TARGET") {
+		t.Errorf("safe help envvars names no environment variable:\n%s", out+errOut)
 	}
 }
 

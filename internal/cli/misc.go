@@ -50,9 +50,9 @@ func (c *CLI) cmdCommands(command string, args ...string) error {
 	return c.cmdHelp("help", "commands")
 }
 
-func (c *CLI) cmdEnvvars(command string, args ...string) error {
-
-	_, _ = fmt.Printf(`@G{[SCRIPTING]}
+// envvarsHelp is what safe envvars prints and what safe help envvars gives
+// back. One copy serves both: the command is the documentation.
+const envvarsHelp = `@G{[SCRIPTING]}
   @B{SAFE_TARGET}    The vault alias which requests are sent to.
 
 @G{[PROXYING]}
@@ -91,7 +91,10 @@ func (c *CLI) cmdEnvvars(command string, args ...string) error {
   key for the given server is present, you will be prompted to add the key. If no
   TTY when no host key is present, safe will return with a failure.
 
-`)
+`
+
+func (c *CLI) cmdEnvvars(command string, args ...string) error {
+	_, _ = fmt.Printf(envvarsHelp)
 	return nil
 }
 

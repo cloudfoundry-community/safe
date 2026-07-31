@@ -143,8 +143,9 @@ type Options struct {
 	// the current safe target otherwise.
 	UseTarget string `cli:"-T, --target" env:"SAFE_TARGET"`
 
-	HelpCommand    struct{} `cli:"help"`
-	VersionCommand struct{} `cli:"version"`
+	HelpCommand     struct{} `cli:"help"`
+	CommandsCommand struct{} `cli:"commands"`
+	VersionCommand  struct{} `cli:"version"`
 
 	Envvars struct{} `cli:"envvars"`
 	Targets struct {
@@ -388,6 +389,12 @@ func Main(version, buildTime, gitCommit string) {
 	}, c.cmdVersion)
 
 	r.Dispatch("help", nil, c.cmdHelp)
+
+	r.Dispatch("commands", &Help{
+		Summary: "List the commands safe knows",
+		Usage:   "safe commands",
+		Type:    MiscellaneousCommand,
+	}, c.cmdCommands)
 
 	r.Dispatch("envvars", nil, c.cmdEnvvars)
 

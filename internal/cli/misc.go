@@ -42,6 +42,14 @@ func (c *CLI) cmdHelp(command string, args ...string) error {
 	return nil
 }
 
+// cmdCommands prints the listing of what safe can do. It is the topic help
+// gives when it is asked for nothing in particular, and safe's own help points
+// at it by name, so it is a command in its own right rather than something
+// that only answers because an unrecognized command falls through to help.
+func (c *CLI) cmdCommands(command string, args ...string) error {
+	return c.cmdHelp("help", "commands")
+}
+
 func (c *CLI) cmdEnvvars(command string, args ...string) error {
 
 	_, _ = fmt.Printf(`@G{[SCRIPTING]}

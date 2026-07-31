@@ -660,8 +660,17 @@ func (c *CLI) cmdRenew(command string, args ...string) error {
 		env := rc.SnapshotEnv()
 		defer env.Restore()
 
+		//In the order the targets are named everywhere else. Walking the
+		// config gave them over in whatever order it held them, so two runs
+		// over the same targets reported them differently.
+		aliases := make([]string, 0, len(cfg.Vaults))
+		for alias := range cfg.Vaults {
+			aliases = append(aliases, alias)
+		}
+		sort.Strings(aliases)
+
 		failed := 0
-		for vault := range cfg.Vaults {
+		for _, vault := range aliases {
 			env.Restore()
 			if _, err := rc.Apply(vault); err != nil {
 				_, _ = fmt.Fprintf(os.Stderr, "@R{failed to apply config for %s: %s}\n", vault, err)

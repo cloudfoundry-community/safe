@@ -125,6 +125,42 @@ vaults:
 	}
 }
 
+// Targets were renewed in whatever order the config map happened to hand
+// them over, so two runs over the same config reported them differently and
+// neither could be read against the last.
+func TestRenewAllVisitsTargetsInAStableOrder(t *testing.T) {
+	isolateHome(t)
+	aliases := []string{"delta", "alpha", "echo", "charlie", "bravo"}
+
+	saferc := "version: 1\ncurrent: alpha\nvaults:\n"
+	for _, alias := range aliases {
+		fv := newRenewFake(t)
+		saferc += "  " + alias + ":\n    url: " + fv.url + "\n    token: token-" + alias + "\n"
+	}
+	writeSaferc(t, saferc)
+
+	c := newRenewCLI(t)
+	var err error
+	out := captureStdout(t, func() { err = c.cmdRenew("renew", "all") })
+	if err != nil {
+		t.Fatalf("renew all: %v", err)
+	}
+
+	var renewed []string
+	for _, line := range strings.Split(out, "\n") {
+		alias, ok := strings.CutPrefix(line, "renewing token against ")
+		if !ok {
+			continue
+		}
+		renewed = append(renewed, strings.TrimSuffix(alias, "..."))
+	}
+
+	want := []string{"alpha", "bravo", "charlie", "delta", "echo"}
+	if strings.Join(renewed, ",") != strings.Join(want, ",") {
+		t.Errorf("renewed %v, want %v", renewed, want)
+	}
+}
+
 func TestRenewAllRenewsEveryTargetThatHasAToken(t *testing.T) {
 	isolateHome(t)
 	alpha, beta := newRenewFake(t), newRenewFake(t)

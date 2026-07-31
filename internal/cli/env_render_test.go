@@ -12,6 +12,7 @@ package cli
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -84,10 +85,10 @@ func TestCmdEnv_Bash_SetVars(t *testing.T) {
 	})
 
 	// Variables with values use \export KEY=VALUE;
-	if !strings.Contains(out, `\export VAULT_ADDR=https://vault.example.com;`) {
+	if !strings.Contains(out, `\export VAULT_ADDR='https://vault.example.com';`) {
 		t.Errorf("bash: VAULT_ADDR export missing; got:\n%s", out)
 	}
-	if !strings.Contains(out, `\export VAULT_TOKEN=s.testtoken;`) {
+	if !strings.Contains(out, `\export VAULT_TOKEN='s.testtoken';`) {
 		t.Errorf("bash: VAULT_TOKEN export missing; got:\n%s", out)
 	}
 	// Empty vars use \unset KEY;
@@ -136,10 +137,10 @@ func TestCmdEnv_Bash_FixedOrder(t *testing.T) {
 	c := newEnvCLI(t)
 	c.opt.Env.ForBash = true
 
-	want := `\export VAULT_ADDR=https://vault.example.com;
-\export VAULT_TOKEN=s.testtoken;
-\export VAULT_SKIP_VERIFY=1;
-\export VAULT_NAMESPACE=ns/dev;
+	want := `\export VAULT_ADDR='https://vault.example.com';
+\export VAULT_TOKEN='s.testtoken';
+\export VAULT_SKIP_VERIFY='1';
+\export VAULT_NAMESPACE='ns/dev';
 `
 	for i := range 8 {
 		out := captureStdout(t, func() {
@@ -174,10 +175,10 @@ func TestCmdEnv_Fish_SetVars(t *testing.T) {
 	})
 
 	// Set variables use: set -x KEY VALUE;
-	if !strings.Contains(out, "set -x VAULT_ADDR https://vault.example.com;") {
+	if !strings.Contains(out, "set -x VAULT_ADDR 'https://vault.example.com';") {
 		t.Errorf("fish: VAULT_ADDR set missing; got:\n%s", out)
 	}
-	if !strings.Contains(out, "set -x VAULT_TOKEN s.fishtoken;") {
+	if !strings.Contains(out, "set -x VAULT_TOKEN 's.fishtoken';") {
 		t.Errorf("fish: VAULT_TOKEN set missing; got:\n%s", out)
 	}
 	// Unset variables use: set -u KEY;
@@ -223,10 +224,10 @@ func TestCmdEnv_Fish_FixedOrder(t *testing.T) {
 	c := newEnvCLI(t)
 	c.opt.Env.ForFish = true
 
-	want := `set -x VAULT_ADDR https://vault.example.com;
-set -x VAULT_TOKEN s.fishtoken;
+	want := `set -x VAULT_ADDR 'https://vault.example.com';
+set -x VAULT_TOKEN 's.fishtoken';
 set -u VAULT_SKIP_VERIFY;
-set -x VAULT_NAMESPACE ns/dev;
+set -x VAULT_NAMESPACE 'ns/dev';
 `
 	for i := range 8 {
 		out := captureStdout(t, func() {
@@ -237,6 +238,135 @@ set -x VAULT_NAMESPACE ns/dev;
 		if out != want {
 			t.Fatalf("run %d printed:\n%s\nwant:\n%s", i, out, want)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// quoting
+// ---------------------------------------------------------------------------
+
+// oddValues are values a shell would read as something other than a value if
+// they were written bare.
+var oddValues = []struct {
+	name  string
+	value string
+}{
+	{"a space and another command", "prod dev; echo PWNED"},
+	{"a single quote", "it's"},
+	{"a backslash", `back\slash`},
+	{"a command substitution", "$(echo PWNED)"},
+	{"a backquoted command", "`echo PWNED`"},
+	{"a glob", "*"},
+	{"a newline", "one\ntwo"},
+	{"a quote closing the quoting", `'; echo PWNED; '`},
+}
+
+// safe env --bash is written to be handed to eval -- the help says so -- and
+// the values went in bare, so a namespace of "prod dev; echo PWNED" printed
+// \export VAULT_NAMESPACE=prod dev; echo PWNED;, which eval ran, setting the
+// namespace to "prod".
+func TestCmdEnv_Bash_ValuesSurviveEval(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("no sh to read the output back with: %v", err)
+	}
+
+	for _, tc := range oddValues {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateHome(t)
+			t.Setenv("VAULT_ADDR", "https://vault.example.com")
+			t.Setenv("VAULT_TOKEN", "")
+			t.Setenv("VAULT_SKIP_VERIFY", "")
+			t.Setenv("VAULT_NAMESPACE", tc.value)
+
+			c := newEnvCLI(t)
+			c.opt.Env.ForBash = true
+			out := captureStdout(t, func() {
+				if err := c.cmdEnv("env"); err != nil {
+					t.Errorf("cmdEnv bash: unexpected error: %v", err)
+				}
+			})
+
+			//The script says what it was given and nothing else: anything the
+			// shell ran on its own way through would print too.
+			script := out + "\nprintf '%s' \"$VAULT_NAMESPACE\"\n"
+			read, err := exec.Command(sh, "-c", script).CombinedOutput()
+			if err != nil {
+				t.Fatalf("sh refused the output: %v\nscript:\n%s", err, script)
+			}
+			if string(read) != tc.value {
+				t.Errorf("the shell read back %q, want %q\nscript:\n%s",
+					read, tc.value, script)
+			}
+		})
+	}
+}
+
+func TestShellQuote(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"", `''`},
+		{"plain", `'plain'`},
+		{"a b", `'a b'`},
+		{`back\slash`, `'back\slash'`},
+		{"it's", `'it'\''s'`},
+	}
+	for _, tc := range cases {
+		if got := shellQuote(tc.in); got != tc.want {
+			t.Errorf("shellQuote(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// fish reads a backslash inside single quotes as an escape, where sh does not,
+// so it needs quoting of its own.
+func TestFishQuote(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"", `''`},
+		{"plain", `'plain'`},
+		{"a b", `'a b'`},
+		{`back\slash`, `'back\\slash'`},
+		{"it's", `'it\'s'`},
+		{`\'`, `'\\\''`},
+	}
+	for _, tc := range cases {
+		if got := fishQuote(tc.in); got != tc.want {
+			t.Errorf("fishQuote(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestCmdEnv_Fish_ValuesSurviveEval(t *testing.T) {
+	fish, err := exec.LookPath("fish")
+	if err != nil {
+		t.Skipf("no fish to read the output back with: %v", err)
+	}
+
+	for _, tc := range oddValues {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateHome(t)
+			t.Setenv("VAULT_ADDR", "https://vault.example.com")
+			t.Setenv("VAULT_TOKEN", "")
+			t.Setenv("VAULT_SKIP_VERIFY", "")
+			t.Setenv("VAULT_NAMESPACE", tc.value)
+
+			c := newEnvCLI(t)
+			c.opt.Env.ForFish = true
+			out := captureStdout(t, func() {
+				if err := c.cmdEnv("env"); err != nil {
+					t.Errorf("cmdEnv fish: unexpected error: %v", err)
+				}
+			})
+
+			script := out + "\nprintf '%s' \"$VAULT_NAMESPACE\"\n"
+			read, err := exec.Command(fish, "-c", script).CombinedOutput()
+			if err != nil {
+				t.Fatalf("fish refused the output: %v\nscript:\n%s", err, script)
+			}
+			if string(read) != tc.value {
+				t.Errorf("fish read back %q, want %q\nscript:\n%s",
+					read, tc.value, script)
+			}
+		})
 	}
 }
 

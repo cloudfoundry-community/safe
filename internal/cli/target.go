@@ -414,6 +414,28 @@ func (c *CLI) cmdStatus(command string, args ...string) error {
 	return nil
 }
 
+// shellQuote wraps s in single quotes, where a shell takes every character
+// for itself, and ends and reopens the quoting around any single quote in s.
+// safe env --bash is meant to be handed to eval, and a value written bare was
+// read as shell source rather than as a value: a namespace of
+// "prod dev; rm -rf x" printed
+//
+//	\export VAULT_NAMESPACE=prod dev; rm -rf x;
+//
+// which eval ran, setting the namespace to "prod" and doing the rest.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// fishQuote is shellQuote for fish, which reads a backslash inside single
+// quotes as an escape where sh does not, so a backslash has to be doubled and
+// a single quote is escaped in place rather than by leaving the quoting.
+func fishQuote(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, "'", `\'`)
+	return "'" + s + "'"
+}
+
 // envVar is one of the variables safe env reports. They are held in a slice
 // rather than a map because a map is walked in a different order every time,
 // and safe env --bash written to a file gave a different file on each run.
@@ -450,7 +472,7 @@ func (c *CLI) cmdEnv(command string, args ...string) error {
 	case opt.Env.ForBash:
 		for _, v := range vars {
 			if v.value != "" {
-				_, _ = fmt.Fprintf(os.Stdout, "\\export %s=%s;\n", v.name, v.value)
+				_, _ = fmt.Fprintf(os.Stdout, "\\export %s=%s;\n", v.name, shellQuote(v.value))
 			} else {
 				_, _ = fmt.Fprintf(os.Stdout, "\\unset %s;\n", v.name)
 			}
@@ -460,7 +482,7 @@ func (c *CLI) cmdEnv(command string, args ...string) error {
 			if v.value == "" {
 				_, _ = fmt.Fprintf(os.Stdout, "set -u %s;\n", v.name)
 			} else {
-				_, _ = fmt.Fprintf(os.Stdout, "set -x %s %s;\n", v.name, v.value)
+				_, _ = fmt.Fprintf(os.Stdout, "set -x %s %s;\n", v.name, fishQuote(v.value))
 			}
 		}
 	case opt.Env.ForJSON:

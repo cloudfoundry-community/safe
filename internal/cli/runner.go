@@ -59,6 +59,14 @@ func (r *Runner) HelpTopic(topic string, help string) {
 	r.Topics[topic] = &Help{Description: strings.Trim(help, "\n")}
 }
 
+// escapePercent hides per-cent signs from the formatter. Help text is handed
+// to ansi.Fprintf as its format string, which is how the @C{...} colouring in
+// it is read, so a per-cent sign in the text itself would be taken for the
+// start of a verb and the formatter's complaint would print in its place.
+func escapePercent(s string) string {
+	return strings.ReplaceAll(s, "%", "%%")
+}
+
 // ErrNoSuchTopic is what Help gives back when it is asked for a topic that
 // was never registered.
 var ErrNoSuchTopic = errors.New("no such help topic")
@@ -97,14 +105,14 @@ func (r *Runner) Help(out io.Writer, topic string) error {
 			/* this is a command, print it like one */
 			_, _ = ansi.Fprintf(out, "safe @G{%s} - @C{%s}\n", topic, help.Summary)
 			if help.Usage != "" {
-				_, _ = ansi.Fprintf(out, "USAGE: "+help.Usage+"\n")
+				_, _ = ansi.Fprintf(out, "USAGE: "+escapePercent(help.Usage)+"\n")
 			}
 			if help.Description != "" {
 				_, _ = ansi.Fprintf(out, "\n")
 			}
 		}
 		if help.Description != "" {
-			_, _ = ansi.Fprintf(out, help.Description+"\n")
+			_, _ = ansi.Fprintf(out, escapePercent(help.Description)+"\n")
 		}
 		return nil
 	}
@@ -136,7 +144,7 @@ func (r *Runner) PrintUsage(w io.Writer, topic string) {
 			/* this is a command, print it like one */
 			_, _ = ansi.Fprintf(w, "safe @G{%s} - @C{%s}\n", topic, help.Summary)
 			if help.Usage != "" {
-				_, _ = ansi.Fprintf(w, "USAGE: "+help.Usage+"\n")
+				_, _ = ansi.Fprintf(w, "USAGE: "+escapePercent(help.Usage)+"\n")
 			}
 		}
 	}

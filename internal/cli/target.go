@@ -645,12 +645,24 @@ func (c *CLI) cmdRenew(command string, args ...string) error {
 		if len(args) != 1 || args[0] != "all" {
 			return r.Usage("renew")
 		}
-		cfg, err := rc.Apply("")
+		//Reading the config rather than applying it: what the current target
+		// is has no bearing on renewing every target, and applying it here
+		// would leave its settings standing over the first target renewed.
+		cfg, err := rc.Read()
 		if err != nil {
 			return err
 		}
+		//Each target is applied to the environment the command started with,
+		// not to the one the target before it left behind. A target that says
+		// nothing about certificate verification, a CA bundle, or a namespace
+		// was otherwise talked to on the terms of whichever target happened to
+		// be renewed before it.
+		env := rc.SnapshotEnv()
+		defer env.Restore()
+
 		failed := 0
 		for vault := range cfg.Vaults {
+			env.Restore()
 			if _, err := rc.Apply(vault); err != nil {
 				_, _ = fmt.Fprintf(os.Stderr, "@R{failed to apply config for %s: %s}\n", vault, err)
 				failed++

@@ -215,6 +215,53 @@ func writeTempCACerts(certs []string) (string, error) {
 	return caFile.Name(), nil
 }
 
+// applied are the environment variables Apply sets from a target. Only the
+// address and the token are set unconditionally: the rest are set when the
+// target carries them and left alone when it does not, so that the standard
+// Vault variables a caller exported still hold for a target that says nothing
+// about them.
+var applied = []string{
+	"VAULT_ADDR",
+	"VAULT_TOKEN",
+	"VAULT_SKIP_VERIFY",
+	"VAULT_CACERT",
+	"VAULT_NAMESPACE",
+}
+
+// Env is what the environment held before a target was applied to it.
+type Env []envVar
+
+type envVar struct {
+	name  string
+	value string
+	set   bool
+}
+
+// SnapshotEnv records the variables Apply sets, so that a caller applying more
+// than one target can put the environment back between them. Without it the
+// second target inherits everything the first one carried and it does not --
+// skipped verification, a CA bundle, a namespace -- and is talked to on terms
+// that are not its own.
+func SnapshotEnv() Env {
+	env := make(Env, 0, len(applied))
+	for _, name := range applied {
+		value, set := os.LookupEnv(name)
+		env = append(env, envVar{name: name, value: value, set: set})
+	}
+	return env
+}
+
+// Restore returns the environment to what it held when it was recorded.
+func (e Env) Restore() {
+	for _, v := range e {
+		if v.set {
+			_ = os.Setenv(v.name, v.value)
+			continue
+		}
+		_ = os.Unsetenv(v.name)
+	}
+}
+
 func (c *Config) Apply(use string) error {
 	v, err := c.Vault(use)
 	if err != nil {

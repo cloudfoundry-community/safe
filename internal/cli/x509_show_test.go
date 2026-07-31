@@ -216,6 +216,70 @@ func TestPrintX509_NamesAnAlgorithmItDoesNotKnow(t *testing.T) {
 	}
 }
 
+// A path that holds something other than a certificate was reported on the
+// screen and nowhere else: the command exited 0, and a script checking a
+// batch of paths was told everything was fine. A path that could not be read
+// at all ended the run where it stood, so the paths after it went unreported.
+func TestX509ShowFailsOnAPathItCouldNotShow(t *testing.T) {
+	isolateHome(t)
+	fv := newCLIFake(t)
+	ca := newCA(t, "ca")
+	storeCert(t, fv, "secret/leaf", newLeaf(t, ca, "leaf"))
+	fv.set("secret/password", map[string]string{"password": "sekrit"})
+
+	c := newX509CLI(t)
+
+	var err error
+	out := captureStdout(t, func() {
+		err = c.cmdX509Show("x509 show", "secret/password", "secret/nowhere", "secret/leaf")
+	})
+
+	if err == nil {
+		t.Fatal("show over a path holding no certificate = nil, want an error")
+	}
+	for _, path := range []string{"secret/password", "secret/nowhere"} {
+		if !strings.Contains(err.Error(), path) {
+			t.Errorf("error %q should name %s", err, path)
+		}
+	}
+	if strings.Contains(err.Error(), "secret/leaf") {
+		t.Errorf("error %q should not name the path it showed", err)
+	}
+
+	//Every path is still reported, including the ones after the failures.
+	for _, want := range []string{
+		"secret/password:", "not a valid certificate",
+		"secret/nowhere:", "secret/leaf:", "cn=leaf",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output should contain %q\n---\n%s", want, out)
+		}
+	}
+}
+
+func TestX509ShowSucceedsWhenItShowedEveryPath(t *testing.T) {
+	isolateHome(t)
+	fv := newCLIFake(t)
+	ca := newCA(t, "ca")
+	storeCert(t, fv, "secret/ca", ca)
+	storeCert(t, fv, "secret/leaf", newLeaf(t, ca, "leaf"))
+
+	c := newX509CLI(t)
+
+	var err error
+	out := captureStdout(t, func() {
+		err = c.cmdX509Show("x509 show", "secret/ca", "secret/leaf")
+	})
+	if err != nil {
+		t.Fatalf("show over two certificates: %v", err)
+	}
+	for _, want := range []string{"cn=ca", "cn=leaf", "is a CA", "is not a CA"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output should contain %q\n---\n%s", want, out)
+		}
+	}
+}
+
 // A certificate already in force says nothing about coming into force.
 func TestPrintX509_SaysNothingAboutForceForACertificateInForce(t *testing.T) {
 	now := time.Now()

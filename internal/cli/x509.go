@@ -6,6 +6,7 @@ import (
 	"io"
 	"math/big"
 	"os"
+	"strings"
 	"time"
 
 	fmt "github.com/jhunt/go-ansi"
@@ -578,22 +579,34 @@ func (c *CLI) cmdX509Show(command string, args ...string) error {
 	}
 	v := connect(true)
 
-	for _, path := range args {
-		s, err := v.Read(path)
-		if err != nil {
-			return err
-		}
+	//A path that holds no certificate was reported on the screen and nowhere
+	// else, so a run that showed nothing at all still exited 0 and a script
+	// checking a batch of paths was told they were fine. A path that could
+	// not be read ended the run where it stood, leaving the paths after it
+	// unreported. Both are now said as they are reached, and the run answers
+	// for them at the end.
+	var unshown []string
 
+	for _, path := range args {
 		_, _ = fmt.Printf("%s:\n", path)
-		cert, err := s.X509(false)
+
+		var cert *vault.X509
+		s, err := v.Read(path)
+		if err == nil {
+			cert, err = s.X509(false)
+		}
 		if err != nil {
 			_, _ = fmt.Printf("  !! %s\n\n", err)
+			unshown = append(unshown, path)
 			continue
 		}
 
 		printX509(os.Stdout, cert)
 	}
 
+	if len(unshown) > 0 {
+		return fmt.Errorf("no certificate to show at %s", strings.Join(unshown, ", "))
+	}
 	return nil
 }
 

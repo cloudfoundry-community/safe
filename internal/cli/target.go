@@ -645,6 +645,12 @@ func (c *CLI) cmdRenew(command string, args ...string) error {
 		if len(args) != 1 || args[0] != "all" {
 			return r.Usage("renew")
 		}
+		//Naming one target and asking for all of them says two things at
+		// once. The rest of safe says which one it went with; this said
+		// nothing and renewed them all.
+		if opt.UseTarget != "" {
+			_, _ = fmt.Fprintf(os.Stderr, "@Y{Specifying --target while renewing all targets makes no sense; ignoring...}\n")
+		}
 		//Reading the config rather than applying it: what the current target
 		// is has no bearing on renewing every target, and applying it here
 		// would leave its settings standing over the first target renewed.

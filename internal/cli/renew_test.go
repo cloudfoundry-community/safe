@@ -194,6 +194,42 @@ vaults:
 	}
 }
 
+// Naming a target and asking for all of them at once is answered the way the
+// rest of safe answers it, rather than silently.
+func TestRenewAllSaysThatItIgnoresTheTargetFlag(t *testing.T) {
+	isolateHome(t)
+	alpha, beta := newRenewFake(t), newRenewFake(t)
+	writeSaferc(t, `version: 1
+current: alpha
+vaults:
+  alpha:
+    url: `+alpha.url+`
+    token: token-alpha
+  beta:
+    url: `+beta.url+`
+    token: token-beta
+`)
+
+	c := newRenewCLI(t)
+	c.opt.UseTarget = "beta"
+	var err error
+	said := captureStderr(t, func() {
+		_ = captureStdout(t, func() { err = c.cmdRenew("renew", "all") })
+	})
+	if err != nil {
+		t.Fatalf("renew all: %v", err)
+	}
+	if !strings.Contains(said, "ignoring") {
+		t.Errorf("output should say the target was ignored\n---\n%s", said)
+	}
+	//Ignored means every target is renewed, including the one -T named.
+	for alias, fv := range map[string]*fakeRenewVault{"alpha": alpha, "beta": beta} {
+		if got := fv.served(); len(got) != 1 {
+			t.Errorf("%s served %d renewals, want 1", alias, len(got))
+		}
+	}
+}
+
 // `all' is the only argument the command takes.
 func TestRenewRejectsAnyOtherArgument(t *testing.T) {
 	isolateHome(t)

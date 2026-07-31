@@ -45,7 +45,12 @@ func (r *Runner) Dispatch(command string, help *Help, fn Handler) {
 	}
 
 	r.Handlers[command] = fn
-	if help != nil && help.Type != HiddenCommand {
+	//A hidden command is kept out of the listing of commands, which is where
+	// Help leaves it out. Keeping it out of the topics as well took its help
+	// with it: `safe help x509' and `safe x509' -- which prints that very
+	// topic -- both answered that there is no such command, and the
+	// description of every x509 sub-command was unreachable.
+	if help != nil {
 		r.Topics[command] = help
 	}
 }
@@ -65,7 +70,7 @@ func (r *Runner) Help(out io.Writer, topic string) {
 
 		sort.Strings(ll)
 		for _, cmd := range ll {
-			if h := r.Topics[cmd]; h != nil {
+			if h := r.Topics[cmd]; h != nil && h.Type != HiddenCommand {
 				f := h.Type
 				if f == "" {
 					f = "@W"

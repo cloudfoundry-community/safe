@@ -55,10 +55,6 @@ func (r *Runner) Dispatch(command string, help *Help, fn Handler) {
 	}
 }
 
-func (r *Runner) HelpTopic(topic string, help string) {
-	r.Topics[topic] = &Help{Description: strings.Trim(help, "\n")}
-}
-
 // escapePercent hides per-cent signs from the formatter. Help text is handed
 // to ansi.Fprintf as its format string, which is how the @C{...} colouring in
 // it is read, so a per-cent sign in the text itself would be taken for the

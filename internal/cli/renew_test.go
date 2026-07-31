@@ -125,6 +125,86 @@ vaults:
 	}
 }
 
+// Without `all', the token renewed is the one belonging to the target the
+// command is acting on: the current one, or the one -T names.
+func TestRenewRenewsTheTargetItIsActingOn(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		useTarget string
+		renewed   string
+	}{
+		{name: "the current target", renewed: "alpha"},
+		{name: "the target -T names", useTarget: "beta", renewed: "beta"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateHome(t)
+			vaults := map[string]*fakeRenewVault{
+				"alpha": newRenewFake(t),
+				"beta":  newRenewFake(t),
+			}
+			writeSaferc(t, `version: 1
+current: alpha
+vaults:
+  alpha:
+    url: `+vaults["alpha"].url+`
+    token: token-alpha
+  beta:
+    url: `+vaults["beta"].url+`
+    token: token-beta
+`)
+
+			c := newRenewCLI(t)
+			c.opt.UseTarget = tc.useTarget
+			if err := c.cmdRenew("renew"); err != nil {
+				t.Fatalf("renew: %v", err)
+			}
+
+			for alias, fv := range vaults {
+				got := fv.served()
+				if alias != tc.renewed {
+					if len(got) != 0 {
+						t.Errorf("%s served %v, and was not the target", alias, got)
+					}
+					continue
+				}
+				if len(got) != 1 || got[0].token != "token-"+alias {
+					t.Errorf("%s served %v, want one renewal of token-%s", alias, got, alias)
+				}
+			}
+		})
+	}
+}
+
+// The token the Vault refuses to renew is the answer to the command.
+func TestRenewFailsWhenTheTokenIsNotRenewed(t *testing.T) {
+	isolateHome(t)
+	fv := newRenewFake(t)
+	fv.reject = true
+	writeSaferc(t, `version: 1
+current: alpha
+vaults:
+  alpha:
+    url: `+fv.url+`
+    token: token-alpha
+`)
+
+	c := newRenewCLI(t)
+	if err := c.cmdRenew("renew"); err == nil {
+		t.Fatal("renew of a token the Vault rejected = nil, want an error")
+	}
+}
+
+// `all' is the only argument the command takes.
+func TestRenewRejectsAnyOtherArgument(t *testing.T) {
+	isolateHome(t)
+	c := newRenewCLI(t)
+	for _, args := range [][]string{{"everything"}, {"all", "of", "them"}, {"all", "all"}} {
+		if err := c.cmdRenew("renew", args...); err == nil {
+			t.Errorf("renew %v = nil, want a usage error", args)
+		}
+	}
+}
+
 // With no targets configured there is nothing for `renew all' to renew, and
 // it used to say so by printing nothing at all and succeeding. The token in
 // the environment, which plain `safe renew' does renew, is not a target and is

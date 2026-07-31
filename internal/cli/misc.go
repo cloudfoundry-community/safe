@@ -67,6 +67,10 @@ func (c *CLI) cmdCommands(command string, args ...string) error {
 // back. One copy serves both: the command is the documentation.
 const envvarsHelp = `@G{[SCRIPTING]}
   @B{SAFE_TARGET}    The vault alias which requests are sent to.
+  @B{SAFE_ENGINE}    Which server binary 'safe local' and 'safe vault' run:
+                 'vault' or 'bao' (OpenBao). Defaults to the first of the
+                 two found on PATH, vault first. 'safe local --engine'
+                 overrides this.
 
 @G{[PROXYING]}
   @B{HTTP_PROXY}     The proxy to use for HTTP requests.

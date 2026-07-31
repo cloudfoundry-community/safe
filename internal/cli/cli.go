@@ -1094,9 +1094,17 @@ since generating one takes a while.
 	}, c.cmdPrompt)
 
 	r.Dispatch("vault", &Help{
-		Summary: "Run arbitrary Vault CLI commands against the current target",
+		Summary: "Run arbitrary Vault (or OpenBao) CLI commands against the current target",
 		Usage:   "safe vault ...",
 		Type:    DestructiveCommand,
+		Description: `
+Passes its arguments through to the engine's own CLI -- the vault
+binary, or bao, which kept the same command surface when OpenBao
+forked from Vault. The engine is picked the same way 'safe local'
+picks one: SAFE_ENGINE if set, otherwise the first of vault, bao
+found on PATH. There is no --engine flag here, since every argument
+after 'vault' belongs to the engine itself.
+`,
 	}, c.cmdVault)
 
 	r.Dispatch("rekey", &Help{

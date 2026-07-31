@@ -834,6 +834,44 @@ whitespace before `eval` ever sees it.
 `--fish` writes the same thing for fish, and `--json` writes it as JSON. Give
 one of them: naming two is an error.
 
+### local (--memory|--file dir) \[--engine vault|bao\]
+
+Spin up a throwaway server for testing or experimentation, target it, and tear
+it down again on Ctrl-C. Use `--memory` for an in-memory backend whose data is
+gone on exit, or `--file <dir>` to keep the (encrypted) data between runs.
+
+```
+safe local --memory
+safe local --file /tmp/my-vault
+```
+
+safe can drive either HashiCorp Vault or [OpenBao][openbao], which forked from
+it and kept the same server, secrets, auth, and operator commands. With no
+`--engine`, safe runs whichever of `vault` or `bao` it finds first on `$PATH`,
+in that order — so installing OpenBao alongside an existing Vault does not
+change which server this command starts.
+
+```
+safe local --memory --engine bao
+safe local --memory --engine vault
+```
+
+Set `SAFE_ENGINE` to change the default without passing the flag every time.
+`--engine` still wins over it, and an engine you pin that is not installed is
+an error rather than a quiet fallback to the other one:
+
+```
+export SAFE_ENGINE=bao
+```
+
+`safe vault ...`, which hands its arguments to the engine's own CLI, resolves
+the engine the same way.
+
+One caveat on OpenBao: it removed the legacy `sys/generate-root` API. A
+`--file` backend that safe initialized itself works on either engine, but
+re-opening an existing one whose root token you no longer have needs that API,
+and so needs `--engine vault`.
+
 Testing
 -------
 
@@ -865,5 +903,6 @@ The `coverage` target writes `coverage.out` and prints per-function coverage
 percentages. Use `make coverage-html` to open an interactive HTML report in
 your browser.
 
-[vault]:  https://vaultproject.io
-[spruce]: https://github.com/geofffranks/spruce
+[vault]:   https://vaultproject.io
+[openbao]: https://openbao.org
+[spruce]:  https://github.com/geofffranks/spruce

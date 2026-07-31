@@ -595,6 +595,13 @@ Print the environment variables representing the current target.
 
  --json   Format the environment variables in json format.
 
+Give one of them: naming two is an error.
+
+Values written for a shell are quoted for that shell, so quote the command
+substitution that reads them back:
+
+    eval "$(safe env --bash)"
+
 Please note that if you specify --json, --bash or --fish then the output will be
 written to STDOUT instead of STDERR to make it easier to consume.
 		`,

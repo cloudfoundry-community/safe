@@ -818,12 +818,21 @@ shell in order to use the Vault CLI directly:
 
 ```
 safe env --bash
-\export VAULT_ADDR=http://localhost:8200;
-\export VAULT_TOKEN=$SOME_UUID;
+\export VAULT_ADDR='http://localhost:8200';
+\export VAULT_TOKEN='$SOME_UUID';
 \unset VAULT_SKIP_VERIFY;
+\unset VAULT_NAMESPACE;
 
-eval $(safe env --bash)
+eval "$(safe env --bash)"
 ```
+
+The values are quoted for the shell they are written for, so a namespace or
+an address holding a space, a quote, or a semicolon arrives whole. Quote the
+command substitution as shown, or the shell will split the output on
+whitespace before `eval` ever sees it.
+
+`--fish` writes the same thing for fish, and `--json` writes it as JSON. Give
+one of them: naming two is an error.
 
 Testing
 -------

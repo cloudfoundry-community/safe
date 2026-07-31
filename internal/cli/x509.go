@@ -18,7 +18,7 @@ import (
 func (c *CLI) cmdX509(command string, args ...string) error {
 	r := c.r
 
-	r.Help(os.Stdout, "x509")
+	_ = r.Help(os.Stdout, "x509")
 	return nil
 }
 

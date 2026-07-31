@@ -175,6 +175,20 @@ Usage
 safe ssh 2048 secret/ssh
 ```
 
+To find out what the sub-commands are, and what any one of them does:
+
+```
+safe commands
+safe help ssh
+```
+
+Both print on standard output, so they can be piped and searched.
+`safe envvars` does the same for the environment variables `safe`
+reads, and `safe version` for the version you are running.  A word
+`safe` has no command for is an error: it names the word rather than
+printing the whole list, and exits non-zero, so a mistyped command in
+a script stops the script.
+
 To set non-sensitive keys, you can just specify them inline:
 
 ```

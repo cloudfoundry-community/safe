@@ -249,3 +249,51 @@ func TestRunner_Dispatch_DescriptionTrimmed(t *testing.T) {
 		t.Errorf("Description: got %q, want %q", h.Description, "body text")
 	}
 }
+
+// Help used to end the process itself for a topic it did not have, which left
+// the caller no chance to say anything about it and skipped the cleanup safe
+// does on its way out. It reports the topic back instead.
+func TestRunner_Help_UnknownTopic(t *testing.T) {
+	t.Parallel()
+	r := NewRunner()
+
+	var out bytes.Buffer
+	err := r.Help(&out, "no-such-topic")
+	if !errors.Is(err, ErrNoSuchTopic) {
+		t.Errorf("Help(no-such-topic): got %v, want ErrNoSuchTopic", err)
+	}
+	if out.String() != "" {
+		t.Errorf("Help wrote %q, want the complaint left to the caller", out.String())
+	}
+}
+
+// Help text is handed to the formatter as its format string -- that is how
+// the colouring in it is read -- so a per-cent sign in the text itself was
+// read as the start of a verb, and a topic that mentions one printed the
+// formatter's complaint in its place.
+func TestRunner_Help_PerCentSignSurvives(t *testing.T) {
+	t.Parallel()
+	r := NewRunner()
+	r.Dispatch("pct", &Help{
+		Summary:     "summary",
+		Usage:       "safe pct --at 50%",
+		Description: "Fills the tank to 100% of capacity.",
+		Type:        NonDestructiveCommand,
+	}, func(cmd string, args ...string) error { return nil })
+
+	var help bytes.Buffer
+	if err := r.Help(&help, "pct"); err != nil {
+		t.Fatalf("Help(pct): %v", err)
+	}
+	for _, want := range []string{"--at 50%", "100% of capacity"} {
+		if !strings.Contains(help.String(), want) {
+			t.Errorf("help = %q, want it to hold %q", help.String(), want)
+		}
+	}
+
+	var usage bytes.Buffer
+	r.PrintUsage(&usage, "pct")
+	if !strings.Contains(usage.String(), "--at 50%") {
+		t.Errorf("usage = %q, want it to hold %q", usage.String(), "--at 50%")
+	}
+}

@@ -143,8 +143,9 @@ type Options struct {
 	// the current safe target otherwise.
 	UseTarget string `cli:"-T, --target" env:"SAFE_TARGET"`
 
-	HelpCommand    struct{} `cli:"help"`
-	VersionCommand struct{} `cli:"version"`
+	HelpCommand     struct{} `cli:"help"`
+	CommandsCommand struct{} `cli:"commands"`
+	VersionCommand  struct{} `cli:"version"`
 
 	Envvars struct{} `cli:"envvars"`
 	Targets struct {
@@ -387,9 +388,24 @@ func Main(version, buildTime, gitCommit string) {
 		Type:    AdministrativeCommand,
 	}, c.cmdVersion)
 
-	r.Dispatch("help", nil, c.cmdHelp)
+	r.Dispatch("help", &Help{
+		Summary: "Print help for safe, or for one of its commands",
+		Usage:   "safe help [command]",
+		Type:    MiscellaneousCommand,
+	}, c.cmdHelp)
 
-	r.Dispatch("envvars", nil, c.cmdEnvvars)
+	r.Dispatch("commands", &Help{
+		Summary: "List the commands safe knows",
+		Usage:   "safe commands",
+		Type:    MiscellaneousCommand,
+	}, c.cmdCommands)
+
+	r.Dispatch("envvars", &Help{
+		Summary:     "Print the environment variables safe reads",
+		Usage:       "safe envvars",
+		Type:        MiscellaneousCommand,
+		Description: envvarsHelp,
+	}, c.cmdEnvvars)
 
 	r.Dispatch("targets", &Help{
 		Summary: "List all targeted Vaults",
@@ -1570,6 +1586,17 @@ Currently, only the --renew option is supported, and it is required:
 		}
 
 		if p.Command == "" { //No recognized command was found
+			//A word safe has no command for is a mistake to report, and the
+			// word itself is the useful half of the report. Printing the whole
+			// listing said nothing about which word was wrong, and the run
+			// ended in success, so a mistyped command in a script read as one
+			// that had done its work.
+			if len(p.Args) > 0 {
+				_, _ = fmt.Fprintf(os.Stderr, "@R{!! unrecognized command '%s'}\n", p.Args[0])
+				_, _ = fmt.Fprintf(os.Stderr, "Try 'safe commands' for a list of valid commands\n")
+				rc.Cleanup()
+				os.Exit(1)
+			}
 			_ = r.Execute("help")
 			return
 		}

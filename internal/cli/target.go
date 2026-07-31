@@ -422,7 +422,7 @@ func (c *CLI) cmdEnv(command string, args ...string) error {
 		return err
 	}
 	if opt.Env.ForBash && opt.Env.ForFish && opt.Env.ForJSON {
-		r.Help(os.Stderr, "env")
+		_ = r.Help(os.Stderr, "env")
 		_, _ = fmt.Fprintf(os.Stderr, "@R{Only specify one of --json, --bash OR --fish.}\n")
 		rc.Cleanup()
 		os.Exit(1)

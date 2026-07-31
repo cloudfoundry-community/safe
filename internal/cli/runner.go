@@ -1,9 +1,9 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
-	"os"
 	"sort"
 	"strings"
 
@@ -55,11 +55,23 @@ func (r *Runner) Dispatch(command string, help *Help, fn Handler) {
 	}
 }
 
-func (r *Runner) HelpTopic(topic string, help string) {
-	r.Topics[topic] = &Help{Description: strings.Trim(help, "\n")}
+// escapePercent hides per-cent signs from the formatter. Help text is handed
+// to ansi.Fprintf as its format string, which is how the @C{...} colouring in
+// it is read, so a per-cent sign in the text itself would be taken for the
+// start of a verb and the formatter's complaint would print in its place.
+func escapePercent(s string) string {
+	return strings.ReplaceAll(s, "%", "%%")
 }
 
-func (r *Runner) Help(out io.Writer, topic string) {
+// ErrNoSuchTopic is what Help gives back when it is asked for a topic that
+// was never registered.
+var ErrNoSuchTopic = errors.New("no such help topic")
+
+// Help writes the topic to out. A topic it does not have is reported back
+// rather than complained about here: what to say about it, and where, belongs
+// to the caller, and ending the process from inside the lookup skipped the
+// cleanup safe does on its way out.
+func (r *Runner) Help(out io.Writer, topic string) error {
 	if topic == "commands" {
 		_, _ = fmt.Fprintf(out, "Valid commands are:\n\n")
 
@@ -81,7 +93,7 @@ func (r *Runner) Help(out io.Writer, topic string) {
 
 		_, _ = fmt.Fprintf(out, "\nTry `safe envvars' for information on available environment variables\n")
 		_, _ = fmt.Fprintf(out, "Try 'safe help <command>' for detailed information on specific commands\n")
-		return
+		return nil
 	}
 
 	if help, ok := r.Topics[topic]; ok && help != nil {
@@ -89,22 +101,19 @@ func (r *Runner) Help(out io.Writer, topic string) {
 			/* this is a command, print it like one */
 			_, _ = ansi.Fprintf(out, "safe @G{%s} - @C{%s}\n", topic, help.Summary)
 			if help.Usage != "" {
-				_, _ = ansi.Fprintf(out, "USAGE: "+help.Usage+"\n")
+				_, _ = ansi.Fprintf(out, "USAGE: "+escapePercent(help.Usage)+"\n")
 			}
 			if help.Description != "" {
 				_, _ = ansi.Fprintf(out, "\n")
 			}
 		}
 		if help.Description != "" {
-			_, _ = ansi.Fprintf(out, help.Description+"\n")
+			_, _ = ansi.Fprintf(out, escapePercent(help.Description)+"\n")
 		}
-		return
+		return nil
 	}
 
-	_, _ = ansi.Fprintf(out, "@R{Unrecognized command or help topic '%s'}\n", topic)
-	_, _ = fmt.Fprintf(out, "Try 'safe help' to get started with safe,\n")
-	_, _ = fmt.Fprintf(out, " or 'safe commands' for a list of valid commands\n")
-	os.Exit(1)
+	return fmt.Errorf("%w: %s", ErrNoSuchTopic, topic)
 }
 
 // UsageError signals a command was invoked incorrectly. Handlers return it
@@ -131,7 +140,7 @@ func (r *Runner) PrintUsage(w io.Writer, topic string) {
 			/* this is a command, print it like one */
 			_, _ = ansi.Fprintf(w, "safe @G{%s} - @C{%s}\n", topic, help.Summary)
 			if help.Usage != "" {
-				_, _ = ansi.Fprintf(w, "USAGE: "+help.Usage+"\n")
+				_, _ = ansi.Fprintf(w, "USAGE: "+escapePercent(help.Usage)+"\n")
 			}
 		}
 	}

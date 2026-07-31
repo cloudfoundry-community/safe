@@ -14,16 +14,18 @@ import (
 
 func (c *CLI) cmdVersion(command string, args ...string) error {
 
+	//Which safe is running is an answer to a question that was asked, so it
+	// goes where output goes. On standard error, safe -v | cut said nothing.
 	if Version != "" {
-		_, _ = fmt.Fprintf(os.Stderr, "safe v%s\n", Version)
+		_, _ = fmt.Fprintf(os.Stdout, "safe v%s\n", Version)
 	} else {
-		_, _ = fmt.Fprintf(os.Stderr, "safe (development build)\n")
+		_, _ = fmt.Fprintf(os.Stdout, "safe (development build)\n")
 	}
 	if GitCommit != "" {
-		_, _ = fmt.Fprintf(os.Stderr, "  commit %s\n", GitCommit)
+		_, _ = fmt.Fprintf(os.Stdout, "  commit %s\n", GitCommit)
 	}
 	if BuildTime != "" {
-		_, _ = fmt.Fprintf(os.Stderr, "  built  %s\n", BuildTime)
+		_, _ = fmt.Fprintf(os.Stdout, "  built  %s\n", BuildTime)
 	}
 	rc.Cleanup()
 	os.Exit(0)
@@ -36,15 +38,34 @@ func (c *CLI) cmdHelp(command string, args ...string) error {
 	if len(args) == 0 {
 		args = append(args, "commands")
 	}
-	r.Help(os.Stderr, strings.Join(args, " "))
+	topic := strings.Join(args, " ")
+	//Help is output that was asked for. Written to standard error, it could
+	// not be piped anywhere: safe commands | grep came back with nothing.
+	// A topic safe does not have is the other way round -- that is a mistake,
+	// and it is reported where mistakes are.
+	if err := r.Help(os.Stdout, topic); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "@R{Unrecognized command or help topic '%s'}\n", topic)
+		_, _ = fmt.Fprintf(os.Stderr, "Try 'safe help' to get started with safe,\n")
+		_, _ = fmt.Fprintf(os.Stderr, " or 'safe commands' for a list of valid commands\n")
+		rc.Cleanup()
+		os.Exit(1)
+	}
 	rc.Cleanup()
 	os.Exit(0)
 	return nil
 }
 
-func (c *CLI) cmdEnvvars(command string, args ...string) error {
+// cmdCommands prints the listing of what safe can do. It is the topic help
+// gives when it is asked for nothing in particular, and safe's own help points
+// at it by name, so it is a command in its own right rather than something
+// that only answers because an unrecognized command falls through to help.
+func (c *CLI) cmdCommands(command string, args ...string) error {
+	return c.cmdHelp("help", "commands")
+}
 
-	_, _ = fmt.Printf(`@G{[SCRIPTING]}
+// envvarsHelp is what safe envvars prints and what safe help envvars gives
+// back. One copy serves both: the command is the documentation.
+const envvarsHelp = `@G{[SCRIPTING]}
   @B{SAFE_TARGET}    The vault alias which requests are sent to.
 
 @G{[PROXYING]}
@@ -83,7 +104,10 @@ func (c *CLI) cmdEnvvars(command string, args ...string) error {
   key for the given server is present, you will be prompted to add the key. If no
   TTY when no host key is present, safe will return with a failure.
 
-`)
+`
+
+func (c *CLI) cmdEnvvars(command string, args ...string) error {
+	_, _ = fmt.Printf(envvarsHelp)
 	return nil
 }
 

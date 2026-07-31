@@ -182,6 +182,28 @@ func TestSelectEngineEnvPreference(t *testing.T) {
 	}
 }
 
+// Every engine safe can resolve carries a proper name for user-facing prose,
+// so no message can end up reading "shutting down the bao".
+func TestSelectEngineTitle(t *testing.T) {
+	for _, tc := range []struct{ name, want string }{
+		{"vault", "Vault"},
+		{"bao", "OpenBao"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			installEngines(t, tc.name)
+			t.Setenv("SAFE_ENGINE", "")
+
+			eng, err := selectEngine("")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if eng.Title() != tc.want {
+				t.Errorf("Title() = %q, want %q", eng.Title(), tc.want)
+			}
+		})
+	}
+}
+
 // The resolved binary is the exact file the lookup verified, not the bare
 // name, so the server safe starts is the one it confirmed was present.
 func TestSelectEngineResolvesBinaryPath(t *testing.T) {

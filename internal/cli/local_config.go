@@ -9,7 +9,7 @@ import (
 	"sync"
 )
 
-// hclField is a single rendered "key = value" line in the Vault config that
+// hclField is a single rendered "key = value" line in the server config that
 // `safe local` writes. val is already an HCL literal (bare number/bool or a
 // quoted string).
 type hclField struct {
@@ -17,13 +17,13 @@ type hclField struct {
 	val string
 }
 
-// localConfigParams carries everything needed to render the Vault HCL config
-// for `safe local`.
+// localConfigParams carries everything needed to render the HCL config for
+// `safe local`.
 type localConfigParams struct {
 	port       int      // listener port
-	storageKey string   // "storage" (Vault >= 0.8) or "backend" (older)
 	memory     bool     // true for an in-memory backend
 	filePath   string   // file backend path (when memory is false)
+	engineName string   // Engine.Name() of the server this config is for
 	global     []string // raw key=value overrides for the top-level config
 	listener   []string // raw key=value overrides for the listener "tcp" stanza
 }
@@ -101,22 +101,36 @@ func applyConfigKV(defaults []hclField, pairs []string) ([]hclField, error) {
 	return fields, nil
 }
 
-// buildLocalConfig renders the Vault HCL config for `safe local`, layering any
+// buildLocalConfig renders the HCL config for `safe local`, layering any
 // user-supplied global and listener overrides on top of safe's defaults. It
-// only type-checks the overrides; an invalid config value is Vault's problem to
-// report, and its error is surfaced when the server fails to start.
+// only type-checks the overrides; an invalid config value is the server's
+// problem to report, and its error is surfaced when it fails to start.
 func buildLocalConfig(p localConfigParams) (string, error) {
-	global, err := applyConfigKV([]hclField{
+	// The default fields diverge per engine. OpenBao removed mlock support,
+	// so its config drops disable_mlock (the key only draws an "unknown
+	// field" warning there). It also ships with the /sys/rekey/* endpoints
+	// disabled (since 2.5.0), which would leave `safe rekey` facing 405s
+	// from the very server safe started, so the listener opts back in.
+	// Either default can still be overridden from the command line.
+	globalDefaults := []hclField{
 		{key: "disable_mlock", val: "true"},
-	}, p.global)
+	}
+	listenerDefaults := []hclField{
+		{key: "address", val: strconv.Quote(fmt.Sprintf("127.0.0.1:%d", p.port))},
+		{key: "tls_disable", val: "1"},
+	}
+	if p.engineName == "bao" {
+		globalDefaults = nil
+		listenerDefaults = append(listenerDefaults,
+			hclField{key: "disable_unauthed_rekey_endpoints", val: "false"})
+	}
+
+	global, err := applyConfigKV(globalDefaults, p.global)
 	if err != nil {
 		return "", err
 	}
 
-	listener, err := applyConfigKV([]hclField{
-		{key: "address", val: strconv.Quote(fmt.Sprintf("127.0.0.1:%d", p.port))},
-		{key: "tls_disable", val: "1"},
-	}, p.listener)
+	listener, err := applyConfigKV(listenerDefaults, p.listener)
 	if err != nil {
 		return "", err
 	}
@@ -134,15 +148,15 @@ func buildLocalConfig(p localConfigParams) (string, error) {
 	b.WriteString("}\n")
 
 	if p.memory {
-		fmt.Fprintf(&b, "%s \"inmem\" {}\n", p.storageKey)
+		b.WriteString("storage \"inmem\" {}\n")
 	} else {
-		fmt.Fprintf(&b, "%s \"file\" { path = %s }\n", p.storageKey, strconv.Quote(p.filePath))
+		fmt.Fprintf(&b, "storage \"file\" { path = %s }\n", strconv.Quote(p.filePath))
 	}
 
 	return b.String(), nil
 }
 
-// lockedBuffer is a goroutine-safe byte sink. `safe local` points the Vault
+// lockedBuffer is a goroutine-safe byte sink. `safe local` points the server
 // process's stderr at one so its output can be read for an error message while
 // the copying goroutine may still be writing to it.
 type lockedBuffer struct {
@@ -162,9 +176,9 @@ func (b *lockedBuffer) String() string {
 	return b.buf.String()
 }
 
-// vaultStartupError explains why the local Vault failed to start, preferring
-// Vault's own stderr output and falling back to the process wait error.
-func vaultStartupError(stderr string, waitErr error) string {
+// engineStartupError explains why the local server failed to start, preferring
+// the engine's own stderr output and falling back to the process wait error.
+func engineStartupError(stderr string, waitErr error) string {
 	if msg := strings.TrimSpace(stderr); msg != "" {
 		return msg
 	}

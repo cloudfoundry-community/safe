@@ -14,17 +14,28 @@ import (
 type Engine interface {
 	// Name is the engine's canonical short name, as accepted by --engine.
 	Name() string
+	// Title is the engine's proper name, for use in messages to the user.
+	Title() string
 	// Binary is the absolute path to the resolved executable.
 	Binary() string
 }
 
 type engine struct {
 	name   string
+	title  string
 	binary string
 }
 
 func (e *engine) Name() string   { return e.name }
+func (e *engine) Title() string  { return e.title }
 func (e *engine) Binary() string { return e.binary }
+
+// engineTitles maps each engine to the name its project actually goes by, so
+// safe's own output reads as prose rather than as a binary name.
+var engineTitles = map[string]string{
+	"vault": "Vault",
+	"bao":   "OpenBao",
+}
 
 // engineNames is the resolution order used when nothing pins an engine. Vault
 // comes first so that installing OpenBao alongside an existing Vault does not
@@ -73,7 +84,7 @@ func selectEngine(preference string) (Engine, error) {
 		if err != nil {
 			continue
 		}
-		return &engine{name: name, binary: path}, nil
+		return &engine{name: name, title: engineTitles[name], binary: path}, nil
 	}
 
 	if preference != "" {

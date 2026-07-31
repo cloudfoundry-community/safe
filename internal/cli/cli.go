@@ -183,6 +183,7 @@ type Options struct {
 		Port     int      `cli:"-p, --port"`
 		Config   []string `cli:"-c, --config"`
 		Listener []string `cli:"-l, --listener"`
+		Engine   string   `cli:"-e, --engine"`
 	} `cli:"local"`
 
 	Init struct {
@@ -481,7 +482,7 @@ The following options are recognized:
 
 	r.Dispatch("local", &Help{
 		Summary: "Run a local vault",
-		Usage:   "safe local (--memory|--file path/to/dir) [--as name] [--port port] [--config key=value ...] [--listener key=value ...]",
+		Usage:   "safe local (--memory|--file path/to/dir) [--as name] [--port port] [--engine vault|bao] [--config key=value ...] [--listener key=value ...]",
 		Description: `
 Spins up a new Vault instance.
 
@@ -503,7 +504,21 @@ the path to a directory to use for the file backend.  The files created
 by the mechanism will be encrypted.  You will be given the seal key for
 subsequent activations of the Vault.
 
-To tune the generated Vault configuration, pass key=value pairs:
+safe can run either HashiCorp Vault or OpenBao, whose server, secrets,
+auth, and operator commands are the same.  By default it uses whichever
+of 'vault' or 'bao' it finds first on $PATH, in that order, so that
+installing OpenBao alongside an existing Vault does not change which
+server this command starts.  Pin one with -e/--engine, or set
+SAFE_ENGINE in your environment to change the default without passing
+the flag every time.  A pinned engine that is not installed is an
+error rather than a fallback to the other one.
+
+Note that OpenBao removed the legacy sys/generate-root API.  A --file
+backend that safe initialized itself works either way, but re-opening
+an existing one whose root token you no longer have requires that API,
+and so requires --engine vault.
+
+To tune the generated configuration, pass key=value pairs:
 
   -c/--config key=value     Set a top-level configuration option, e.g.
                             --config max_json_string_value_length=8388608
@@ -513,8 +528,8 @@ To tune the generated Vault configuration, pass key=value pairs:
 Both flags may be repeated.  Values that look like integers, floats, or
 booleans are written unquoted; everything else is quoted as a string.  A
 key matching a default (disable_mlock, address, tls_disable) overrides it.
-safe only checks that each pair is well-formed; Vault validates the rest,
-and its error is reported if the server refuses to start.
+safe only checks that each pair is well-formed; the engine validates the
+rest, and its error is reported if the server refuses to start.
 `,
 		Type: AdministrativeCommand,
 	}, c.cmdLocal)

@@ -162,9 +162,8 @@ func TestApplyConfigKV(t *testing.T) {
 func TestBuildLocalConfig(t *testing.T) {
 	t.Run("memory backend defaults", func(t *testing.T) {
 		body, err := buildLocalConfig(localConfigParams{
-			port:       8201,
-			storageKey: "storage",
-			memory:     true,
+			port:   8201,
+			memory: true,
 		})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -176,24 +175,25 @@ func TestBuildLocalConfig(t *testing.T) {
 		mustContain(t, body, `storage "inmem" {}`)
 	})
 
-	t.Run("file backend uses storage key and path", func(t *testing.T) {
+	// The "storage" stanza was called "backend" before Vault 0.8 (2017). Both
+	// engines safe supports require "storage", so it is no longer conditional.
+	t.Run("file backend uses the storage key and path", func(t *testing.T) {
 		body, err := buildLocalConfig(localConfigParams{
-			port:       9000,
-			storageKey: "backend",
-			filePath:   "/tmp/vault data",
+			port:     9000,
+			filePath: "/tmp/vault data",
 		})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		mustContain(t, body, `backend "file" { path = "/tmp/vault data" }`)
+		mustContain(t, body, `storage "file" { path = "/tmp/vault data" }`)
+		mustNotContain(t, body, `backend "file"`)
 	})
 
 	t.Run("global override adds top-level option", func(t *testing.T) {
 		body, err := buildLocalConfig(localConfigParams{
-			port:       8201,
-			storageKey: "storage",
-			memory:     true,
-			global:     []string{"max_json_string_value_length=8388608"},
+			port:   8201,
+			memory: true,
+			global: []string{"max_json_string_value_length=8388608"},
 		})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -206,10 +206,9 @@ func TestBuildLocalConfig(t *testing.T) {
 
 	t.Run("listener override adds option inside stanza", func(t *testing.T) {
 		body, err := buildLocalConfig(localConfigParams{
-			port:       8201,
-			storageKey: "storage",
-			memory:     true,
-			listener:   []string{`proxy_protocol_behavior=use_always`},
+			port:     8201,
+			memory:   true,
+			listener: []string{`proxy_protocol_behavior=use_always`},
 		})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -223,10 +222,9 @@ func TestBuildLocalConfig(t *testing.T) {
 
 	t.Run("listener override can replace a default", func(t *testing.T) {
 		body, err := buildLocalConfig(localConfigParams{
-			port:       8201,
-			storageKey: "storage",
-			memory:     true,
-			listener:   []string{"tls_disable=0"},
+			port:     8201,
+			memory:   true,
+			listener: []string{"tls_disable=0"},
 		})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -237,12 +235,58 @@ func TestBuildLocalConfig(t *testing.T) {
 		}
 	})
 
+	// OpenBao removed mlock support (the key only draws a startup warning)
+	// and, since 2.5.0, disables the /sys/rekey/* endpoints unless the
+	// listener opts back in — without which `safe rekey` gets nothing but
+	// 405s from the server safe itself started.
+	t.Run("bao engine adapts defaults", func(t *testing.T) {
+		body, err := buildLocalConfig(localConfigParams{
+			port:       8201,
+			memory:     true,
+			engineName: "bao",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		mustNotContain(t, body, "disable_mlock")
+		start := strings.Index(body, `listener "tcp" {`)
+		end := strings.Index(body[start:], "}") + start
+		stanza := body[start:end]
+		mustContain(t, stanza, "disable_unauthed_rekey_endpoints = false")
+	})
+
+	t.Run("vault engine keeps vault defaults", func(t *testing.T) {
+		body, err := buildLocalConfig(localConfigParams{
+			port:       8201,
+			memory:     true,
+			engineName: "vault",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		mustContain(t, body, "disable_mlock = true")
+		mustNotContain(t, body, "disable_unauthed_rekey_endpoints")
+	})
+
+	t.Run("listener override can re-lock bao rekey endpoints", func(t *testing.T) {
+		body, err := buildLocalConfig(localConfigParams{
+			port:       8201,
+			memory:     true,
+			engineName: "bao",
+			listener:   []string{"disable_unauthed_rekey_endpoints=true"},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		mustContain(t, body, "disable_unauthed_rekey_endpoints = true")
+		mustNotContain(t, body, "disable_unauthed_rekey_endpoints = false")
+	})
+
 	t.Run("invalid global override surfaces error", func(t *testing.T) {
 		_, err := buildLocalConfig(localConfigParams{
-			port:       8201,
-			storageKey: "storage",
-			memory:     true,
-			global:     []string{"no-equals-sign"},
+			port:   8201,
+			memory: true,
+			global: []string{"no-equals-sign"},
 		})
 		if err == nil {
 			t.Errorf("expected error for invalid override, got nil")
@@ -251,10 +295,9 @@ func TestBuildLocalConfig(t *testing.T) {
 
 	t.Run("invalid listener override surfaces error", func(t *testing.T) {
 		_, err := buildLocalConfig(localConfigParams{
-			port:       8201,
-			storageKey: "storage",
-			memory:     true,
-			listener:   []string{"bad-key=1"},
+			port:     8201,
+			memory:   true,
+			listener: []string{"bad-key=1"},
 		})
 		if err == nil {
 			t.Errorf("expected error for invalid listener override, got nil")
@@ -297,9 +340,9 @@ func TestLockedBuffer(t *testing.T) {
 	})
 }
 
-// TestVaultStartupError covers all three fallbacks: prefer trimmed stderr,
+// TestEngineStartupError covers all three fallbacks: prefer trimmed stderr,
 // then the wait error, then a constant when both are empty.
-func TestVaultStartupError(t *testing.T) {
+func TestEngineStartupError(t *testing.T) {
 	cases := []struct {
 		name    string
 		stderr  string
@@ -315,9 +358,9 @@ func TestVaultStartupError(t *testing.T) {
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			got := vaultStartupError(tc.stderr, tc.waitErr)
+			got := engineStartupError(tc.stderr, tc.waitErr)
 			if got != tc.want {
-				t.Errorf("vaultStartupError(%q, %v): got %q, want %q", tc.stderr, tc.waitErr, got, tc.want)
+				t.Errorf("engineStartupError(%q, %v): got %q, want %q", tc.stderr, tc.waitErr, got, tc.want)
 			}
 		})
 	}
@@ -339,5 +382,12 @@ func mustContain(t *testing.T, body, want string) {
 	t.Helper()
 	if !strings.Contains(body, want) {
 		t.Errorf("expected config to contain %q, got:\n%s", want, body)
+	}
+}
+
+func mustNotContain(t *testing.T, body, unwanted string) {
+	t.Helper()
+	if strings.Contains(body, unwanted) {
+		t.Errorf("expected config not to contain %q, got:\n%s", unwanted, body)
 	}
 }

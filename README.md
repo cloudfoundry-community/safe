@@ -903,6 +903,49 @@ The `coverage` target writes `coverage.out` and prints per-function coverage
 percentages. Use `make coverage-html` to open an interactive HTML report in
 your browser.
 
-[vault]:   https://vaultproject.io
-[openbao]: https://openbao.org
-[spruce]:  https://github.com/geofffranks/spruce
+### The round-trip suite
+
+`ci/scripts/tests` is an end-to-end suite that starts a real server, points a
+built `safe` at it, and exercises the whole command surface — set, get, tree,
+policy, approle, rekey, x509, and the rest — against both KV v1 and KV v2.
+
+It runs against either engine. `VERSIONS` is a space-separated list, and the
+engine binaries are downloaded into `./vaults/` on first use and cached, so
+later runs against the same version need no network:
+
+```
+make test-integration ENGINE=vault VERSIONS=1.13.13
+make test-integration ENGINE=bao   VERSIONS=2.6.1
+make test-integration ENGINE=vault VERSIONS="1.11.10 1.12.6 1.13.13"
+```
+
+Only OpenBao 2.6.0 and later is supported: 2.6.0 renamed the release assets,
+and the suite builds download URLs to the current scheme only.
+
+Set `SAFE_DISABLE_GPG_TESTS=1` to skip the GPG rekey block on a machine with
+no `gpg`:
+
+```
+SAFE_DISABLE_GPG_TESTS=1 make test-integration ENGINE=bao VERSIONS=2.6.1
+```
+
+The helpers that build those download URLs have their own unit tests, which
+need neither a network nor an engine:
+
+```
+make test-engine-lib
+```
+
+In Concourse the same suite runs from `ci/scripts/test-release-against-engine`.
+The `test-vault-1.9` … `test-vault-1.13` jobs each track the latest patch of a
+Vault minor line, and `test-openbao-2.6` tracks the latest OpenBao 2.6.x patch.
+A release only ships once every job in the matrix — Vault and OpenBao alike —
+has passed.
+Releases come from [releases.hashicorp.com/vault][vault-releases] and the
+[OpenBao releases page][openbao-releases].
+
+[vault]:            https://vaultproject.io
+[openbao]:          https://openbao.org
+[spruce]:           https://github.com/geofffranks/spruce
+[vault-releases]:   https://releases.hashicorp.com/vault/
+[openbao-releases]: https://github.com/openbao/openbao/releases

@@ -38,9 +38,18 @@ func (c *CLI) cmdHelp(command string, args ...string) error {
 	if len(args) == 0 {
 		args = append(args, "commands")
 	}
+	topic := strings.Join(args, " ")
 	//Help is output that was asked for. Written to standard error, it could
 	// not be piped anywhere: safe commands | grep came back with nothing.
-	r.Help(os.Stdout, strings.Join(args, " "))
+	// A topic safe does not have is the other way round -- that is a mistake,
+	// and it is reported where mistakes are.
+	if err := r.Help(os.Stdout, topic); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "@R{Unrecognized command or help topic '%s'}\n", topic)
+		_, _ = fmt.Fprintf(os.Stderr, "Try 'safe help' to get started with safe,\n")
+		_, _ = fmt.Fprintf(os.Stderr, " or 'safe commands' for a list of valid commands\n")
+		rc.Cleanup()
+		os.Exit(1)
+	}
 	rc.Cleanup()
 	os.Exit(0)
 	return nil

@@ -249,3 +249,20 @@ func TestRunner_Dispatch_DescriptionTrimmed(t *testing.T) {
 		t.Errorf("Description: got %q, want %q", h.Description, "body text")
 	}
 }
+
+// Help used to end the process itself for a topic it did not have, which left
+// the caller no chance to say anything about it and skipped the cleanup safe
+// does on its way out. It reports the topic back instead.
+func TestRunner_Help_UnknownTopic(t *testing.T) {
+	t.Parallel()
+	r := NewRunner()
+
+	var out bytes.Buffer
+	err := r.Help(&out, "no-such-topic")
+	if !errors.Is(err, ErrNoSuchTopic) {
+		t.Errorf("Help(no-such-topic): got %v, want ErrNoSuchTopic", err)
+	}
+	if out.String() != "" {
+		t.Errorf("Help wrote %q, want the complaint left to the caller", out.String())
+	}
+}

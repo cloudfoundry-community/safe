@@ -199,6 +199,22 @@ func TestVersionIsWrittenToStandardOutput(t *testing.T) {
 	}
 }
 
+// A topic safe has nothing to say about is a mistake to report, so it is
+// reported where mistakes are reported, and not among the help that piping
+// safe help collects.
+func TestHelpForATopicThatDoesNotExistFails(t *testing.T) {
+	stdout, stderr, status := run(t, "help", "bogus")
+	if status == 0 {
+		t.Errorf("safe help bogus exited 0, want a failure")
+	}
+	if !strings.Contains(stderr, "bogus") {
+		t.Errorf("stderr = %q, want the topic safe does not have named", stderr)
+	}
+	if stdout != "" {
+		t.Errorf("standard output = %q, want the complaint kept off it", stdout)
+	}
+}
+
 // A command in the listing is a command safe help can answer for.
 func TestHelpAnswersForEveryCommandListed(t *testing.T) {
 	stdout, stderr, _ := run(t, "commands")

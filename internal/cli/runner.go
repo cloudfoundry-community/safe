@@ -1,9 +1,9 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
-	"os"
 	"sort"
 	"strings"
 
@@ -59,7 +59,15 @@ func (r *Runner) HelpTopic(topic string, help string) {
 	r.Topics[topic] = &Help{Description: strings.Trim(help, "\n")}
 }
 
-func (r *Runner) Help(out io.Writer, topic string) {
+// ErrNoSuchTopic is what Help gives back when it is asked for a topic that
+// was never registered.
+var ErrNoSuchTopic = errors.New("no such help topic")
+
+// Help writes the topic to out. A topic it does not have is reported back
+// rather than complained about here: what to say about it, and where, belongs
+// to the caller, and ending the process from inside the lookup skipped the
+// cleanup safe does on its way out.
+func (r *Runner) Help(out io.Writer, topic string) error {
 	if topic == "commands" {
 		_, _ = fmt.Fprintf(out, "Valid commands are:\n\n")
 
@@ -81,7 +89,7 @@ func (r *Runner) Help(out io.Writer, topic string) {
 
 		_, _ = fmt.Fprintf(out, "\nTry `safe envvars' for information on available environment variables\n")
 		_, _ = fmt.Fprintf(out, "Try 'safe help <command>' for detailed information on specific commands\n")
-		return
+		return nil
 	}
 
 	if help, ok := r.Topics[topic]; ok && help != nil {
@@ -98,13 +106,10 @@ func (r *Runner) Help(out io.Writer, topic string) {
 		if help.Description != "" {
 			_, _ = ansi.Fprintf(out, help.Description+"\n")
 		}
-		return
+		return nil
 	}
 
-	_, _ = ansi.Fprintf(out, "@R{Unrecognized command or help topic '%s'}\n", topic)
-	_, _ = fmt.Fprintf(out, "Try 'safe help' to get started with safe,\n")
-	_, _ = fmt.Fprintf(out, " or 'safe commands' for a list of valid commands\n")
-	os.Exit(1)
+	return fmt.Errorf("%w: %s", ErrNoSuchTopic, topic)
 }
 
 // UsageError signals a command was invoked incorrectly. Handlers return it

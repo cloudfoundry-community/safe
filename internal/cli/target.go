@@ -414,41 +414,80 @@ func (c *CLI) cmdStatus(command string, args ...string) error {
 	return nil
 }
 
+// shellQuote wraps s in single quotes, where a shell takes every character
+// for itself, and ends and reopens the quoting around any single quote in s.
+// safe env --bash is meant to be handed to eval, and a value written bare was
+// read as shell source rather than as a value: a namespace of
+// "prod dev; rm -rf x" printed
+//
+//	\export VAULT_NAMESPACE=prod dev; rm -rf x;
+//
+// which eval ran, setting the namespace to "prod" and doing the rest.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// fishQuote is shellQuote for fish, which reads a backslash inside single
+// quotes as an escape where sh does not, so a backslash has to be doubled and
+// a single quote is escaped in place rather than by leaving the quoting.
+func fishQuote(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, "'", `\'`)
+	return "'" + s + "'"
+}
+
+// envVar is one of the variables safe env reports. They are held in a slice
+// rather than a map because a map is walked in a different order every time,
+// and safe env --bash written to a file gave a different file on each run.
+type envVar struct {
+	name  string
+	value string
+}
+
 func (c *CLI) cmdEnv(command string, args ...string) error {
 	opt := c.opt
-	r := c.r
 
 	if _, err := rc.Apply(opt.UseTarget); err != nil {
 		return err
 	}
-	if opt.Env.ForBash && opt.Env.ForFish && opt.Env.ForJSON {
-		_ = r.Help(os.Stderr, "env")
-		_, _ = fmt.Fprintf(os.Stderr, "@R{Only specify one of --json, --bash OR --fish.}\n")
-		rc.Cleanup()
-		os.Exit(1)
+	//Two formats were a mistake only when all three were named, so safe env
+	// --bash --fish printed one of them and said nothing about the other,
+	// leaving the caller to find out which it had picked.
+	formats := 0
+	for _, named := range []bool{opt.Env.ForBash, opt.Env.ForFish, opt.Env.ForJSON} {
+		if named {
+			formats++
+		}
 	}
-	vars := map[string]string{
-		"VAULT_ADDR":        os.Getenv("VAULT_ADDR"),
-		"VAULT_TOKEN":       os.Getenv("VAULT_TOKEN"),
-		"VAULT_SKIP_VERIFY": os.Getenv("VAULT_SKIP_VERIFY"),
-		"VAULT_NAMESPACE":   os.Getenv("VAULT_NAMESPACE"),
+	if formats > 1 {
+		return fmt.Errorf("Only specify one of --json, --bash OR --fish")
+	}
+	addr := os.Getenv("VAULT_ADDR")
+	token := os.Getenv("VAULT_TOKEN")
+	skipVerify := os.Getenv("VAULT_SKIP_VERIFY")
+	namespace := os.Getenv("VAULT_NAMESPACE")
+	vars := []envVar{
+		{"VAULT_ADDR", addr},
+		{"VAULT_TOKEN", token},
+		{"VAULT_SKIP_VERIFY", skipVerify},
+		{"VAULT_NAMESPACE", namespace},
 	}
 
 	switch {
 	case opt.Env.ForBash:
-		for name, value := range vars {
-			if value != "" {
-				_, _ = fmt.Fprintf(os.Stdout, "\\export %s=%s;\n", name, value)
+		for _, v := range vars {
+			if v.value != "" {
+				_, _ = fmt.Fprintf(os.Stdout, "\\export %s=%s;\n", v.name, shellQuote(v.value))
 			} else {
-				_, _ = fmt.Fprintf(os.Stdout, "\\unset %s;\n", name)
+				_, _ = fmt.Fprintf(os.Stdout, "\\unset %s;\n", v.name)
 			}
 		}
 	case opt.Env.ForFish:
-		for name, value := range vars {
-			if value == "" {
-				_, _ = fmt.Fprintf(os.Stdout, "set -u %s;\n", name)
+		for _, v := range vars {
+			if v.value == "" {
+				_, _ = fmt.Fprintf(os.Stdout, "set -u %s;\n", v.name)
 			} else {
-				_, _ = fmt.Fprintf(os.Stdout, "set -x %s %s;\n", name, value)
+				_, _ = fmt.Fprintf(os.Stdout, "set -x %s %s;\n", v.name, fishQuote(v.value))
 			}
 		}
 	case opt.Env.ForJSON:
@@ -458,10 +497,10 @@ func (c *CLI) cmdEnv(command string, args ...string) error {
 			Skip  string `json:"VAULT_SKIP_VERIFY,omitempty"`
 			NS    string `json:"VAULT_NAMESPACE,omitempty"`
 		}{
-			Addr:  vars["VAULT_ADDR"],
-			Token: vars["VAULT_TOKEN"],
-			Skip:  vars["VAULT_SKIP_VERIFY"],
-			NS:    vars["VAULT_NAMESPACE"],
+			Addr:  addr,
+			Token: token,
+			Skip:  skipVerify,
+			NS:    namespace,
 		}
 		b, err := json.Marshal(jsonEnv)
 		if err != nil {
@@ -471,9 +510,9 @@ func (c *CLI) cmdEnv(command string, args ...string) error {
 		return nil
 
 	default:
-		for name, value := range vars {
-			if value != "" {
-				_, _ = fmt.Fprintf(os.Stderr, "  @B{%s}  @G{%s}\n", name, value)
+		for _, v := range vars {
+			if v.value != "" {
+				_, _ = fmt.Fprintf(os.Stderr, "  @B{%s}  @G{%s}\n", v.name, v.value)
 			}
 		}
 	}

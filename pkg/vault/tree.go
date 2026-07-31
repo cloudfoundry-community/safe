@@ -941,12 +941,23 @@ func (w *treeWorker) workMounts(_ secretTree) ([]secretTree, error) {
 	ret := []secretTree{}
 	for _, mount := range mounts {
 		//Handle the case in which a mount has a secret at its root
-		if _, err = w.vault.Read(mount); err == nil {
+		_, err = w.vault.Read(mount)
+		switch {
+		case err == nil:
 			ret = append(ret, secretTree{
 				Name: mount,
 				Type: treeTypeSecret,
 			})
-		} else if !IsNotFound(err) {
+		case IsNotFound(err):
+		case vaultkv.IsForbidden(err):
+			//A token holding no read on a mount ended the walk of the whole
+			// Vault, so a Vault with one mount the token could not read had
+			// nothing safe could say about the mounts it could. The walk skips
+			// what it cannot read everywhere else, and this read is a question
+			// about a secret that most likely is not there at all, so it is not
+			// counted as a skip: the mount is counted where its listing is
+			// denied, once, rather than twice for the one mount.
+		default:
 			return nil, err
 		}
 

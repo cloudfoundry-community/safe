@@ -123,6 +123,36 @@ func TestCmdEnv_Bash_AllUnset(t *testing.T) {
 	}
 }
 
+// The variables were held in a map, so safe env printed them in a different
+// order on each run and safe env --bash > env.sh gave a different file every
+// time.
+func TestCmdEnv_Bash_FixedOrder(t *testing.T) {
+	isolateHome(t)
+	t.Setenv("VAULT_ADDR", "https://vault.example.com")
+	t.Setenv("VAULT_TOKEN", "s.testtoken")
+	t.Setenv("VAULT_SKIP_VERIFY", "1")
+	t.Setenv("VAULT_NAMESPACE", "ns/dev")
+
+	c := newEnvCLI(t)
+	c.opt.Env.ForBash = true
+
+	want := `\export VAULT_ADDR=https://vault.example.com;
+\export VAULT_TOKEN=s.testtoken;
+\export VAULT_SKIP_VERIFY=1;
+\export VAULT_NAMESPACE=ns/dev;
+`
+	for i := range 8 {
+		out := captureStdout(t, func() {
+			if err := c.cmdEnv("env"); err != nil {
+				t.Errorf("cmdEnv bash: unexpected error: %v", err)
+			}
+		})
+		if out != want {
+			t.Fatalf("run %d printed:\n%s\nwant:\n%s", i, out, want)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // fish branch
 // ---------------------------------------------------------------------------
@@ -179,6 +209,33 @@ func TestCmdEnv_Fish_AllUnset(t *testing.T) {
 		want := "set -u " + key + ";"
 		if !strings.Contains(out, want) {
 			t.Errorf("fish all-unset: missing %q in output:\n%s", want, out)
+		}
+	}
+}
+
+func TestCmdEnv_Fish_FixedOrder(t *testing.T) {
+	isolateHome(t)
+	t.Setenv("VAULT_ADDR", "https://vault.example.com")
+	t.Setenv("VAULT_TOKEN", "s.fishtoken")
+	t.Setenv("VAULT_SKIP_VERIFY", "")
+	t.Setenv("VAULT_NAMESPACE", "ns/dev")
+
+	c := newEnvCLI(t)
+	c.opt.Env.ForFish = true
+
+	want := `set -x VAULT_ADDR https://vault.example.com;
+set -x VAULT_TOKEN s.fishtoken;
+set -u VAULT_SKIP_VERIFY;
+set -x VAULT_NAMESPACE ns/dev;
+`
+	for i := range 8 {
+		out := captureStdout(t, func() {
+			if err := c.cmdEnv("env"); err != nil {
+				t.Errorf("cmdEnv fish: unexpected error: %v", err)
+			}
+		})
+		if out != want {
+			t.Fatalf("run %d printed:\n%s\nwant:\n%s", i, out, want)
 		}
 	}
 }

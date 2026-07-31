@@ -414,6 +414,14 @@ func (c *CLI) cmdStatus(command string, args ...string) error {
 	return nil
 }
 
+// envVar is one of the variables safe env reports. They are held in a slice
+// rather than a map because a map is walked in a different order every time,
+// and safe env --bash written to a file gave a different file on each run.
+type envVar struct {
+	name  string
+	value string
+}
+
 func (c *CLI) cmdEnv(command string, args ...string) error {
 	opt := c.opt
 	r := c.r
@@ -427,28 +435,32 @@ func (c *CLI) cmdEnv(command string, args ...string) error {
 		rc.Cleanup()
 		os.Exit(1)
 	}
-	vars := map[string]string{
-		"VAULT_ADDR":        os.Getenv("VAULT_ADDR"),
-		"VAULT_TOKEN":       os.Getenv("VAULT_TOKEN"),
-		"VAULT_SKIP_VERIFY": os.Getenv("VAULT_SKIP_VERIFY"),
-		"VAULT_NAMESPACE":   os.Getenv("VAULT_NAMESPACE"),
+	addr := os.Getenv("VAULT_ADDR")
+	token := os.Getenv("VAULT_TOKEN")
+	skipVerify := os.Getenv("VAULT_SKIP_VERIFY")
+	namespace := os.Getenv("VAULT_NAMESPACE")
+	vars := []envVar{
+		{"VAULT_ADDR", addr},
+		{"VAULT_TOKEN", token},
+		{"VAULT_SKIP_VERIFY", skipVerify},
+		{"VAULT_NAMESPACE", namespace},
 	}
 
 	switch {
 	case opt.Env.ForBash:
-		for name, value := range vars {
-			if value != "" {
-				_, _ = fmt.Fprintf(os.Stdout, "\\export %s=%s;\n", name, value)
+		for _, v := range vars {
+			if v.value != "" {
+				_, _ = fmt.Fprintf(os.Stdout, "\\export %s=%s;\n", v.name, v.value)
 			} else {
-				_, _ = fmt.Fprintf(os.Stdout, "\\unset %s;\n", name)
+				_, _ = fmt.Fprintf(os.Stdout, "\\unset %s;\n", v.name)
 			}
 		}
 	case opt.Env.ForFish:
-		for name, value := range vars {
-			if value == "" {
-				_, _ = fmt.Fprintf(os.Stdout, "set -u %s;\n", name)
+		for _, v := range vars {
+			if v.value == "" {
+				_, _ = fmt.Fprintf(os.Stdout, "set -u %s;\n", v.name)
 			} else {
-				_, _ = fmt.Fprintf(os.Stdout, "set -x %s %s;\n", name, value)
+				_, _ = fmt.Fprintf(os.Stdout, "set -x %s %s;\n", v.name, v.value)
 			}
 		}
 	case opt.Env.ForJSON:
@@ -458,10 +470,10 @@ func (c *CLI) cmdEnv(command string, args ...string) error {
 			Skip  string `json:"VAULT_SKIP_VERIFY,omitempty"`
 			NS    string `json:"VAULT_NAMESPACE,omitempty"`
 		}{
-			Addr:  vars["VAULT_ADDR"],
-			Token: vars["VAULT_TOKEN"],
-			Skip:  vars["VAULT_SKIP_VERIFY"],
-			NS:    vars["VAULT_NAMESPACE"],
+			Addr:  addr,
+			Token: token,
+			Skip:  skipVerify,
+			NS:    namespace,
 		}
 		b, err := json.Marshal(jsonEnv)
 		if err != nil {
@@ -471,9 +483,9 @@ func (c *CLI) cmdEnv(command string, args ...string) error {
 		return nil
 
 	default:
-		for name, value := range vars {
-			if value != "" {
-				_, _ = fmt.Fprintf(os.Stderr, "  @B{%s}  @G{%s}\n", name, value)
+		for _, v := range vars {
+			if v.value != "" {
+				_, _ = fmt.Fprintf(os.Stderr, "  @B{%s}  @G{%s}\n", v.name, v.value)
 			}
 		}
 	}

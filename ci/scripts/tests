@@ -1225,12 +1225,12 @@ EOF
 
   #######
   clearvault
-  testing recursively delete a key
+  testing refusing to recursively delete a key
   generate secret/delete foo=bar beep=boop
 
-  now deleting a key recursively
-  (run; ${SAFE_CMD} delete -Rf secret/delete:foo) ; exitok $? 0
-  no_key secret/delete:foo
+  now refusing to delete a key recursively
+  (run; ${SAFE_CMD} delete -Rf secret/delete:foo) ; exitok $? 1
+  is_key secret/delete:foo "bar"
   is_key secret/delete:beep "boop"
 
 
@@ -1246,11 +1246,11 @@ EOF
 
   #######
   clearvault
-  testing recursively delete a key that does not exist with -f should not fail
+  testing refusing to recursively delete a key that does not exist, even with -f
   generate secret/delete beep=boop
 
-  now deleting a non-existent key with -Rf
-  (run; ${SAFE_CMD} delete -Rf secret/delete:foo) ; exitok $? 0
+  now refusing to delete a non-existent key with -Rf
+  (run; ${SAFE_CMD} delete -Rf secret/delete:foo) ; exitok $? 1
   is_key secret/delete:beep "boop"
 
 
@@ -2307,7 +2307,7 @@ EOF
   now checking that retrieving a missing version returns an error
   (${SAFE_CMD} get secret/versioned^1 2>t/home/got); exitok $? 1
   cat <<'EOF' >t/home/want; diffok
-!! no secret exists at path `secret/versioned`
+!! no version 1 of secret `secret/versioned` exists
 EOF
 
   testing versions 
@@ -2402,7 +2402,7 @@ EOF
   (${SAFE_CMD} delete secret/versioned >/dev/null 2>t/home/got); exitok $? 1
   now checking that the error message conveys that the secret is already deleted
   cat << 'EOF' >t/home/want; diffok
-!! `secret/versioned' is deleted
+!! version 1 of secret `secret/versioned` has been deleted
 EOF
 
   testing deleting already deleted versions with force
@@ -2444,7 +2444,7 @@ EOF
   (${SAFE_CMD} delete secret/versioned^1 -D 2>t/home/got); exitok $? 1
   now checking that the error message conveys that the secret is already destroyed
   cat << 'EOF' >t/home/want; diffok
-!! `secret/versioned^1' is destroyed
+!! version 1 of secret `secret/versioned` has been destroyed
 EOF
 
   testing destroying already destroyed versions with force

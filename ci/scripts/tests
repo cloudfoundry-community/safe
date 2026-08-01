@@ -320,6 +320,11 @@ cleanup() {
   # assertion had failed yet -- a suite that could not even download its
   # server would report green.
   local status=$?
+  # This handler ends in exit, which on a signal (INT/QUIT/TERM) fires the
+  # EXIT trap in turn. Clearing every trap here, once entered, keeps that
+  # second firing from running the whole cleanup -- rm -rf t/ and the
+  # pass/fail banner -- a second time.
+  trap - INT QUIT TERM EXIT
   export HOME=${old_home}
   rm -rf t/
   kill_running_engine

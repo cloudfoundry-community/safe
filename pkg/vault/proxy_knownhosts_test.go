@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cloudfoundry-community/safe/pkg/prompt"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -197,6 +198,60 @@ func TestKnownHostsMatchingKeyAccepted(t *testing.T) {
 	fakeAddr := fakeNetAddr("127.0.0.1:22")
 	if err := cb("good.host:22", fakeAddr, key); err != nil {
 		t.Errorf("expected nil error for matching key, got: %v", err)
+	}
+}
+
+// TestUnknownHostPromptGatesOnStdinNotStderr covers an unknown host key
+// reaching the interactive-accept branch. The prompt reads its yes/no answer
+// from stdin, so whether it runs has to depend on stdin being a terminal, not
+// stderr's: an interactive stderr with redirected stdin
+// (`safe -T bastion import < data.json`) must be refused without trying to
+// read the answer out of the redirected payload, and an interactive stdin
+// with redirected stderr must still be asked.
+func TestUnknownHostPromptGatesOnStdinNotStderr(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		stdinTTY   bool
+		stderrTTY  bool
+		wantAccept bool
+	}{
+		{"redirected stdin, interactive stderr: refused without reading", false, true, false},
+		{"interactive stdin, redirected stderr: prompt runs", true, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "known_hosts")
+			if err := os.WriteFile(path, []byte{}, 0600); err != nil {
+				t.Fatalf("create empty known_hosts: %v", err)
+			}
+			cb, err := knownHostsPromptCallback(path)
+			if err != nil {
+				t.Fatalf("knownHostsPromptCallback: %v", err)
+			}
+
+			restore := isTerminal
+			isTerminal = func(fd uintptr) bool {
+				switch fd {
+				case os.Stdin.Fd():
+					return tc.stdinTTY
+				case os.Stderr.Fd():
+					return tc.stderrTTY
+				default:
+					return false
+				}
+			}
+			t.Cleanup(func() { isTerminal = restore })
+
+			prompt.SetReader(strings.NewReader("yes\n"))
+			t.Cleanup(func() { prompt.SetReader(nil) })
+
+			key := makeEd25519PublicKey(t)
+			cbErr := cb("unknown.example.com:22", fakeNetAddr("127.0.0.1:22"), key)
+			accepted := cbErr == nil
+			if accepted != tc.wantAccept {
+				t.Errorf("accepted = %v (err: %v), want %v", accepted, cbErr, tc.wantAccept)
+			}
+		})
 	}
 }
 

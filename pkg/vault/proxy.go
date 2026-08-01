@@ -20,6 +20,11 @@ import (
 	"golang.org/x/net/http/httpproxy"
 )
 
+// isTerminal reports whether fd is attached to an interactive terminal. A
+// package variable, the same seam prompt.SetReader provides for stdin, so
+// tests can simulate a tty or its absence without a real one.
+var isTerminal = isatty.IsTerminal
+
 type ProxyRouter struct {
 	ProxyConf httpproxy.Config
 }
@@ -329,8 +334,13 @@ Host key verification failed`
 		}
 
 		//If not, then the key doesn't exist in the host key file
-		//Let's see if we can ask the user if they want to add it
-		if !isatty.IsTerminal(os.Stderr.Fd()) || !promptAddNewKnownHost(hostname, remote, key) {
+		//Let's see if we can ask the user if they want to add it. The
+		//prompt reads its answer from stdin, so whether it can run has to
+		//depend on stdin being a terminal -- gating on stderr let a
+		//redirected stdin (`safe -T bastion import < data.json`) be drained
+		//by the prompt loop looking for "yes"/"no" while stderr happened to
+		//be a terminal.
+		if !isTerminal(os.Stdin.Fd()) || !promptAddNewKnownHost(hostname, remote, key) {
 			//If its not a terminal or the user declined, we're rejecting it
 			return fmt.Errorf("host key verification failed: %w", callbackErr)
 		}

@@ -5,6 +5,7 @@ meta:
     - test-vault-1.11
     - test-vault-1.12
     - test-vault-1.13
+    - test-openbao-2.6
 jobs:
 - name: prepare
   public: true

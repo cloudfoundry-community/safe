@@ -1,48 +1,5 @@
 #!/bin/bash
+# Back-compat shim: delegates to test-release-against-engine with ENGINE=vault.
+# Kept so a task file or a habit still naming this path keeps working.
 set -eu
-
-# Resource Directories
-export REPO_ROOT="git"
-export BUILD_ROOT="build"
-export CI_ROOT="git-ci"
-export VERSION_FROM="version/number"
-export ROOT_PATH="$(pwd)"
-
-header() {
-	echo
-	echo "================================================================================"
-	echo "$1"
-	echo "--------------------------------------------------------------------------------"
-	echo
-}
-
-bail() {
-	echo >&2 "$*  Did you misconfigure Concourse?"
-	exit 2
-}
-test -n "${PROJECT:-}"        || bail "PROJECT must be set to the name of this package."
-test -n "${VAULT_VERSIONS:-}" || bail "VAULT_VERSIONS must be set to the version(s) of HashiCorp Vault to test against."
-
-test -f "${VERSION_FROM}"     || bail "Version file (${VERSION_FROM}) not found."
-VERSION=$(cat "${VERSION_FROM}")
-test -n "${VERSION}"          || bail "Version file (${VERSION_FROM}) was empty."
-
-OS=$(uname -s | tr A-Z a-z)
-ARCH=$(uname -m | sed -e 's/^x86_/amd/')
-
-[[ -e "$BUILD_ROOT/$PROJECT-$VERSION-$OS-$ARCH" ]] || \
-  bail "Cannot find safe executable for v$VERSION on $OS/$ARCH"
-
-header "Testing $PROJECT v$VERSION ($OS/$ARCH) against Vault $VAULT_VERSIONS"
-
-cd "$REPO_ROOT"
-make test-integration \
-  TEST_PATH="../$CI_ROOT/ci/scripts/tests" \
-  SAFE_PATH="../$BUILD_ROOT/$PROJECT-$VERSION-$OS-$ARCH" \
-  VAULT_VERSIONS="$VAULT_VERSIONS"
-
-echo
-echo "================================================================================"
-echo "SUCCESS!"
-exit 0
-
+ENGINE=vault exec "$(dirname "$0")/test-release-against-engine" "$@"

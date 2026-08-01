@@ -1,8 +1,9 @@
 #!/bin/bash
 #
-# Gate for the pull-request job. No Vault server is available here, so this
-# runs the hermetic checks only: fmt, vet, staticcheck, and the unit tests.
-# The end-to-end suite runs in the test-vault-* jobs, which have a server.
+# Gate for the pull-request job. No server is available here, so this runs
+# the hermetic checks only: fmt, vet, staticcheck, and the unit tests.
+# The end-to-end suite runs in the test-vault-* and test-openbao-* jobs,
+# which download a real server to run against.
 
 set -eu
 

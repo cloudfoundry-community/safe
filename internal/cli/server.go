@@ -3,13 +3,12 @@ package cli
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -21,26 +20,6 @@ import (
 	"github.com/cloudfoundry-community/safe/pkg/vault"
 )
 
-// parseVaultVersion extracts the major and minor version numbers from the
-// output of `vault version`. Returns (major, minor, true) on success, or
-// (0, 0, false) when the version string cannot be parsed (non-fatal; the
-// caller falls back to the default storageKey).
-func parseVaultVersion(output []byte) (major, minor uint64, ok bool) {
-	matches := regexp.MustCompile(`v([0-9]+)\.([0-9]+)`).FindSubmatch(output)
-	if len(matches) < 3 {
-		return 0, 0, false
-	}
-	maj, err := strconv.ParseUint(string(matches[1]), 10, 64)
-	if err != nil {
-		return 0, 0, false
-	}
-	min, err := strconv.ParseUint(string(matches[2]), 10, 64)
-	if err != nil {
-		return 0, 0, false
-	}
-	return maj, min, true
-}
-
 func (c *CLI) cmdLocal(command string, args ...string) error {
 	opt := c.opt
 
@@ -49,6 +28,11 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 	}
 	if opt.Local.Memory && opt.Local.File != "" {
 		return fmt.Errorf("Please specify either --memory or --file <path>, but not both")
+	}
+
+	engine, err := selectEngine(opt.Local.Engine)
+	if err != nil {
+		return fmt.Errorf("@R{%s}", err)
 	}
 
 	var port int
@@ -64,17 +48,6 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 		}
 	}
 
-	//the "storage" configuration key was once called "backend"
-	storageKey := "storage"
-	cmd := exec.Command("vault", "version")
-	versionOutput, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("@R{Vault is not currently installed or located in $PATH}")
-	}
-	if major, minor, ok := parseVaultVersion(versionOutput); ok && major == 0 && minor < 8 {
-		storageKey = "backend"
-	}
-
 	keys := make([]string, 0)
 	if !opt.Local.Memory {
 		opt.Local.File = filepath.ToSlash(opt.Local.File)
@@ -85,9 +58,9 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 
 	configBody, err := buildLocalConfig(localConfigParams{
 		port:       port,
-		storageKey: storageKey,
 		memory:     opt.Local.Memory,
 		filePath:   opt.Local.File,
+		engineName: engine.Name(),
 		global:     opt.Local.Config,
 		listener:   opt.Local.Listener,
 	})
@@ -100,24 +73,26 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 		return err
 	}
 	if _, err := f.WriteString(configBody); err != nil {
-		return fmt.Errorf("Unable to write the Vault config: %w", err)
+		return fmt.Errorf("Unable to write the %s config: %w", engine.Title(), err)
 	}
 	if err := f.Close(); err != nil {
-		return fmt.Errorf("Unable to write the Vault config: %w", err)
+		return fmt.Errorf("Unable to write the %s config: %w", engine.Title(), err)
 	}
 
-	// Capture Vault's output so a bad config (which safe deliberately does
-	// not validate) is reported instead of surfacing as a startup timeout.
-	// Vault writes config-parse errors to stdout, so capture both streams.
+	// Capture the server's output so a bad config (which safe deliberately
+	// does not validate) is reported instead of surfacing as a startup
+	// timeout. Config-parse errors go to stdout, so capture both streams.
 	// Pointing Stdout and Stderr at the same writer is the documented way
 	// to avoid an interleaving race (os/exec serializes the writes).
-	var vaultOutput lockedBuffer
+	var engineOutput lockedBuffer
 	echan := make(chan error)
-	cmd = exec.Command("vault", "server", "-config", f.Name()) // #nosec G204 - f.Name() is a temp file we created
-	cmd.Stdout = &vaultOutput
-	cmd.Stderr = &vaultOutput
+	// #nosec G204 - engine.Binary() is a PATH lookup of a known name, and
+	// f.Name() is a temp file we created
+	cmd := exec.Command(engine.Binary(), "server", "-config", f.Name())
+	cmd.Stdout = &engineOutput
+	cmd.Stderr = &engineOutput
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start vault server: %w", err)
+		return fmt.Errorf("failed to start %s server: %w", engine.Title(), err)
 	}
 	go func() {
 		echan <- cmd.Wait()
@@ -128,9 +103,11 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 		if err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "@R{!! %s}\n", err)
 		}
-		_, _ = fmt.Fprintf(os.Stderr, "@Y{shutting down the Vault...}\n")
-		if err := cmd.Process.Kill(); err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "@R{NOTE: Unable to terminate the Vault process.}\n")
+		_, _ = fmt.Fprintf(os.Stderr, "@Y{shutting down %s...}\n", engine.Title())
+		// On the startup path the wait goroutine has usually reaped the
+		// process already; that is a clean shutdown, not a kill failure.
+		if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			_, _ = fmt.Fprintf(os.Stderr, "@R{NOTE: Unable to terminate the %s process.}\n", engine.Title())
 			_, _ = fmt.Fprintf(os.Stderr, "@R{      You may have some environmental cleanup to do.}\n")
 			_, _ = fmt.Fprintf(os.Stderr, "@R{      Apologies.}\n")
 		}
@@ -153,7 +130,7 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 			name = RandomName()
 		}
 		if n == 0 {
-			die(fmt.Errorf("I was unable to come up with a cool name for your local Vault.  Please try naming it with --as"))
+			die(fmt.Errorf("I was unable to come up with a cool name for your local %s server.  Please try naming it with --as", engine.Title()))
 		}
 	} else {
 		if existing, _ := cfg.Vault(name); existing != nil {
@@ -178,11 +155,11 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 	const betweenChecksWait = 250 * time.Millisecond
 	startupCheckBeginTime := time.Now()
 	for {
-		// If Vault exited before becoming ready (most often a rejected
+		// If the server exited before becoming ready (most often a rejected
 		// config), report its own error rather than waiting out the timeout.
 		select {
 		case waitErr := <-echan:
-			die(fmt.Errorf("Vault exited before it became ready: %s", vaultStartupError(vaultOutput.String(), waitErr)))
+			die(fmt.Errorf("%s exited before it became ready: %s", engine.Title(), engineStartupError(engineOutput.String(), waitErr)))
 		default:
 		}
 
@@ -192,10 +169,10 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 		}
 
 		if time.Since(startupCheckBeginTime) > maxStartupWait {
-			if msg := strings.TrimSpace(vaultOutput.String()); msg != "" {
-				die(fmt.Errorf("Timed out waiting for Vault to begin listening: %s\n%s", err, msg))
+			if msg := strings.TrimSpace(engineOutput.String()); msg != "" {
+				die(fmt.Errorf("Timed out waiting for %s to begin listening: %s\n%s", engine.Title(), err, msg))
 			}
-			die(fmt.Errorf("Timed out waiting for Vault to begin listening: %s", err))
+			die(fmt.Errorf("Timed out waiting for %s to begin listening: %s", engine.Title(), err))
 		}
 
 		time.Sleep(betweenChecksWait)
@@ -205,12 +182,12 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 	if len(keys) == 0 {
 		keys, token, err = v.Init(1, 1)
 		if err != nil {
-			die(fmt.Errorf("Unable to initialize the new (temporary) Vault: %w", err))
+			die(fmt.Errorf("Unable to initialize the new (temporary) %s server: %w", engine.Title(), err))
 		}
 	}
 
 	if err = v.Unseal(keys); err != nil {
-		die(fmt.Errorf("Unable to unseal the new (temporary) Vault: %w", err))
+		die(fmt.Errorf("Unable to unseal the new (temporary) %s server: %w", engine.Title(), err))
 	}
 	token, err = resolveRootToken(token, func() (string, error) {
 		return v.NewRootToken(keys)
@@ -244,17 +221,17 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 	if !opt.Quiet {
 		_, _ = fmt.Fprintf(os.Stderr, "Now targeting (temporary) @Y{%s} at @C{%s}\n", cfg.Current, cfg.URL())
 		if opt.Local.Memory {
-			_, _ = fmt.Fprintf(os.Stderr, "@R{This Vault is MEMORY-BACKED!}\n")
+			_, _ = fmt.Fprintf(os.Stderr, "@R{This %s server is MEMORY-BACKED!}\n", engine.Title())
 			_, _ = fmt.Fprintf(os.Stderr, "If you want to @Y{retain your secrets} be sure to @C{safe export}.\n")
 		} else {
 			_, _ = fmt.Fprintf(os.Stderr, "Storing data (encrypted) in @G{%s}\n", opt.Local.File)
-			_, _ = fmt.Fprintf(os.Stderr, "Your Vault Seal Key is @M{%s}\n", keys[0])
+			_, _ = fmt.Fprintf(os.Stderr, "Your %s Seal Key is @M{%s}\n", engine.Title(), keys[0])
 		}
-		_, _ = fmt.Fprintf(os.Stderr, "Ctrl-C to shut down the Vault\n")
+		_, _ = fmt.Fprintf(os.Stderr, "Ctrl-C to shut down the %s server\n", engine.Title())
 	}
 
 	err = <-echan
-	_, _ = fmt.Fprintf(os.Stderr, "Vault terminated normally, cleaning up...\n")
+	_, _ = fmt.Fprintf(os.Stderr, "%s terminated normally, cleaning up...\n", engine.Title())
 	{
 		var applyErr error
 		cfg, applyErr = rc.Apply("")
@@ -644,7 +621,16 @@ func (c *CLI) cmdVault(command string, args ...string) error {
 		return err
 	}
 
-	cmd := exec.Command("vault", args...) // #nosec G204,G702 -- passthrough to vault binary with user-supplied args is the intended behavior
+	// OpenBao kept Vault's command surface when it forked, so the same
+	// arguments pass through unchanged to whichever engine is resolved.
+	// There is no --engine flag here (every argument belongs to the engine),
+	// so the preference comes from SAFE_ENGINE or auto-detection.
+	engine, err := selectEngine("")
+	if err != nil {
+		return fmt.Errorf("@R{%s}", err)
+	}
+
+	cmd := exec.Command(engine.Binary(), args...) // #nosec G204,G702 -- passthrough to the engine binary with user-supplied args is the intended behavior
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

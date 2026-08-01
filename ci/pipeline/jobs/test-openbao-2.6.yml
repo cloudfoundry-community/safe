@@ -1,0 +1,34 @@
+jobs:
+  - name: test-openbao-2.6
+    public: true
+    serial: false
+    plan:
+    - in_parallel:
+        steps:
+        # Only the version file is consumed; the suite downloads its own
+        # server binary. Without globs the github-release resource fetches
+        # every release asset, and OpenBao ships ~250 of them (~3 GB), so
+        # pin globs to a name no asset has. An empty globs list would not
+        # do: the resource treats it the same as unset, downloading all.
+        - { get: github-openbao-2.6,      trigger: true, params: {globs: [version-only]}}
+        - { get: build,   passed: [build], trigger: true, params: {unpack: true}}
+        - { get: version, passed: [build]}
+        - { get: git,     passed: [build]}
+        - { get: git-ci}
+    - load_var: openbao_version
+      file: github-openbao-2.6/version
+      format: trim
+      reveal: true
+    - task: test
+      file: git-ci/ci/tasks/test.yml
+      params:
+        PROJECT: (( grab meta.name ))
+        ENGINE:  bao
+        OPENBAO_VERSIONS: ((.:openbao_version))
+    on_failure:
+      put: notify
+      params:
+        channel:  (( grab meta.slack.channel ))
+        username: (( grab meta.slack.username ))
+        icon_url: (( grab meta.slack.icon ))
+        text:    '(( concat meta.slack.fail_url " " meta.pipeline ": test job failed" ))'

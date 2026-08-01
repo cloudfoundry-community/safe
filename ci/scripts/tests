@@ -2,30 +2,56 @@
 # vim:et:ts=2:sts=2:sw=2
 set -u
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+# shellcheck source=lib/engine.sh
+source "${SCRIPT_DIR}/lib/engine.sh"
+
 done_testing=0
 rc=0
 platform=
-arch=amd64
+arch=
 old_home="$HOME"
-vault_pid=
+engine_pid=
 root_token=
 unseal_key=
+
+# Which server the suite runs against: vault (default) or bao. The suite
+# itself is identical either way; only the download and startup differ.
+ENGINE="${ENGINE:-vault}"
+engine_startup_mode "$ENGINE" >/dev/null || {
+  echo >&2 "ENGINE must be one of: vault, bao (got '${ENGINE}')"
+  exit 1
+}
+# Pin safe's own engine resolution to the one under test, so `safe vault`
+# passthroughs reach the downloaded binary rather than whatever the host has.
+export SAFE_ENGINE="$ENGINE"
 
 SAFE_CMD=$1 ; shift
 declare -a versions;
 if [[ $# > 0 ]] ; then
-  versions=$@
+  versions=("$@")
 else
-  versions=(
-    "1.9.10"
-    "1.10.11"
-    "1.11.10"
-    "1.12.6"
-    "1.13.2"
-  )
-fi 
+  # The fallback list is per engine; a Vault version number asked of OpenBao
+  # (or vice versa) has nothing behind it to download.
+  case "$ENGINE" in
+    bao)
+      versions=(
+        "2.6.1"
+      )
+      ;;
+    *)
+      versions=(
+        "1.9.10"
+        "1.10.11"
+        "1.11.10"
+        "1.12.6"
+        "1.13.2"
+      )
+      ;;
+  esac
+fi
 
-echo "Will be testing against Vault version(s):"
+echo "Will be testing against ${ENGINE} version(s):"
 for x in ${versions[@]}; do
   echo "- $x"
 done
@@ -42,6 +68,8 @@ case $OSTYPE in
   exit 1
   ;;
 esac
+
+arch="$(normalize_arch "$(uname -m)")" || exit 1
 
 
 bail() {
@@ -255,7 +283,7 @@ dump_log() {
     fi
     if [[ ${rc} -ne 0 || -n ${1:-} ]]; then
       echo
-      echo >&2 "---[ VAULT LOG ]------------------------------------------"
+      echo >&2 "---[ ${ENGINE} SERVER LOG ]-------------------------------"
       cat  >&2 t/home/log
       echo >&2 "----------------------------------------------------------"
       echo
@@ -263,41 +291,53 @@ dump_log() {
   fi
 }
 
-kill_running_vault() {
-  if [[ -n $vault_pid ]] ; then
-    kill $vault_pid
-    wait $vault_pid
-    vault_pid=
+kill_running_engine() {
+  if [[ -n $engine_pid ]] ; then
+    kill $engine_pid
+    wait $engine_pid
+    engine_pid=
   fi
 }
 
 cleanup() {
+  # $? is the status the script was exiting with when the EXIT trap fired.
+  # It must survive this handler: exiting with ${rc} alone would turn the
+  # explicit exits (bail's 2, the startup paths' 3) into success whenever no
+  # assertion had failed yet -- a suite that could not even download its
+  # server would report green.
+  local status=$?
   export HOME=${old_home}
   rm -rf t/
-  kill_running_vault
+  kill_running_engine
 
-  if [[ ${done_testing} -eq 1 && ${rc} -eq 0 ]]; then
+  if [[ ${status} -eq 0 && ${done_testing} -eq 1 && ${rc} -eq 0 ]]; then
     tests_passed
   else
     tests_failed
   fi
+  if [[ ${status} -ne 0 ]]; then
+    exit ${status}
+  fi
   exit ${rc}
 }
 
-restart_vault_server() {
-  kill_running_vault
-  rm -f t/home/log
-  mkdir -p ./vaults/bin
-  cp ./vaults/vault-${platform}-${version} ./vaults/bin/vault
-  ./vaults/bin/vault server -dev -dev-listen-address 127.0.0.1:8198 >t/home/log 2>&1 &
-  vault_pid=$!
-  waitfor=600
+# Vault's -dev server prints the root token and unseal key on startup, and
+# mounts secret/ for us. Nothing else is needed.
+_start_engine_dev() {
+  "./vaults/bin/${engine_bin}" server -dev -dev-listen-address 127.0.0.1:8198 >t/home/log 2>&1 &
+  engine_pid=$!
+  local waitfor=600
   while ! grep -iq '^root token: ' t/home/log; do
+    if ! kill -0 "$engine_pid" 2>/dev/null; then
+      failed "${ENGINE} server (-dev) died during startup"
+      dump_log 1
+      exit 3
+    fi
     if [[ $waitfor -gt 0 ]]; then
       waitfor=$((waitfor - 1))
       sleep 0.1
     else
-      failed "timed out waiting for vault server (-dev) to start"
+      failed "timed out waiting for ${ENGINE} server (-dev) to start"
       dump_log 1
       exit 3 # FIXME: this is the wrong thing to do
     fi
@@ -305,8 +345,79 @@ restart_vault_server() {
 
   root_token=$(awk '/^Root Token:/ { print $3 }' < t/home/log | head -n1)
   unseal_key=$(awk '/^Unseal Key:/ { print $3 }' < t/home/log | head -n1)
+}
 
-  now targeting test vault server
+# OpenBao's -dev server cannot be used: since 2.5.0 it defaults
+# disable_unauthed_rekey_endpoints to true, so /sys/rekey/* answers 405
+# "unsupported operation", and -dev takes no listener config to turn that back
+# on. Start from a written config instead, then init, unseal, and mount
+# secret/ over the API to reach the same state -dev would have left us in.
+_start_engine_config() {
+  cat > t/home/engine.hcl <<'EOF'
+storage "inmem" {}
+listener "tcp" {
+  address = "127.0.0.1:8198"
+  tls_disable = 1
+  disable_unauthed_rekey_endpoints = "false"
+}
+EOF
+  "./vaults/bin/${engine_bin}" server -config=t/home/engine.hcl >t/home/log 2>&1 &
+  engine_pid=$!
+  local waitfor=600
+  while ! curl -sSf -o /dev/null http://127.0.0.1:8198/v1/sys/seal-status 2>/dev/null; do
+    # A port probe alone would burn the whole timeout (or worse, be satisfied
+    # by a stale listener from an earlier run) when the server dies early.
+    if ! kill -0 "$engine_pid" 2>/dev/null; then
+      failed "${ENGINE} server (-config) died during startup"
+      dump_log 1
+      exit 3
+    fi
+    if [[ $waitfor -gt 0 ]]; then
+      waitfor=$((waitfor - 1))
+      sleep 0.1
+    else
+      failed "timed out waiting for ${ENGINE} server (-config) to start"
+      dump_log 1
+      exit 3 # FIXME: this is the wrong thing to do
+    fi
+  done
+
+  local init_json
+  init_json=$(curl -sS -X PUT http://127.0.0.1:8198/v1/sys/init \
+    -d '{"secret_shares":1,"secret_threshold":1}')
+  root_token=$(echo "$init_json" | jq -r '.root_token')
+  unseal_key=$(echo "$init_json" | jq -r '.keys[0]')
+  if [[ -z $root_token || $root_token == null ]]; then
+    failed "could not initialize ${ENGINE}: $init_json"
+    dump_log 1
+    exit 3
+  fi
+  curl -sS -X PUT http://127.0.0.1:8198/v1/sys/unseal \
+    -d "{\"key\":\"$unseal_key\"}" >/dev/null
+  # Non-dev mode does not mount secret/, so create it at KV v1 to match what
+  # the -dev server leaves behind; the unmount and remount below then runs the
+  # same way on both engines.
+  curl -sS -X POST -H "X-Vault-Token: $root_token" \
+    http://127.0.0.1:8198/v1/sys/mounts/secret \
+    -d '{"type":"kv","options":{"version":"1"}}' >/dev/null
+}
+
+restart_engine_server() {
+  kill_running_engine
+  rm -f t/home/log t/home/engine.hcl
+  mkdir -p ./vaults/bin
+  # ./vaults/bin holds the engine under test under its real name, and is first
+  # on PATH, so safe's own passthrough resolves to it rather than to any
+  # engine the host happens to have installed.
+  cp "./vaults/${engine_local}" "./vaults/bin/${engine_bin}"
+
+  case "$(engine_startup_mode "$ENGINE")" in
+    dev)    _start_engine_dev    ;;
+    config) _start_engine_config ;;
+    *)      bail "unknown startup mode for ENGINE=${ENGINE}" ;;
+  esac
+
+  now targeting test ${ENGINE} server
   (run; ${SAFE_CMD} target unit-tests http://127.0.0.1:8198) ; exitok $? 0
   now authenticating with ${root_token} root token
   (run; echo "$root_token" | ${SAFE_CMD} auth token)         ; exitok $? 0
@@ -339,27 +450,42 @@ setup_approle() {
 mkdir -p vaults t/tmp
 trap 'cleanup' INT QUIT TERM EXIT
 
+engine_bin="$(engine_binary_name "$ENGINE")" || exit 1
+# The engine under test is copied here per version and must win over any
+# engine installed on the host.
+export PATH="${PWD}/vaults/bin:${PATH}"
+
 for version in "${versions[@]}"; do
-  killall vault-${platform}-${version} >/dev/null 2>&1 || true
+  killall "$(engine_local_binary "$ENGINE" "$platform" "$version")" >/dev/null 2>&1 || true
 done
 for version in "${versions[@]}"; do
 for kvversion in 1 2; do
-  # KV v2 was introduced in 0.10
+  # KV v2 was introduced in Vault 0.10. This only guards a hand-run against an
+  # 0.x Vault; OpenBao starts at 2.x, so it never applies to ENGINE=bao.
   if [[ kvversion -eq 2 && $version =~ ^0\.[6-9].* ]]; then
     continue
   fi
 
-  echo "VAULT ${version}" -- KV v${kvversion}
-  killall vault-${platform}-${version} >/dev/null 2>&1 || true
+  engine_local="$(engine_local_binary "$ENGINE" "$platform" "$version")" || exit 1
+  echo "${ENGINE} ${version} -- KV v${kvversion}"
+  killall "$engine_local" >/dev/null 2>&1 || true
   echo "----------------------------------------------"
-  if [[ ! -f vaults/vault-${platform}-${version} ]]; then
-    echo "Downloading Vault ${version} CLI..."
-    curl --fail -L > t/tmp/archive.zip \
-      https://releases.hashicorp.com/vault/${version}/vault_${version}_${platform}_${arch}.zip \
-      || bail "download of vault ${version} failed"
+  if [[ ! -f "vaults/${engine_local}" ]]; then
+    echo "Downloading ${ENGINE} ${version} CLI..."
+    url="$(engine_url "$ENGINE" "$version" "$platform" "$arch")" \
+      || bail "could not resolve ${ENGINE} ${version} URL for ${platform}/${arch}"
+    ext="$(engine_archive_ext "$ENGINE")"
+    archive="t/tmp/archive.${ext}"
+    rm -f "$archive"
+    curl --fail -L "$url" -o "$archive" \
+      || bail "download of ${ENGINE} ${version} failed (${url})"
 
-    unzip -d t/tmp t/tmp/archive.zip
-    mv t/tmp/vault vaults/vault-${platform}-${version}
+    case "$ext" in
+      zip)    unzip -o -d t/tmp "$archive" ;;
+      tar.gz) tar -xzf "$archive" -C t/tmp ;;
+      *)      bail "unsupported archive format: $ext" ;;
+    esac
+    mv "t/tmp/${engine_bin}" "vaults/${engine_local}"
     echo "DONE"
     echo
   fi
@@ -381,7 +507,7 @@ for kvversion in 1 2; do
 
   #######
   testing setup
-  restart_vault_server
+  restart_engine_server
   clearvault
 
   ########    ###    ########   ######   ######## ########
@@ -410,7 +536,7 @@ for kvversion in 1 2; do
                       http://127.0.0.1:8198) ; exitok $? 0
   (run; ${SAFE_CMD} target http://127.0.0.1:8198) ; exitok $? 1
   (run; ${SAFE_CMD} -T http://127.0.0.1:8198 env) ; exitok $? 1
-  restart_vault_server
+  restart_engine_server
 
 
    ######  ##     ## ########  ##
@@ -456,7 +582,7 @@ $secret_id
   now checking that we can do stuff with the Vault
   (run; ${SAFE_CMD} set secret/beep/boop foo=bar) ; exitok $? 0
   (run; ${SAFE_CMD} get secret/beep/boop) ; exitok $? 0
-  restart_vault_server
+  restart_engine_server
 
    ######   ######## ########       ##  ######  ######## ########
   ##    ##  ##          ##         ##  ##    ## ##          ##
@@ -1108,12 +1234,12 @@ EOF
 
   #######
   clearvault
-  testing recursively delete a key
+  testing refusing to recursively delete a key
   generate secret/delete foo=bar beep=boop
 
-  now deleting a key recursively
-  (run; ${SAFE_CMD} delete -Rf secret/delete:foo) ; exitok $? 0
-  no_key secret/delete:foo
+  now refusing to delete a key recursively
+  (run; ${SAFE_CMD} delete -Rf secret/delete:foo) ; exitok $? 1
+  is_key secret/delete:foo "bar"
   is_key secret/delete:beep "boop"
 
 
@@ -1129,11 +1255,11 @@ EOF
 
   #######
   clearvault
-  testing recursively delete a key that does not exist with -f should not fail
+  testing refusing to recursively delete a key that does not exist, even with -f
   generate secret/delete beep=boop
 
-  now deleting a non-existent key with -Rf
-  (run; ${SAFE_CMD} delete -Rf secret/delete:foo) ; exitok $? 0
+  now refusing to delete a non-existent key with -Rf
+  (run; ${SAFE_CMD} delete -Rf secret/delete:foo) ; exitok $? 1
   is_key secret/delete:beep "boop"
 
 
@@ -2088,7 +2214,7 @@ EOF
 
 
   now restarting vault server to start over
-  restart_vault_server
+  restart_engine_server
   now validating that the restarted vault is unsealed
   (${SAFE_CMD} set secret/handshake knock=knock); exitok $? 0
   now trying to rekey without using gpg
@@ -2125,7 +2251,7 @@ EOF
 !! No GPG key found for not-there@missing.com in the local keyring
 EOF
 
-    restart_vault_server
+    restart_engine_server
     now trying to rekey with gpg keys matching the threshold
     (${SAFE_CMD} set secret/handshake knock=knock); exitok $? 0
     gpg --import assets/gpg.pubkey
@@ -2190,7 +2316,7 @@ EOF
   now checking that retrieving a missing version returns an error
   (${SAFE_CMD} get secret/versioned^1 2>t/home/got); exitok $? 1
   cat <<'EOF' >t/home/want; diffok
-!! no secret exists at path `secret/versioned`
+!! no version 1 of secret `secret/versioned` exists
 EOF
 
   testing versions 
@@ -2285,7 +2411,7 @@ EOF
   (${SAFE_CMD} delete secret/versioned >/dev/null 2>t/home/got); exitok $? 1
   now checking that the error message conveys that the secret is already deleted
   cat << 'EOF' >t/home/want; diffok
-!! `secret/versioned' is deleted
+!! version 1 of secret `secret/versioned` has been deleted
 EOF
 
   testing deleting already deleted versions with force
@@ -2327,7 +2453,7 @@ EOF
   (${SAFE_CMD} delete secret/versioned^1 -D 2>t/home/got); exitok $? 1
   now checking that the error message conveys that the secret is already destroyed
   cat << 'EOF' >t/home/want; diffok
-!! `secret/versioned^1' is destroyed
+!! version 1 of secret `secret/versioned` has been destroyed
 EOF
 
   testing destroying already destroyed versions with force

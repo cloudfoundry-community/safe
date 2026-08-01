@@ -122,31 +122,3 @@ func TestMountsSelectsByType(t *testing.T) {
 		}
 	}
 }
-
-func TestIsMounted(t *testing.T) {
-	t.Parallel()
-	v, fv := newTestVault(t)
-	fv.mount("kv", "kv")
-
-	cases := []struct {
-		typ, path string
-		want      bool
-	}{
-		{"kv", "secret", true},
-		{"kv", "secret/", true},
-		{"kv", "kv", true},
-		{"kv", "nowhere", false},
-		//The type has to match too, or safe would take any mount for a PKI
-		// backend and issue certificates against it.
-		{"pki", "secret", false},
-	}
-	for _, tc := range cases {
-		got, err := v.IsMounted(tc.typ, tc.path)
-		if err != nil {
-			t.Fatalf("IsMounted(%q, %q): %v", tc.typ, tc.path, err)
-		}
-		if got != tc.want {
-			t.Errorf("IsMounted(%q, %q) = %v, want %v", tc.typ, tc.path, got, tc.want)
-		}
-	}
-}

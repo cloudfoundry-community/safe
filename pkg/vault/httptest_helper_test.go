@@ -8,6 +8,8 @@
 //
 //	GET  /v1/sys/internal/ui/mounts — mount discovery, with each mount's version
 //	GET  /v1/auth/token/lookup-self — token validity check (200 OK)
+//	POST /v1/auth/token/renew-self  — lease renewal (used by RenewLease)
+//	PUT/DELETE /v1/sys/generate-root/{attempt,update} — root token generation
 //	GET  /v1/sys/mounts            — list mounts (used by Mounts)
 //	POST /v1/sys/mounts/<path>     — enable a mount (used by AddMount)
 //	GET  /v1/<mount>/*             — read secret
@@ -22,6 +24,7 @@
 package vault_test
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"maps"
 	"net/http"
@@ -73,6 +76,20 @@ type fakeVault struct {
 	progress    int      // keys submitted so far this unseal attempt
 	rootToken   string   // returned by sys/init
 	initKeys    []string // returned by sys/init
+
+	// renewFails makes auth/token/renew-self answer 403, modeling a token
+	// that cannot renew itself.
+	renewFails bool
+
+	// genRoot models the sys/generate-root/attempt and /update endpoints.
+	// The fake plays a Vault old enough to accept the client's own OTP, so
+	// vaultkv XORs the encoded token with it and formats the result as a
+	// UUID. genRootToken is the plaintext token handed out on completion; it
+	// must be as long as the 16-byte OTP, and defaults to fakeRootToken.
+	genRootActive   bool
+	genRootOTP      []byte
+	genRootProgress int    // keys submitted so far; threshold completes it
+	genRootToken    []byte // plaintext token to encode, nil for the default
 
 	// rekey models the sys/rekey/init and sys/rekey/update endpoints.
 	rekeyActive   bool
@@ -264,6 +281,13 @@ func (f *fakeVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case p == "/v1/auth/token/lookup-self" && r.Method == http.MethodGet:
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"data":{"id":"test-token"}}`))
+
+	case p == "/v1/auth/token/renew-self" && r.Method == http.MethodPost:
+		f.handleTokenRenewSelf(w)
+
+	case p == "/v1/sys/generate-root/attempt",
+		p == "/v1/sys/generate-root/update":
+		f.handleGenerateRoot(w, r)
 
 	case p == "/v1/sys/mounts" && r.Method == http.MethodGet:
 		w.Header().Set("Content-Type", "application/json")
@@ -553,6 +577,112 @@ func (f *fakeVault) handleSys(w http.ResponseWriter, r *http.Request) {
 
 	default:
 		jsonErr(w, http.StatusNotFound, "unhandled sys path: "+p)
+	}
+}
+
+// fakeRootToken is the plaintext root token generate-root hands out when a
+// test does not choose one. It is 16 bytes because vaultkv's OTP is, and
+// the fake encodes the token by XOR against that OTP.
+const fakeRootToken = "0123456789abcdef"
+
+// handleTokenRenewSelf models auth/token/renew-self, which RenewLease posts
+// to with no body worth speaking of.
+func (f *fakeVault) handleTokenRenewSelf(w http.ResponseWriter) {
+	f.mu.RLock()
+	fails := f.renewFails
+	f.mu.RUnlock()
+	if fails {
+		jsonErr(w, http.StatusForbidden, "permission denied")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"auth":{"client_token":"test-token"}}`))
+}
+
+// handleGenerateRoot models the generate-root flow the way a Vault old
+// enough to accept the client's OTP ran it: the attempt stores the OTP the
+// client made up, each update submits one key, and reaching the unseal
+// threshold answers with the token XORed against that OTP. vaultkv then
+// undoes the XOR and formats the 16 bytes as a UUID.
+func (f *fakeVault) handleGenerateRoot(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	writeJSON := func(v any) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(v)
+	}
+	stateJSON := func(complete bool, encodedToken string) map[string]any {
+		return map[string]any{
+			"started":       true,
+			"nonce":         "genroot-nonce",
+			"progress":      f.genRootProgress,
+			"required":      f.threshold,
+			"complete":      complete,
+			"encoded_token": encodedToken,
+		}
+	}
+
+	switch {
+	case r.URL.Path == "/v1/sys/generate-root/attempt" && r.Method == http.MethodDelete:
+		f.genRootActive = false
+		f.genRootProgress = 0
+		w.WriteHeader(http.StatusNoContent)
+
+	case r.URL.Path == "/v1/sys/generate-root/attempt" && r.Method == http.MethodPut:
+		var body struct {
+			OTP string `json:"otp"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonErr(w, http.StatusBadRequest, "invalid json")
+			return
+		}
+		otp, err := base64.StdEncoding.DecodeString(body.OTP)
+		if err != nil || len(otp) == 0 {
+			jsonErr(w, http.StatusBadRequest, "otp must be base64")
+			return
+		}
+		f.genRootActive = true
+		f.genRootProgress = 0
+		f.genRootOTP = otp
+		writeJSON(stateJSON(false, ""))
+
+	case r.URL.Path == "/v1/sys/generate-root/update" && r.Method == http.MethodPut:
+		if !f.genRootActive {
+			jsonErr(w, http.StatusBadRequest, "no root generation in progress")
+			return
+		}
+		var body struct {
+			Key   string `json:"key"`
+			Nonce string `json:"nonce"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonErr(w, http.StatusBadRequest, "invalid json")
+			return
+		}
+		if body.Nonce != "genroot-nonce" {
+			jsonErr(w, http.StatusBadRequest, "incorrect nonce supplied")
+			return
+		}
+		f.genRootProgress++
+		if f.genRootProgress < f.threshold {
+			writeJSON(stateJSON(false, ""))
+			return
+		}
+
+		token := f.genRootToken
+		if token == nil {
+			token = []byte(fakeRootToken)
+		}
+		encoded := make([]byte, len(token))
+		for i := range token {
+			encoded[i] = token[i] ^ f.genRootOTP[i]
+		}
+		f.genRootActive = false
+		writeJSON(stateJSON(true, base64.StdEncoding.EncodeToString(encoded)))
+
+	default:
+		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 

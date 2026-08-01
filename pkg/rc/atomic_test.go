@@ -126,6 +126,51 @@ func TestWriteFileAtomicBareFilename(t *testing.T) {
 	}
 }
 
+// A symlinked config (dotfiles-managed ~/.saferc, ~/.vault-token, ~/.svtoken)
+// must stay a symlink after a write: os.Rename replaces whatever is at path,
+// which is the link itself, not what it points at. The write has to land on
+// the link's target so the dotfiles checkout keeps tracking it.
+func TestWriteFileAtomicPreservesSymlink(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real-saferc")
+	link := filepath.Join(dir, "saferc")
+
+	if err := os.WriteFile(real, []byte("old"), 0600); err != nil {
+		t.Fatalf("seed real file: %s", err)
+	}
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatalf("symlink: %s", err)
+	}
+
+	if err := writeFileAtomic(link, []byte("new"), 0600); err != nil {
+		t.Fatalf("writeFileAtomic: %s", err)
+	}
+
+	fi, err := os.Lstat(link)
+	if err != nil {
+		t.Fatalf("lstat link: %s", err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("%s is no longer a symlink", link)
+	}
+
+	target, err := os.Readlink(link)
+	if err != nil {
+		t.Fatalf("readlink: %s", err)
+	}
+	if target != real {
+		t.Errorf("symlink target = %q, want %q", target, real)
+	}
+
+	b, err := os.ReadFile(real)
+	if err != nil {
+		t.Fatalf("read real file: %s", err)
+	}
+	if string(b) != "new" {
+		t.Errorf("real file content = %q, want %q", b, "new")
+	}
+}
+
 func TestWriteFileAtomicRejectsMissingDir(t *testing.T) {
 	err := writeFileAtomic(filepath.Join(t.TempDir(), "no", "such", "dir", "f"), []byte("x"), 0600)
 	if err == nil {

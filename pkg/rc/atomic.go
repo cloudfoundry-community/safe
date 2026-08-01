@@ -19,6 +19,16 @@ import (
 // open is the rename not surviving a power loss -- a stale config, not a
 // corrupt one.
 func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	// os.Rename replaces whatever is at path -- if path is a symlink (a
+	// dotfiles-managed ~/.saferc, ~/.vault-token, ~/.svtoken), that replaces
+	// the link itself and detaches it, not the file it points at. Resolve to
+	// the real file first so the temp file lands next to it and the rename
+	// replaces the real file, leaving the link in place. A path that does not
+	// exist yet (first write) has nothing to resolve; use it as given.
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+
 	dir, base := filepath.Split(path)
 	if dir == "" {
 		dir = "."

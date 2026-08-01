@@ -122,6 +122,24 @@ renewed is reported and the rest are renewed anyway; the command
 exits non-zero with a count of what failed.  `-T` names a single
 target and is ignored here.
 
+### Concurrent safes and ~/.saferc.lock
+
+Targets live in `~/.saferc`.  Every command that changes them —
+`safe target`, `safe auth`, `safe local`, and friends — rewrites
+that file, and concurrent safes coordinate those rewrites through
+a lock on a sidecar file, `~/.saferc.lock`.  The sidecar is a
+zero-byte file that is created on first use and never removed;
+there is nothing in it to clean up, and deleting it while safes
+are running reopens the window it closes.  Locks are released by
+the kernel when a process exits, so a killed safe cannot leave
+the file stuck.
+
+One caveat: on filesystems whose advisory locks do not span
+clients — NFS before v4 is the common case — safes on *different
+hosts* sharing one home directory are not serialized against each
+other.  Writes are still atomic there, so `~/.saferc` cannot be
+corrupted; a simultaneous change from another host can be lost.
+
 Proxies
 -------
 

@@ -101,6 +101,36 @@ func TestWithLockExcludesConcurrentWriters(t *testing.T) {
 	}
 }
 
+// A sidecar that cannot be opened -- here, an existing file with no access
+// bits -- must fail with the plain lock error, not the timeout advice: no
+// amount of waiting fixes it, and telling the user another safe holds it
+// would lie. (A directory will not do as the obstacle: flock happily locks
+// a directory opened read-only.)
+func TestWithLockFailsWhenSidecarUnopenable(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("file permissions do not bind root")
+	}
+	setHome(t)
+
+	if err := os.WriteFile(lockPath(), nil, 0000); err != nil {
+		t.Fatalf("seeding unopenable sidecar: %s", err)
+	}
+
+	err := withLock(func() error {
+		t.Error("fn ran without the lock")
+		return nil
+	})
+	if err == nil {
+		t.Fatalf("withLock succeeded with an unopenable %s", lockPath())
+	}
+	if !strings.Contains(err.Error(), lockPath()) {
+		t.Errorf("error %q does not name the lock file", err)
+	}
+	if strings.Contains(err.Error(), "timed out") {
+		t.Errorf("unopenable sidecar misreported as a timeout: %q", err)
+	}
+}
+
 func TestWithLockTimesOutWhenHeld(t *testing.T) {
 	setHome(t)
 	shortenLockWaits(t)

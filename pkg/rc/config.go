@@ -154,37 +154,47 @@ func (c *Config) write() error {
 		return err
 	}
 
-	if err := writeFileAtomic(saferc(), b, 0600); err != nil {
-		return err
-	}
-
+	// Resolve the current target and marshal ~/.svtoken's content before
+	// replacing any file. c.Vault("") fails when Current names a target that
+	// is missing or ambiguous; catching that here means the failure aborts
+	// with nothing written, instead of leaving ~/.saferc replaced while
+	// ~/.svtoken -- and the token tools like Genesis read from it -- goes
+	// stale and the caller is told the write failed.
 	v, err := c.Vault("")
 	if err != nil {
 		return err
 	}
+
+	var svBytes []byte
+	if v != nil {
+		sv := struct {
+			Vault      string `yaml:"vault"` /* this is different than Vault.URL */
+			Token      string `yaml:"token"`
+			SkipVerify bool   `yaml:"skip_verify"`
+			CACerts    string `yaml:"ca_certs,omitempty"`
+			Namespace  string `yaml:"namespace,omitempty"`
+		}{
+			Vault:      v.URL,
+			Token:      v.Token,
+			SkipVerify: v.SkipVerify,
+			CACerts:    strings.Join(v.CACerts, "\n"),
+			Namespace:  v.Namespace,
+		}
+		svBytes, err = yaml.Marshal(sv)
+		if err != nil {
+			return err
+		}
+	}
+
+	if err := writeFileAtomic(saferc(), b, 0600); err != nil {
+		return err
+	}
+
 	if v == nil {
 		if err := os.Remove(svtoken()); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 		return nil
-	}
-
-	sv := struct {
-		Vault      string `yaml:"vault"` /* this is different than Vault.URL */
-		Token      string `yaml:"token"`
-		SkipVerify bool   `yaml:"skip_verify"`
-		CACerts    string `yaml:"ca_certs,omitempty"`
-		Namespace  string `yaml:"namespace,omitempty"`
-	}{
-		Vault:      v.URL,
-		Token:      v.Token,
-		SkipVerify: v.SkipVerify,
-		CACerts:    strings.Join(v.CACerts, "\n"),
-		Namespace:  v.Namespace,
-	}
-	b, err = yaml.Marshal(sv)
-	if err != nil {
-		return err
 	}
 
 	// .vault-token before .svtoken, with both attempted and both reported:
@@ -194,7 +204,7 @@ func (c *Config) write() error {
 	if c.Options.ManageVaultToken {
 		tokenErr = writeFileAtomic(fmt.Sprintf("%s/.vault-token", userHomeDir()), []byte(v.Token), 0600)
 	}
-	return errors.Join(tokenErr, writeFileAtomic(svtoken(), b, 0600))
+	return errors.Join(tokenErr, writeFileAtomic(svtoken(), svBytes, 0600))
 }
 
 // Returns the path of the file that the certificates were written into

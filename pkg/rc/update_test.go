@@ -70,6 +70,36 @@ func TestUpdateAppliesDeltaToLatestState(t *testing.T) {
 	}
 }
 
+// A current target that cannot be resolved (renamed away from under it, or a
+// legacy conversion that leaves Current ambiguous) must abort the whole write,
+// not just the trailing ~/.svtoken step: partial application leaves ~/.saferc
+// holding the mutation while ~/.svtoken goes stale, and every subsequent
+// command disagrees with itself about the current target.
+func TestUpdateAbortsWriteWhenCurrentUnresolvable(t *testing.T) {
+	setHome(t)
+
+	writeFile(t, saferc(), "version: 1\ncurrent: ghost\nvaults:\n  keep:\n    url: http://keep\n")
+	writeFile(t, svtoken(), "vault: http://stale\ntoken: stale-token\n")
+
+	beforeRC := readFile(t, saferc())
+	beforeSV := readFile(t, svtoken())
+
+	err := Update(func(c *Config) error {
+		c.Vaults["another"] = &Vault{URL: "http://another"}
+		return nil
+	})
+	if err == nil {
+		t.Fatalf("Update succeeded with an unresolvable current target")
+	}
+
+	if after := readFile(t, saferc()); after != beforeRC {
+		t.Errorf(".saferc changed after aborted write:\n%s", after)
+	}
+	if after := readFile(t, svtoken()); after != beforeSV {
+		t.Errorf(".svtoken changed after aborted write:\n%s", after)
+	}
+}
+
 func TestUpdateMutationErrorAbortsWrite(t *testing.T) {
 	setHome(t)
 

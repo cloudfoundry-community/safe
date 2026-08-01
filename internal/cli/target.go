@@ -203,7 +203,9 @@ func (c *CLI) cmdTarget(command string, args ...string) error {
 				_, _ = fmt.Fprintf(os.Stderr, "@R{%s}\n", err)
 				continue
 			}
-			err = cfg.Write()
+			err = rc.Update(func(c *rc.Config) error {
+				return c.SetCurrent(t, skipverify)
+			})
 			if err != nil {
 				return err
 			}
@@ -256,7 +258,9 @@ func (c *CLI) cmdTarget(command string, args ...string) error {
 		//Saved before it is reported: a home directory that cannot be written
 		// to used to be answered with the new target on the screen and the old
 		// one still in the file.
-		if err := cfg.Write(); err != nil {
+		if err := rc.Update(func(c *rc.Config) error {
+			return c.SetCurrent(args[0], skipverify)
+		}); err != nil {
 			return err
 		}
 		if !opt.Quiet {
@@ -298,17 +302,24 @@ func (c *CLI) cmdTarget(command string, args ...string) error {
 			caCerts = append(caCerts, string(toWrite))
 		}
 
-		err = cfg.SetTarget(alias, rc.Vault{
+		newTarget := rc.Vault{
 			URL:        url,
 			SkipVerify: skipverify,
 			Strongbox:  opt.Target.Strongbox,
 			Namespace:  opt.Target.Namespace,
 			CACerts:    caCerts,
-		})
+		}
+		// Applied to cfg for the report below, and separately to the freshly
+		// read state inside Update for what is persisted. SetTarget's keep-
+		// the-token-when-the-URL-matches check runs against the fresh state,
+		// where the answer is current.
+		err = cfg.SetTarget(alias, newTarget)
 		if err != nil {
 			return err
 		}
-		if err := cfg.Write(); err != nil {
+		if err := rc.Update(func(c *rc.Config) error {
+			return c.SetTarget(alias, newTarget)
+		}); err != nil {
 			return err
 		}
 		if !opt.Quiet {
@@ -344,18 +355,19 @@ func (c *CLI) cmdTargetDelete(command string, args ...string) error {
 		return fmt.Errorf("Unknown target '%s'", args[0])
 	}
 
-	delete(cfg.Vaults, alias)
-	//The selection is compared by resolving it rather than by matching the
-	// alias: a config written before it was recorded by alias names the current
-	// target by URL, and a URL stops naming anything once the target carrying
-	// it is gone. Left as it was, the selection would name a Vault that is not
-	// in the file, which every later command -- including the write below --
-	// reports as a missing current target.
-	if _, ok, _ := cfg.Alias(cfg.Current); !ok {
-		cfg.Current = ""
-	}
-
-	return cfg.Write()
+	return rc.Update(func(c *rc.Config) error {
+		delete(c.Vaults, alias)
+		//The selection is compared by resolving it rather than by matching the
+		// alias: a config written before it was recorded by alias names the current
+		// target by URL, and a URL stops naming anything once the target carrying
+		// it is gone. Left as it was, the selection would name a Vault that is not
+		// in the file, which every later command -- including the write below --
+		// reports as a missing current target.
+		if _, ok, _ := c.Alias(c.Current); !ok {
+			c.Current = ""
+		}
+		return nil
+	})
 }
 
 func (c *CLI) cmdStatus(command string, args ...string) error {
@@ -645,10 +657,9 @@ func (c *CLI) cmdAuth(command string, args ...string) error {
 
 	//The token belongs to the target that was authenticated against, which
 	// -T may have named, and storing it must not move the current target.
-	if err := cfg.SetTokenFor(target, token); err != nil {
-		return err
-	}
-	return cfg.Write()
+	return rc.Update(func(c *rc.Config) error {
+		return c.SetTokenFor(target, token)
+	})
 }
 
 func (c *CLI) cmdLogout(command string, args ...string) error {
@@ -665,10 +676,9 @@ func (c *CLI) cmdLogout(command string, args ...string) error {
 	}
 	//Dropping the token of the target that was named, rather than of the
 	// current one, which is the only target SetToken can reach.
-	if err := cfg.SetTokenFor(target, ""); err != nil {
-		return err
-	}
-	if err := cfg.Write(); err != nil {
+	if err := rc.Update(func(c *rc.Config) error {
+		return c.SetTokenFor(target, "")
+	}); err != nil {
 		return err
 	}
 

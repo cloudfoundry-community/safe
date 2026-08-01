@@ -92,3 +92,37 @@ vaults:
 		t.Error("bystander target lost")
 	}
 }
+
+// `safe option` writes the whole config too; setting an option while a target
+// is being added must keep both changes.
+func TestConcurrentOptionSetAndTargetAdd(t *testing.T) {
+	isolateHome(t)
+
+	var wg sync.WaitGroup
+	var optErr, addErr error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		optErr = newTestCLI(t).cmdOption("option", "manage-vault-token=true")
+	}()
+	go func() {
+		defer wg.Done()
+		addErr = newTestCLI(t).cmdTarget("target", "https://fresh.example.com", "fresh")
+	}()
+	wg.Wait()
+
+	if optErr != nil {
+		t.Fatalf("cmdOption: %v", optErr)
+	}
+	if addErr != nil {
+		t.Fatalf("cmdTarget: %v", addErr)
+	}
+
+	cfg := readConfig(t)
+	if !cfg.Options.ManageVaultToken {
+		t.Error("option lost to the concurrent target add")
+	}
+	if _, ok := cfg.Vaults["fresh"]; !ok {
+		t.Error("target lost to the concurrent option set")
+	}
+}

@@ -1197,12 +1197,21 @@ func (c *CLI) cmdOption(command string, args ...string) error {
 		return err
 	}
 
-	optLookup := []struct {
+	// One table names the known options; it is built against whichever
+	// Options struct is being read or written at the time -- cfg's for the
+	// listing below, the freshly read config's for the persisted update.
+	optionFields := func(o *rc.Options) []struct {
 		opt string
 		val *bool
-	}{
-		{"manage_vault_token", &cfg.Options.ManageVaultToken},
+	} {
+		return []struct {
+			opt string
+			val *bool
+		}{
+			{"manage_vault_token", &o.ManageVaultToken},
+		}
 	}
+	optLookup := optionFields(&cfg.Options)
 
 	if len(args) == 0 {
 		table := table{}
@@ -1218,6 +1227,7 @@ func (c *CLI) cmdOption(command string, args ...string) error {
 		return nil
 	}
 
+	changes := map[string]bool{}
 	for _, arg := range args {
 		argSplit := strings.Split(arg, "=")
 		if len(argSplit) != 2 {
@@ -1245,7 +1255,7 @@ func (c *CLI) cmdOption(command string, args ...string) error {
 		for _, opt := range optLookup {
 			if opt.opt == optionKey {
 				found = true
-				*opt.val = optionVal
+				changes[opt.opt] = optionVal
 				_, _ = fmt.Printf("updated @G{%s}\n", opt.opt)
 				break
 			}
@@ -1256,5 +1266,12 @@ func (c *CLI) cmdOption(command string, args ...string) error {
 		}
 	}
 
-	return cfg.Write()
+	return rc.Update(func(c *rc.Config) error {
+		for _, field := range optionFields(&c.Options) {
+			if val, ok := changes[field.opt]; ok {
+				*field.val = val
+			}
+		}
+		return nil
+	})
 }

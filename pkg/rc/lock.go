@@ -56,7 +56,7 @@ func withLock(fn func() error) error {
 	locked, err := fl.TryLockContext(ctx, lockRetryDelay)
 	if err != nil && !locked {
 		if ctx.Err() != nil {
-			return fmt.Errorf("timed out after %s waiting to lock %s (another safe holding it? remove the file only if you are sure none is running)", lockTimeout, lockPath())
+			return fmt.Errorf("timed out after %s waiting to lock %s (another safe is holding it -- find it with `lsof %s`; the lock releases on its own when that process exits, do not remove the lock file)", lockTimeout, lockPath(), lockPath())
 		}
 		return fmt.Errorf("could not lock %s: %w", lockPath(), err)
 	}

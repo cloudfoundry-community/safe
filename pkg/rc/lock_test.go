@@ -155,4 +155,19 @@ func TestWithLockTimesOutWhenHeld(t *testing.T) {
 	if !strings.Contains(err.Error(), lockPath()) {
 		t.Errorf("timeout error %q does not name the lock file", err)
 	}
+
+	// The message must never present removing the lock file as an option:
+	// withLock's own doc comment says the sidecar is created once and never
+	// removed, because unlinking it while the holder is still alive (wedged
+	// on slow I/O, stopped under a debugger -- exactly what produces this
+	// timeout) lets a second writer lock a fresh inode and race the first
+	// inside the critical section. It should instead point at identifying
+	// the holder and note the lock clears itself.
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "if you are sure") || strings.Contains(msg, "remove the file") {
+		t.Errorf("timeout error still offers to remove the lock file: %q", err)
+	}
+	if !strings.Contains(msg, "lsof") {
+		t.Errorf("timeout error %q does not point at identifying the holder", err)
+	}
 }

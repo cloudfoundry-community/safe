@@ -165,15 +165,23 @@ func StartSSHTunnel(conf SOCKS5SSHConfig) (*ssh.Client, error) {
 	var err error
 
 	if !conf.SkipHostKeyValidation {
-		if conf.KnownHostsFile == "" {
+		derivedDefault := conf.KnownHostsFile == ""
+		if derivedDefault {
 			if os.Getenv("HOME") == "" {
 				return nil, fmt.Errorf("no home directory set and no known hosts file explicitly given; cannot validate host key")
 			}
 			conf.KnownHostsFile = filepath.Join(os.Getenv("HOME"), ".ssh", "known_hosts")
 		}
 
-		if err = ensureKnownHostsFile(conf.KnownHostsFile); err != nil {
-			return nil, err
+		// Only create the file when its path was derived. A path the caller
+		// named explicitly (SAFE_KNOWN_HOSTS_FILE) must fail hard if it is
+		// missing rather than silently start empty -- see
+		// knownHostsPromptCallback's error below, which is what a missing
+		// explicit file now produces.
+		if derivedDefault {
+			if err = ensureKnownHostsFile(conf.KnownHostsFile); err != nil {
+				return nil, err
+			}
 		}
 
 		hostKeyCallback, err = knownHostsPromptCallback(conf.KnownHostsFile)

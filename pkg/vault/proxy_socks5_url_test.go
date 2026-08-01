@@ -10,10 +10,16 @@ import (
 )
 
 // openHelper runs openSOCKS5Helper against a throwaway known_hosts file, so a
-// test never reads or writes the one belonging to whoever is running it.
+// test never reads or writes the one belonging to whoever is running it. The
+// file is seeded empty up front: an explicitly named known_hosts file is
+// never auto-created, and these tests are checking failures unrelated to it.
 func openHelper(t *testing.T, proxyURL string) (string, error) {
 	t.Helper()
-	return openSOCKS5Helper(proxyURL, filepath.Join(t.TempDir(), "known_hosts"), false)
+	path := filepath.Join(t.TempDir(), "known_hosts")
+	if err := ensureKnownHostsFile(path); err != nil {
+		t.Fatalf("seed known_hosts file: %v", err)
+	}
+	return openSOCKS5Helper(proxyURL, path, false)
 }
 
 // TestSOCKS5URLNamesThePrivateKey checks the two ways of naming the key, both

@@ -239,6 +239,15 @@ func waitLocalReady(engine Engine, address string, srv *localServer) error {
 	}
 }
 
+// hintStrongboxOff tells the operator, once and to stderr only, that a
+// seal/unseal/status command checked only the one address it was given --
+// not the rest of a Strongbox-fronted cluster -- because the target does not
+// carry strongbox: true. It never blocks and never changes what the command
+// itself returns.
+func hintStrongboxOff() {
+	_, _ = fmt.Fprintf(os.Stderr, "@Y{Strongbox is off for this target: only the targeted address was checked, not the whole cluster. Enable it with} @C{--strongbox}@Y{ on} @C{safe target}@Y{.}\n")
+}
+
 // restoreTarget removes name from ~/.saferc and restores previous as current
 // if name was current -- provided the entry there still names this process's
 // own server, matched by url. Two `safe local` runs can collide on a name
@@ -772,6 +781,7 @@ func (c *CLI) cmdUnseal(command string, args ...string) error {
 			}
 		}
 	} else {
+		hintStrongboxOff()
 		isSealed, err := v.Sealed()
 		if err != nil {
 			return err
@@ -842,6 +852,7 @@ func (c *CLI) cmdSeal(command string, args ...string) error {
 			}
 		}
 	} else {
+		hintStrongboxOff()
 		isSealed, err := v.Sealed()
 		if err != nil {
 			return err

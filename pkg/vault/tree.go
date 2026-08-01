@@ -882,11 +882,13 @@ func (w *treeWorker) workGet(t secretTree) ([]secretTree, error) {
 	}
 
 	s, err := w.vault.Read(EncodePath(path, "", uint64(t.Version)))
-	//For v1 backends, this is the first non-list Vault access.
-	// If we're unable to get a path that we could list because of permissions,
-	// don't explode.
+	//For v1 backends, this is the first non-list Vault access; for v2
+	// backends, workVersions already read the metadata, but a policy can
+	// grant metadata and deny the data read separately, so this is where
+	// that denial first shows up. Either way, a path we could list but
+	// cannot read is skipped rather than aborting the whole walk.
 	if err != nil {
-		if t.MountVersion == 1 && vaultkv.IsForbidden(err) {
+		if vaultkv.IsForbidden(err) {
 			w.opts.noteSkippedForbidden()
 			return nil, nil
 		}

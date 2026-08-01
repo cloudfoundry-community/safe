@@ -122,11 +122,19 @@ func launchLocalServer(engine Engine, params localConfigParams) (*localServer, e
 // An answer on the port is not readiness by itself. If the child lost the
 // bind race, whatever won it answers there instead -- and treating that
 // stranger as ready is how a safe once fed Init to a vault it never started.
-// Readiness is an answer, plus our child alive, plus no bind failure in its
-// output. The probe carries its own short timeout so a holder that accepts
-// and never speaks HTTP cannot stall the poll.
+// The child's own account of a bind failure closes most of that hole but
+// arrives asynchronously: a stranger who already holds the port answers the
+// first probe before the child has even tried to bind. So readiness demands
+// positive proof of ownership -- the child's startup banner, which both
+// Vault and OpenBao print only after their listen(2) succeeded -- plus an
+// answer on the port. The probe carries its own short timeout so a holder
+// that accepts and never speaks HTTP cannot stall the poll.
 func waitLocalReady(engine Engine, port int, srv *localServer) error {
-	const maxStartupWait = 5 * time.Second
+	// The ceiling is generous because it is not the usual way out: a server
+	// that fails exits, and the exit is caught on the spot. The timeout only
+	// catches one that hangs without a word, and a loaded machine can make
+	// an honest startup look like that for longer than you would think.
+	const maxStartupWait = 30 * time.Second
 	const betweenChecksWait = 250 * time.Millisecond
 	probe := &http.Client{Timeout: time.Second}
 	begin := time.Now()
@@ -140,29 +148,32 @@ func waitLocalReady(engine Engine, port int, srv *localServer) error {
 		default:
 		}
 
-		resp, err := probe.Get(localVaultURL(port) + "/v1/sys/seal-status")
-		if err == nil {
-			_ = resp.Body.Close()
-			if isAddrInUse(srv.output.String()) {
-				// Someone else answered; our child lost the bind and is on
-				// its way out. Reap it and report its own account.
-				waitErr := <-srv.echan
-				return fmt.Errorf("%s exited before it became ready: %s", engine.Title(), engineStartupError(srv.output.String(), waitErr))
-			}
-			select {
-			case waitErr := <-srv.echan:
-				return fmt.Errorf("%s exited before it became ready: %s", engine.Title(), engineStartupError(srv.output.String(), waitErr))
-			default:
+		// The child's word outranks anything the port says: once it reports
+		// the bind failed, whoever answers there is a stranger. Reap the
+		// child and report its own account.
+		if isAddrInUse(srv.output.String()) {
+			waitErr := <-srv.echan
+			return fmt.Errorf("%s exited before it became ready: %s", engine.Title(), engineStartupError(srv.output.String(), waitErr))
+		}
+
+		if strings.Contains(srv.output.String(), "server started!") {
+			resp, err := probe.Get(localVaultURL(port) + "/v1/sys/seal-status")
+			if err == nil {
+				_ = resp.Body.Close()
 				return nil
 			}
+			lastErr = err
 		}
-		lastErr = err
 
 		if time.Since(begin) > maxStartupWait {
-			if msg := strings.TrimSpace(srv.output.String()); msg != "" {
-				return fmt.Errorf("Timed out waiting for %s to begin listening: %s\n%s", engine.Title(), lastErr, msg)
+			reason := "it never reported its listener up"
+			if lastErr != nil {
+				reason = lastErr.Error()
 			}
-			return fmt.Errorf("Timed out waiting for %s to begin listening: %s", engine.Title(), lastErr)
+			if msg := strings.TrimSpace(srv.output.String()); msg != "" {
+				return fmt.Errorf("Timed out waiting for %s to begin listening: %s\n%s", engine.Title(), reason, msg)
+			}
+			return fmt.Errorf("Timed out waiting for %s to begin listening: %s", engine.Title(), reason)
 		}
 
 		time.Sleep(betweenChecksWait)

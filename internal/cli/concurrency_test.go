@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"strings"
 	"syscall"
 	"testing"
@@ -26,39 +25,56 @@ import (
 
 var fleetNames = []string{"alpha", "beta", "gamma", "delta"}
 
-type localProc struct {
-	name   string
-	cmd    *exec.Cmd
-	output *lockedBuffer
+// fleetMember is one fleet process plus the means to start it over, for the
+// single failure a member may honestly retry (see awaitFleetReady).
+type fleetMember struct {
+	*localProc
+	relaunch func() *localProc
 }
 
 // startFleet launches one `safe local --memory` per name against a shared
 // home, all at once.
-func startFleet(t *testing.T, home, engine string, extraFor func(name string) []string) []*localProc {
+func startFleet(t *testing.T, home, engine string, extraFor func(name string) []string) []*fleetMember {
 	t.Helper()
-	fleet := make([]*localProc, 0, len(fleetNames))
+	fleet := make([]*fleetMember, 0, len(fleetNames))
 	for _, name := range fleetNames {
 		var extra []string
 		if extraFor != nil {
 			extra = extraFor(name)
 		}
-		cmd, output, _ := startSafeLocal(t, home, engine, name, extra...)
-		fleet = append(fleet, &localProc{name: name, cmd: cmd, output: output})
+		launch := func() *localProc {
+			return startSafeLocal(t, home, engine, name, extra...)
+		}
+		fleet = append(fleet, &fleetMember{localProc: launch(), relaunch: launch})
 	}
 	return fleet
 }
 
 // awaitFleetReady waits for every process to print its "Now targeting" line.
-func awaitFleetReady(t *testing.T, fleet []*localProc) {
+// A member that dies fails the test right away, in the process's own words,
+// instead of sitting out the deadline -- with one exception: an engine that
+// lost to machine load, taking longer to listen than cmdLocal waits, is
+// started over a bounded number of times. Any other death is a finding.
+func awaitFleetReady(t *testing.T, fleet []*fleetMember) {
 	t.Helper()
 	deadline := time.Now().Add(60 * time.Second)
-	for _, p := range fleet {
+	for _, m := range fleet {
+		restarts := 0
 		for {
-			if strings.Contains(p.output.String(), "Now targeting") {
+			if strings.Contains(m.output.String(), "Now targeting") {
 				break
 			}
+			if m.exited() {
+				out := m.output.String()
+				if strings.Contains(out, "begin listening") && restarts < 2 {
+					restarts++
+					m.localProc = m.relaunch()
+					continue
+				}
+				t.Fatalf("%s exited before becoming ready:\n%s", m.name, out)
+			}
 			if time.Now().After(deadline) {
-				t.Fatalf("%s did not become ready:\n%s", p.name, p.output.String())
+				t.Fatalf("%s did not become ready:\n%s", m.name, m.output.String())
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
@@ -66,18 +82,14 @@ func awaitFleetReady(t *testing.T, fleet []*localProc) {
 }
 
 // stopFleet interrupts every process group and waits for the exits.
-func stopFleet(t *testing.T, fleet []*localProc) {
+func stopFleet(t *testing.T, fleet []*fleetMember) {
 	t.Helper()
-	for _, p := range fleet {
-		_ = syscall.Kill(-p.cmd.Process.Pid, syscall.SIGINT)
+	for _, m := range fleet {
+		_ = syscall.Kill(-m.cmd.Process.Pid, syscall.SIGINT)
 	}
-	for _, p := range fleet {
-		done := make(chan error, 1)
-		go func() { done <- p.cmd.Wait() }()
-		select {
-		case <-done:
-		case <-time.After(20 * time.Second):
-			t.Errorf("%s did not exit after SIGINT:\n%s", p.name, p.output.String())
+	for _, m := range fleet {
+		if _, ok := m.waitExit(20 * time.Second); !ok {
+			t.Errorf("%s did not exit after SIGINT:\n%s", m.name, m.output.String())
 		}
 	}
 }

@@ -25,9 +25,22 @@ import (
 	"time"
 )
 
+// scheduleExit closes done once, a beat after the current response, so the
+// helper's answer reaches the client before the process goes away.
+func scheduleExit(once *sync.Once, done chan struct{}) {
+	once.Do(func() {
+		go func() {
+			time.Sleep(150 * time.Millisecond)
+			close(done)
+		}()
+	})
+}
+
 // TestFakeLocalVaultHelper is not a test: it is the body of the fake `vault
 // server` process. It only runs when the fake vault script re-executes the
-// test binary with SAFE_FAKE_VAULT_HELPER=1; otherwise it skips.
+// test binary with SAFE_FAKE_VAULT_HELPER=1; otherwise it skips. The
+// SAFE_FAKE_VAULT_FAIL variable, inherited from the test through the script,
+// selects a failure the real Vault could produce at that point.
 func TestFakeLocalVaultHelper(t *testing.T) {
 	if os.Getenv("SAFE_FAKE_VAULT_HELPER") != "1" {
 		t.Skip("helper process body, not a test")
@@ -74,9 +87,21 @@ func TestFakeLocalVaultHelper(t *testing.T) {
 			_, _ = w.Write([]byte(`{"sealed":false}`))
 
 		case r.URL.Path == "/v1/sys/mounts" && r.Method == http.MethodGet:
+			if os.Getenv("SAFE_FAKE_VAULT_FAIL") == "mounts-list" {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"errors":["mount listing is down"]}`))
+				scheduleExit(&exitOnce, done)
+				return
+			}
 			_, _ = w.Write([]byte(`{"data":{}}`))
 
 		case strings.HasPrefix(r.URL.Path, "/v1/sys/mounts/") && r.Method == http.MethodPost:
+			if os.Getenv("SAFE_FAKE_VAULT_FAIL") == "mounts-create" {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"errors":["mount creation is down"]}`))
+				scheduleExit(&exitOnce, done)
+				return
+			}
 			w.WriteHeader(http.StatusNoContent)
 
 		case strings.HasPrefix(r.URL.Path, "/v1/sys/internal/ui/mounts"):
@@ -87,12 +112,7 @@ func TestFakeLocalVaultHelper(t *testing.T) {
 			w.WriteHeader(http.StatusNoContent)
 			// The handshake write is the last thing cmdLocal asks of the
 			// Vault; shut down shortly after so the response gets out first.
-			exitOnce.Do(func() {
-				go func() {
-					time.Sleep(150 * time.Millisecond)
-					close(done)
-				}()
-			})
+			scheduleExit(&exitOnce, done)
 
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -204,5 +224,112 @@ func TestCmdLocal_FileBackedLifecycleWithRandomName(t *testing.T) {
 	}
 	if strings.Contains(string(saferc), "http://127.0.0.1:") {
 		t.Errorf("the temporary target was not cleaned out of .saferc:\n%s", saferc)
+	}
+}
+
+func TestCmdLocal_RestoresPreviousTargetOnExit(t *testing.T) {
+	// No t.Parallel — captureStderr mutates os.Stderr.
+	isolateHome(t)
+	writeSaferc(t, `version: 1
+current: alpha
+vaults:
+  alpha:
+    url: http://127.0.0.1:1
+    token: token-alpha
+    no_strongbox: true
+`)
+	installFakeLocalVault(t)
+	c := localCLI(t)
+	c.opt.Local.Memory = true
+	c.opt.Local.As = "local-prev-test"
+
+	var err error
+	captureStdout(t, func() {
+		captureStderr(t, func() {
+			err = c.cmdLocal("local")
+		})
+	})
+	if err != nil {
+		t.Fatalf("cmdLocal returned unexpected error: %v", err)
+	}
+
+	saferc, err := os.ReadFile(filepath.Join(os.Getenv("HOME"), ".saferc"))
+	if err != nil {
+		t.Fatalf("reading .saferc: %v", err)
+	}
+	if !strings.Contains(string(saferc), "current: alpha") {
+		t.Errorf("the previous target was not restored as current:\n%s", saferc)
+	}
+	if strings.Contains(string(saferc), "local-prev-test") {
+		t.Errorf("the temporary target was not cleaned out of .saferc:\n%s", saferc)
+	}
+}
+
+func TestCmdLocal_UnreadableSafercErrors(t *testing.T) {
+	isolateHome(t)
+	writeSaferc(t, "\t{{ this is not yaml")
+	// The rc failure comes after the server is spawned, so the fake exits
+	// immediately to leave nothing running.
+	t.Setenv("SAFE_FAKE_VAULT_TESTBIN", os.Args[0])
+	installFakeBin(t, "vault", `#!/bin/sh
+if [ "$1" = "version" ]; then
+  echo "Vault v1.15.4"
+  exit 0
+fi
+exit 0
+`)
+	c := localCLI(t)
+	c.opt.Local.Memory = true
+	c.opt.Local.Port = 8219
+
+	err := c.cmdLocal("local")
+	if err == nil {
+		t.Fatal("expected an error for an unreadable .saferc, got nil")
+	}
+}
+
+func TestCmdLocal_MountListFailureSurfaces(t *testing.T) {
+	// No t.Parallel — captureStderr mutates os.Stderr.
+	isolateHome(t)
+	installFakeLocalVault(t)
+	t.Setenv("SAFE_FAKE_VAULT_FAIL", "mounts-list")
+	c := localCLI(t)
+	c.opt.Local.Memory = true
+	c.opt.Local.As = "local-lsfail-test"
+
+	var err error
+	captureStdout(t, func() {
+		captureStderr(t, func() {
+			err = c.cmdLocal("local")
+		})
+	})
+	if err == nil {
+		t.Fatal("expected the mount-listing failure to surface, got nil")
+	}
+	if !strings.Contains(err.Error(), "Could not list mounts") {
+		t.Errorf("unexpected error wording: %v", err)
+	}
+}
+
+func TestCmdLocal_MountCreateFailureSurfaces(t *testing.T) {
+	// No t.Parallel — captureStderr mutates os.Stderr.
+	isolateHome(t)
+	installFakeLocalVault(t)
+	t.Setenv("SAFE_FAKE_VAULT_FAIL", "mounts-create")
+	c := localCLI(t)
+	c.opt.Local.Memory = true
+	c.opt.Local.As = "local-mkfail-test"
+
+	var err error
+	captureStdout(t, func() {
+		captureStderr(t, func() {
+			err = c.cmdLocal("local")
+		})
+	})
+	if err == nil {
+		t.Fatal("expected the mount-creation failure to surface, got nil")
+	}
+	if !strings.Contains(err.Error(), "Could not add") {
+		t.Errorf("unexpected error wording: %v", err)
 	}
 }

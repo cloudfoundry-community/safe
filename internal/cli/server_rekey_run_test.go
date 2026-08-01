@@ -31,13 +31,29 @@ type fakeRekeyVault struct {
 	newKeys []string
 	//startBody is the decoded body of the PUT that started the rekey.
 	startBody map[string]any
-	kv        *cliFakeVault
+	//failCancel makes the initial rekey-cancel request fail.
+	failCancel bool
+	//failKV makes every KV request fail, so --persist cannot save keys.
+	failKV bool
+	kv     *cliFakeVault
 }
 
 func (f *fakeRekeyVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	f.mu.Lock()
+	failCancel, failKV := f.failCancel, f.failKV
+	f.mu.Unlock()
 	switch {
+	case r.URL.Path == "/v1/sys/health":
+		//correct500Error probes health after a 500 from a rekey endpoint.
+		_, _ = w.Write([]byte(`{}`))
+
 	case r.URL.Path == "/v1/sys/rekey/init" && r.Method == http.MethodDelete:
+		if failCancel {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"errors":["cancel refused"]}`))
+			return
+		}
 		_, _ = w.Write([]byte(`{}`))
 
 	case r.URL.Path == "/v1/sys/rekey/init" && r.Method == http.MethodPut:
@@ -72,6 +88,11 @@ func (f *fakeRekeyVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 
 	default:
+		if failKV {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"errors":["kv is down"]}`))
+			return
+		}
 		f.kv.ServeHTTP(w, r)
 	}
 }
@@ -192,5 +213,50 @@ func TestCmdRekey_PersistSavesNewSealKeys(t *testing.T) {
 	}
 	if saved["key1"] != "new-key-one" {
 		t.Errorf("persisted key1: got %q, want %q", saved["key1"], "new-key-one")
+	}
+}
+
+func TestCmdRekey_CancelFailureSurfaces(t *testing.T) {
+	// No t.Parallel — captureStdout mutates os.Stdout.
+	isolateHome(t)
+	f := newRekeyFake(t, []string{"new-key-one"})
+	f.mu.Lock()
+	f.failCancel = true
+	f.mu.Unlock()
+	c := rekeyCLI(t)
+	c.opt.Rekey.NKeys = 1
+
+	var err error
+	captureStdout(t, func() {
+		err = c.cmdRekey("rekey")
+	})
+	if err == nil {
+		t.Fatal("expected the rekey-cancel failure to surface, got nil")
+	}
+	if !strings.Contains(err.Error(), "cancel") {
+		t.Errorf("unexpected error wording: %v", err)
+	}
+}
+
+func TestCmdRekey_PersistFailureSurfaces(t *testing.T) {
+	// No t.Parallel — captureStdout mutates os.Stdout.
+	isolateHome(t)
+	f := newRekeyFake(t, []string{"new-key-one"})
+	f.mu.Lock()
+	f.failKV = true
+	f.mu.Unlock()
+	c := rekeyCLI(t)
+	c.opt.Rekey.NKeys = 1
+	c.opt.Rekey.Persist = true
+
+	var err error
+	captureStdout(t, func() {
+		err = c.cmdRekey("rekey")
+	})
+	if err == nil {
+		t.Fatal("expected the seal-key save failure to surface, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to save seal keys") {
+		t.Errorf("unexpected error wording: %v", err)
 	}
 }

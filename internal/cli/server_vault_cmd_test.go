@@ -185,6 +185,7 @@ func TestCmdVault_UppercasesLowercaseProxyVars(t *testing.T) {
 	clearProxyEnv(t)
 	out := installFakeVaultRecorder(t)
 	t.Setenv("http_proxy", "http://127.0.0.1:9")
+	t.Setenv("https_proxy", "http://127.0.0.1:10")
 	t.Setenv("no_proxy", "internal.example.com")
 	c := &CLI{opt: &Options{}, r: NewRunner()}
 
@@ -202,6 +203,9 @@ func TestCmdVault_UppercasesLowercaseProxyVars(t *testing.T) {
 	}
 	if strings.Contains(env, "http_proxy=http://127.0.0.1:9") {
 		t.Errorf("lowercase http_proxy leaked through unconverted:\n%s", env)
+	}
+	if !strings.Contains(env, "HTTPS_PROXY=http://127.0.0.1:10") {
+		t.Errorf("https_proxy was not promoted to HTTPS_PROXY:\n%s", env)
 	}
 	if !strings.Contains(env, "NO_PROXY=internal.example.com") {
 		t.Errorf("no_proxy was not promoted to NO_PROXY:\n%s", env)

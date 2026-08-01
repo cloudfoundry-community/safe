@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -22,9 +23,9 @@ import (
 )
 
 // localVaultURL is where the server cmdLocal starts can be reached: loopback,
-// plain HTTP, on the port cmdLocal chose.
-func localVaultURL(port int) string {
-	return fmt.Sprintf("http://127.0.0.1:%d", port)
+// plain HTTP, on the address cmdLocal is actually talking to.
+func localVaultURL(address string) string {
+	return fmt.Sprintf("http://%s", address)
 }
 
 // connectLocal builds a client aimed at the server cmdLocal launched --
@@ -34,15 +35,60 @@ func localVaultURL(port int) string {
 // started, and no state of ~/.saferc (stale, lost to a concurrent writer, or
 // corrupted) may aim those calls anywhere else. Init against a foreign vault
 // is the incident this guards against.
-func connectLocal(port int, token string) (*vault.Vault, error) {
+func connectLocal(address string, token string) (*vault.Vault, error) {
 	return vault.NewVault(vault.VaultConfig{
-		URL:   localVaultURL(port),
+		URL:   localVaultURL(address),
 		Token: token,
 	})
 }
 
+// effectiveListenerAddress mirrors buildLocalConfig's listener defaults so
+// the probe, the client, and the registered target all follow the address
+// the rendered config actually tells the engine to bind -- not p.port, which
+// a --listener address= override can point at somewhere else entirely.
+// tlsEnabled reports whether the effective tls_disable value turns TLS on;
+// cmdLocal's automatically-managed listener only ever speaks plain HTTP, so
+// a caller seeing tlsEnabled must refuse rather than guess at a scheme.
+func effectiveListenerAddress(port int, overrides []string) (address string, tlsEnabled bool, err error) {
+	defaults := []hclField{
+		{key: "address", val: strconv.Quote(fmt.Sprintf("127.0.0.1:%d", port))},
+		{key: "tls_disable", val: "1"},
+	}
+	fields, err := applyConfigKV(defaults, overrides)
+	if err != nil {
+		return "", false, err
+	}
+
+	address = fmt.Sprintf("127.0.0.1:%d", port)
+	tlsDisabled := true
+	for _, f := range fields {
+		switch f.key {
+		case "address":
+			if unquoted, uerr := strconv.Unquote(f.val); uerr == nil {
+				address = unquoted
+			} else {
+				address = f.val
+			}
+		case "tls_disable":
+			tlsDisabled = f.val == "1" || f.val == "true"
+		}
+	}
+	return address, !tlsDisabled, nil
+}
+
 // localPortScanStart is where automatic port selection begins scanning.
 const localPortScanStart = 8201
+
+// maxStartupWait bounds how long waitLocalReady waits for the launched
+// server to report its listener up. The ceiling is generous because it is
+// not the usual way out: a server that fails exits, and the exit is caught
+// on the spot. The timeout only catches one that hangs without a word, and a
+// loaded machine can make an honest startup look like that for longer than
+// you would think. Package level (not local to waitLocalReady) so tests that
+// need to tell a genuinely slow start from a fast readiness regression --
+// both of which produce the same "begin listening" timeout message -- can
+// measure against the same ceiling production code waits on.
+const maxStartupWait = 30 * time.Second
 
 // findCandidatePort returns the first port at or after start that accepts a
 // loopback bind, probing with the same listen(2) the server child performs.
@@ -129,13 +175,14 @@ func launchLocalServer(engine Engine, params localConfigParams) (*localServer, e
 // Vault and OpenBao print only after their listen(2) succeeded -- plus an
 // answer on the port. The probe carries its own short timeout so a holder
 // that accepts and never speaks HTTP cannot stall the poll.
-func waitLocalReady(engine Engine, port int, srv *localServer) error {
-	// The ceiling is generous because it is not the usual way out: a server
-	// that fails exits, and the exit is caught on the spot. The timeout only
-	// catches one that hangs without a word, and a loaded machine can make
-	// an honest startup look like that for longer than you would think.
-	const maxStartupWait = 30 * time.Second
+func waitLocalReady(engine Engine, address string, srv *localServer) error {
 	const betweenChecksWait = 250 * time.Millisecond
+	// Bounds how long we wait for a child that has already reported its own
+	// bind failure to actually exit. Both installed engines do so
+	// immediately; this is only for a wedged one -- e.g. a hung shutdown --
+	// that would otherwise block the poll forever, with SIGINT already
+	// ignored so nothing at the terminal lets safe out of it either.
+	const bindFailureExitWait = 5 * time.Second
 	probe := &http.Client{Timeout: time.Second}
 	begin := time.Now()
 	var lastErr error
@@ -152,12 +199,24 @@ func waitLocalReady(engine Engine, port int, srv *localServer) error {
 		// the bind failed, whoever answers there is a stranger. Reap the
 		// child and report its own account.
 		if isAddrInUse(srv.output.String()) {
-			waitErr := <-srv.echan
-			return fmt.Errorf("%s exited before it became ready: %s", engine.Title(), engineStartupError(srv.output.String(), waitErr))
+			select {
+			case waitErr := <-srv.echan:
+				return fmt.Errorf("%s exited before it became ready: %s", engine.Title(), engineStartupError(srv.output.String(), waitErr))
+			case <-time.After(bindFailureExitWait):
+				// It reported the bind failure but did not leave. Do not
+				// wait out that promise forever -- reap it ourselves and say
+				// so plainly, rather than pretend this was the ordinary case
+				// above.
+				killErr := srv.cmd.Process.Kill()
+				if killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
+					return fmt.Errorf("%s reported its listener address was already in use and did not exit within %s; killing it also failed: %s", engine.Title(), bindFailureExitWait, killErr)
+				}
+				return fmt.Errorf("%s reported its listener address was already in use and did not exit within %s; it has been killed", engine.Title(), bindFailureExitWait)
+			}
 		}
 
 		if strings.Contains(srv.output.String(), "server started!") {
-			resp, err := probe.Get(localVaultURL(port) + "/v1/sys/seal-status")
+			resp, err := probe.Get(localVaultURL(address) + "/v1/sys/seal-status")
 			if err == nil {
 				_ = resp.Body.Close()
 				return nil
@@ -178,6 +237,30 @@ func waitLocalReady(engine Engine, port int, srv *localServer) error {
 
 		time.Sleep(betweenChecksWait)
 	}
+}
+
+// restoreTarget removes name from ~/.saferc and restores previous as current
+// if name was current -- provided the entry there still names this process's
+// own server, matched by url. Two `safe local` runs can collide on a name
+// faster than either can register (see the collision check inside cmdLocal's
+// registration below); a teardown that deleted unconditionally would erase
+// the survivor's target and the root token stored on it. It is shared by
+// cmdLocal's normal shutdown and by die(), so a startup failure after
+// registration leaves ~/.saferc exactly as clean as a normal exit does.
+func restoreTarget(name, previous, url string) error {
+	return rc.Update(func(c *rc.Config) error {
+		if existing, found := c.Vaults[name]; found && existing.URL != url {
+			return nil
+		}
+		if c.Current == name {
+			c.Current = ""
+			if _, found, _ := c.Find(previous); found {
+				c.Current = previous
+			}
+		}
+		delete(c.Vaults, name)
+		return nil
+	})
 }
 
 func (c *CLI) cmdLocal(command string, args ...string) error {
@@ -204,6 +287,16 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 		}
 	}
 
+	// A TLS-enabling override cannot be auto-targeted: the probe and the
+	// client cmdLocal builds for its own server speak plain HTTP only, so
+	// there is no scheme to guess and no cert to trust. Refuse before
+	// anything is spawned rather than fail confusingly mid-startup.
+	if _, tlsEnabled, addrErr := effectiveListenerAddress(port, opt.Local.Listener); addrErr != nil {
+		return addrErr
+	} else if tlsEnabled {
+		return fmt.Errorf("--listener may not enable TLS for `safe local`: the automatically-managed listener speaks plain HTTP only (leave tls_disable at its default)")
+	}
+
 	keys := make([]string, 0)
 	if !opt.Local.Memory {
 		opt.Local.File = filepath.ToSlash(opt.Local.File)
@@ -215,6 +308,7 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 	signal.Ignore(syscall.SIGINT)
 
 	var srv *localServer
+	var name, previous, registeredURL string
 	die := func(err error) {
 		if err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "@R{!! %s}\n", err)
@@ -230,15 +324,39 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 			}
 			_ = os.Remove(srv.cfgFile)
 		}
+		if registeredURL != "" {
+			// A die() after registration must leave ~/.saferc exactly as a
+			// normal exit would: the temporary target gone, and whatever the
+			// operator had selected before restored as current.
+			if err := restoreTarget(name, previous, registeredURL); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "@R{!! Unable to remove '%s' from ~/.saferc: %s}\n", name, err)
+				_, _ = fmt.Fprintf(os.Stderr, "@R{!! Remove it by hand with} @C{safe targets delete %s}\n", name)
+			}
+		}
 		rc.Cleanup()
 		os.Exit(1)
 	}
 
-	cfg, err := rc.Apply("")
+	// SIGTERM and SIGQUIT must reach this same teardown -- Signals() would
+	// otherwise restore the terminal and exit bare, leaving the child engine,
+	// its temp config, and the registered target all behind. SIGINT stays
+	// ignored above: a terminal delivers it to the whole foreground process
+	// group, so the child sees it too and its own exit drives the normal
+	// shutdown path below.
+	setLocalTeardown(func(os.Signal) { die(nil) })
+	defer setLocalTeardown(nil)
+
+	// rc.Read(), not rc.Apply(""): cmdLocal only needs the parsed config, not
+	// Apply's environment side effects. Apply, when the current target
+	// carries ca_certs, writes them to a temp file and installs its own
+	// os.Interrupt handler -- re-arming SIGINT delivery after the Ignore
+	// above and killing safe local before its teardown runs the moment the
+	// configured target happens to use a private CA.
+	cfg, err := rc.Read()
 	if err != nil {
 		return err
 	}
-	name := opt.Local.As
+	name = opt.Local.As
 	if name == "" {
 		name = RandomName()
 		var n int
@@ -256,15 +374,21 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 			die(fmt.Errorf("You already have '%s' as a Vault target", name))
 		}
 	}
-	previous := cfg.Current
+	previous = cfg.Current
 
 	// Launch, retrying on the one failure that is safe to retry: the child's
 	// own report that the port was taken. The bind probe above narrows the
 	// race but cannot close it -- only the server's listen(2) is
 	// authoritative. A losing attempt exits immediately, so a retry costs
 	// milliseconds.
+	var address string
 	const maxPortAttempts = 10
 	for attempt := 1; ; attempt++ {
+		address, _, err = effectiveListenerAddress(port, opt.Local.Listener)
+		if err != nil {
+			return err
+		}
+
 		srv, err = launchLocalServer(engine, localConfigParams{
 			port:       port,
 			memory:     opt.Local.Memory,
@@ -277,7 +401,7 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 			return err
 		}
 
-		startupErr := waitLocalReady(engine, port, srv)
+		startupErr := waitLocalReady(engine, address, srv)
 		if startupErr == nil {
 			break
 		}
@@ -302,27 +426,36 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 		die(startupErr)
 	}
 
-	v, err := connectLocal(port, "")
+	v, err := connectLocal(address, "")
 	if err != nil {
 		die(fmt.Errorf("Unable to build a client for the local %s server: %w", engine.Title(), err))
 	}
 
-	// Registered only now that the server is up on a port that is final: a
-	// failed or retried launch must not leave a target pointing at nothing.
+	// Registered only now that the server is up on an address that is final:
+	// a failed or retried launch must not leave a target pointing at nothing.
+	// The collision check runs inside this same locked mutation, not against
+	// the snapshot read above: two concurrent `safe local` runs landing on
+	// the same name -- an explicit --as twice, or a rare RandomName()
+	// collision -- must not let the second overwrite the first's entry and
+	// its root token.
 	if err := rc.Update(func(c *rc.Config) error {
+		if _, found := c.Vaults[name]; found {
+			return fmt.Errorf("You already have '%s' as a Vault target", name)
+		}
 		return c.SetTarget(name, rc.Vault{
-			URL:        localVaultURL(port),
+			URL:        localVaultURL(address),
 			SkipVerify: false,
 		})
 	}); err != nil {
 		// Nothing irreversible has happened yet: kill the server rather
 		// than leave one running that no config file points at.
-		die(fmt.Errorf("Unable to register '%s' in ~/.saferc: %w", name, err))
+		die(err)
 	}
+	registeredURL = localVaultURL(address)
 	// Outputs of the decision just made, for anything spawned from here on.
-	// Never read back as inputs: the client above was built from the port
-	// directly.
-	_ = os.Setenv("VAULT_ADDR", localVaultURL(port))
+	// Never read back as inputs: the client above was built from the
+	// address directly.
+	_ = os.Setenv("VAULT_ADDR", localVaultURL(address))
 
 	token := ""
 	if len(keys) == 0 {
@@ -354,24 +487,24 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 		// to reach it instead. The token going to stderr is deliberate: this
 		// flow already prints the seal key, and the server is loopback-only.
 		_, _ = fmt.Fprintf(os.Stderr, "@R{!! Unable to save the root token in ~/.saferc: %s}\n", err)
-		_, _ = fmt.Fprintf(os.Stderr, "@R{!! The %s server at} @C{%s} @R{is still running.}\n", engine.Title(), localVaultURL(port))
+		_, _ = fmt.Fprintf(os.Stderr, "@R{!! The %s server at} @C{%s} @R{is still running.}\n", engine.Title(), localVaultURL(address))
 		_, _ = fmt.Fprintf(os.Stderr, "@R{!! Its root token is} @M{%s}\n", token)
-		_, _ = fmt.Fprintf(os.Stderr, "@R{!! To reach it:} @C{safe target %s %s && safe auth token}\n", name, localVaultURL(port))
+		_, _ = fmt.Fprintf(os.Stderr, "@R{!! To reach it:} @C{safe target %s %s && safe auth token}\n", name, localVaultURL(address))
 	}
-	v, err = connectLocal(port, token)
+	v, err = connectLocal(address, token)
 	if err != nil {
-		return fmt.Errorf("Unable to build a client for the local %s server: %w", engine.Title(), err)
+		die(fmt.Errorf("Unable to build a client for the local %s server: %w", engine.Title(), err))
 	}
 
 	exists, err := v.MountExists("secret")
 	if err != nil {
-		return fmt.Errorf("Could not list mounts: %w", err)
+		die(fmt.Errorf("Could not list mounts: %w", err))
 	}
 
 	if !exists {
 		err := v.AddMount("secret", 2)
 		if err != nil {
-			return fmt.Errorf("Could not add `secret' mount: %w", err)
+			die(fmt.Errorf("Could not add `secret' mount: %w", err))
 		}
 		_, _ = fmt.Printf("safe has mounted the @C{secret} backend\n\n")
 	}
@@ -381,7 +514,7 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 	_ = v.Write("secret/handshake", s)
 
 	if !opt.Quiet {
-		_, _ = fmt.Fprintf(os.Stderr, "Now targeting (temporary) @Y{%s} at @C{%s}\n", name, localVaultURL(port))
+		_, _ = fmt.Fprintf(os.Stderr, "Now targeting (temporary) @Y{%s} at @C{%s}\n", name, localVaultURL(address))
 		if opt.Local.Memory {
 			_, _ = fmt.Fprintf(os.Stderr, "@R{This %s server is MEMORY-BACKED!}\n", engine.Title())
 			_, _ = fmt.Fprintf(os.Stderr, "If you want to @Y{retain your secrets} be sure to @C{safe export}.\n")
@@ -395,19 +528,7 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 	err = <-srv.echan
 	_ = os.Remove(srv.cfgFile)
 	_, _ = fmt.Fprintf(os.Stderr, "%s terminated normally, cleaning up...\n", engine.Title())
-	if updateErr := rc.Update(func(c *rc.Config) error {
-		// Evaluated against the state as it is now, not as it was at
-		// startup: if another process has moved `current` to its own
-		// target in the meantime, it is left alone.
-		if c.Current == name {
-			c.Current = ""
-			if _, found, _ := c.Find(previous); found {
-				c.Current = previous
-			}
-		}
-		delete(c.Vaults, name)
-		return nil
-	}); updateErr != nil {
+	if updateErr := restoreTarget(name, previous, registeredURL); updateErr != nil {
 		// The server is already gone; the config entry is now stale. Say
 		// so, but let the server's own exit status be what is returned.
 		_, _ = fmt.Fprintf(os.Stderr, "@R{!! Unable to remove '%s' from ~/.saferc: %s}\n", name, updateErr)

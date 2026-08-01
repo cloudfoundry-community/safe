@@ -8,7 +8,7 @@
 //
 //	GET  /v1/sys/internal/ui/mounts — mount discovery, with each mount's version
 //	GET  /v1/auth/token/lookup-self — token validity check (200 OK)
-//	GET  /v1/sys/mounts            — list mounts (used by IsMounted/PKI checks)
+//	GET  /v1/sys/mounts            — list mounts (used by Mounts)
 //	POST /v1/sys/mounts/<path>     — enable a mount (used by AddMount)
 //	GET  /v1/<mount>/*             — read secret
 //	POST /v1/<mount>/*             — write secret
@@ -58,12 +58,6 @@ type fakeVault struct {
 
 	// pki holds registered PKI mount names (for sys/mounts responses).
 	pki map[string]bool
-
-	// pkiIssueHandler, if non-nil, is called for POST /v1/<backend>/issue/<role>.
-	pkiIssueHandler func(w http.ResponseWriter, r *http.Request)
-
-	// pkiRevokeHandler, if non-nil, is called for POST /v1/<backend>/revoke.
-	pkiRevokeHandler func(w http.ResponseWriter, r *http.Request)
 
 	// seal models the sys/seal, sys/unseal, sys/init, and sys/seal-status
 	// endpoints for Init/Seal/Unseal/Sealed/SealKeys tests.
@@ -279,8 +273,7 @@ func (f *fakeVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			f.handleKV(w, r, mount, subpath)
 			return
 		}
-		// PKI issue / revoke
-		f.handlePKI(w, r)
+		jsonErr(w, http.StatusNotFound, "not found")
 	}
 }
 
@@ -387,39 +380,6 @@ func (f *fakeVault) handleKV(w http.ResponseWriter, r *http.Request, mount, subp
 	default:
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
-}
-
-func (f *fakeVault) handlePKI(w http.ResponseWriter, r *http.Request) {
-	p := strings.TrimPrefix(r.URL.Path, "/v1/")
-
-	// Check if path belongs to a registered PKI backend.
-	for name := range f.pki {
-		if strings.HasPrefix(p, name+"/issue/") && r.Method == http.MethodPost {
-			if f.pkiIssueHandler != nil {
-				f.pkiIssueHandler(w, r)
-				return
-			}
-			jsonErr(w, http.StatusInternalServerError, "no pki issue handler registered")
-			return
-		}
-		if strings.HasPrefix(p, name+"/revoke") && r.Method == http.MethodPost {
-			if f.pkiRevokeHandler != nil {
-				f.pkiRevokeHandler(w, r)
-				return
-			}
-			jsonErr(w, http.StatusInternalServerError, "no pki revoke handler registered")
-			return
-		}
-		// GET /v1/<backend>/ca/pem or similar
-		if strings.HasPrefix(p, name+"/") && r.Method == http.MethodGet {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte("-----BEGIN CERTIFICATE-----\nFAKEPEM\n-----END CERTIFICATE-----\n"))
-			return
-		}
-	}
-
-	jsonErr(w, http.StatusNotFound, "not found")
 }
 
 // sealStateJSON renders the SealState payload shared by seal-status and unseal.

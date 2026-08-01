@@ -76,12 +76,13 @@ func (v *Vault) ReKey(unsealKeyCount, numToUnseal int, pgpKeys []string) ([]stri
 	for i := range givenKeys {
 		key, err := prompt.SecureE("Unseal Key %d: ", i+1)
 		if err != nil {
-			// stdin closed before every key arrived. Submit what we have
-			// anyway: the submission is rejected, the deferred cancel runs,
-			// and the server is left without a half-started rekey. Returning
-			// here instead would report a safe-side error for what is a
-			// Vault-side validation failure.
-			break
+			// stdin closed before every key arrived, and the set can never
+			// be completed. Abort here rather than submitting the partial
+			// slice: Submit posts each key to the server in turn, so every
+			// key typed so far would be transmitted before the empty
+			// entries at the end drew a rejection. The deferred cancel
+			// above tells the server to forget the rekey.
+			return nil, fmt.Errorf("rekey aborted, unseal key %d was never entered: %w", i+1, err)
 		}
 		givenKeys[i] = key
 	}

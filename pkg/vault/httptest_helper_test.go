@@ -95,9 +95,15 @@ type fakeVault struct {
 	rekeyActive   bool
 	rekeyNonce    string
 	rekeyRequired int      // existing keys needed to authorize the rekey
-	rekeyProgress int      // existing keys submitted so far
+	rekeyProgress int      // existing keys submitted so far; reset on cancel or completion
 	rekeyShares   int      // new key count to mint on completion
 	rekeyNewKeys  []string // new keys returned on completion
+
+	// rekeyUpdateCalls counts every PUT to /v1/sys/rekey/update the fake has
+	// received, and is never reset. rekeyProgress resets on cancel, so it
+	// cannot tell a test whether a key was ever transmitted before an abort;
+	// this can.
+	rekeyUpdateCalls int
 }
 
 func newFakeVault() *fakeVault {
@@ -549,6 +555,7 @@ func (f *fakeVault) handleSys(w http.ResponseWriter, r *http.Request) {
 		})
 
 	case p == "/v1/sys/rekey/update" && r.Method == http.MethodPut:
+		f.rekeyUpdateCalls++
 		f.rekeyProgress++
 		if f.rekeyProgress >= f.rekeyRequired {
 			keys := f.rekeyNewKeys

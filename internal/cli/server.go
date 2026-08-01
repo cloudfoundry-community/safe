@@ -462,11 +462,6 @@ func (c *CLI) cmdInit(command string, args ...string) error {
 	if opt.UseTarget != "" {
 		target = opt.UseTarget
 	}
-	if err := rc.Update(func(c *rc.Config) error {
-		return c.SetTokenFor(target, token)
-	}); err != nil {
-		return err
-	}
 	_ = os.Setenv("VAULT_TOKEN", token)
 	v = connect(true)
 
@@ -518,6 +513,19 @@ func (c *CLI) cmdInit(command string, args ...string) error {
 		}
 
 		_, _ = fmt.Printf("\n")
+	}
+
+	// Persisting the token is best-effort from here on: Vault has already
+	// handed out the unseal keys and root token above, exactly once, and a
+	// config-write failure -- most commonly no target selected at all, the
+	// documented VAULT_ADDR-only workflow -- must never be what decides
+	// whether the operator sees them, or the Vault they just initialized
+	// goes permanently sealed for want of a ~/.saferc entry.
+	if err := rc.Update(func(c *rc.Config) error {
+		return c.SetTokenFor(target, token)
+	}); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "@R{!! Unable to save the root token in ~/.saferc: %s}\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "@R{!! You are still authenticated to it for this session.}\n")
 	}
 
 	if !opt.Init.Sealed {

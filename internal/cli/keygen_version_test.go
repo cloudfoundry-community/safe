@@ -45,6 +45,24 @@ func TestCmdGenRefusesAVersionOnTheKey(t *testing.T) {
 	}
 }
 
+// The separate-key form can carry the version on the KEY argument instead
+// of the path, and that form went unchecked: PATH:KEY refuses it, but
+// PATH KEY wrote a literal key named "pw^2" -- unreadable through safe's own
+// path:key^version syntax -- because only PathHasKey was checked on the key
+// argument, not PathHasVersion.
+func TestCmdGenRefusesAVersionOnTheSeparateKeyArgument(t *testing.T) {
+	isolateHome(t)
+	fv := newCLIFake(t)
+
+	c := newKeygenCLI(t)
+	c.opt.Gen.Policy = defaultGenPolicy
+	assertVersionRefused(t, c.cmdGen("gen", "secret/g", `pw^2`))
+
+	if kv := fv.get("secret/g"); len(kv) != 0 {
+		t.Errorf("secret/g = %v, want nothing written", kv)
+	}
+}
+
 // The separate-key form carries the version on the path. This already
 // failed, but only once Write was reached, after the password had been
 // generated.

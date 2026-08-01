@@ -52,6 +52,13 @@ func readGenTargets(args []string) ([]genTarget, error) {
 			if vault.PathHasKey(key) {
 				return nil, fmt.Errorf("For secret `%s` and key `%s`: key cannot contain a key", path, key)
 			}
+			//A caret in the key argument names a version the same way it does
+			// in the PATH:KEY form, and that form refuses it; this one wrote a
+			// literal key named e.g. "pw^2" instead, which safe's own
+			// path:key^version syntax then cannot read back.
+			if err := assertWritableKeyPath(key); err != nil {
+				return nil, err
+			}
 			args = args[2:]
 		}
 		targets = append(targets, genTarget{path: path, key: key})

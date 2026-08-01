@@ -363,24 +363,14 @@ type Options struct {
 	} `cli:"x509"`
 }
 
-func Main(version, buildTime, gitCommit string) {
-	Version = version
-	BuildTime = buildTime
-	GitCommit = gitCommit
-
-	var opt Options
-	opt.Gen.Policy = "a-zA-Z0-9"
-
-	opt.Clobber = true
-
-	opt.Init.Persist = true
-	opt.Rekey.Persist = true
-
-	go Signals()
-
+// newRegisteredRunner builds a Runner with every safe command registered,
+// wired to a CLI that holds opt. This is the whole command table the shipped
+// binary uses: Main calls it, and tests call it to reach the registered help
+// topics without going through os.Exit.
+func newRegisteredRunner(opt *Options) *Runner {
 	r := NewRunner()
 
-	c := &CLI{opt: &opt, r: r}
+	c := &CLI{opt: opt, r: r}
 
 	r.Dispatch("version", &Help{
 		Summary: "Print the version of the safe CLI",
@@ -1596,6 +1586,26 @@ Currently, only the --renew option is supported, and it is required:
                     without modifying the list of revoked certificates.
 `,
 	}, c.cmdX509Crl)
+
+	return r
+}
+
+func Main(version, buildTime, gitCommit string) {
+	Version = version
+	BuildTime = buildTime
+	GitCommit = gitCommit
+
+	var opt Options
+	opt.Gen.Policy = "a-zA-Z0-9"
+
+	opt.Clobber = true
+
+	opt.Init.Persist = true
+	opt.Rekey.Persist = true
+
+	go Signals()
+
+	r := newRegisteredRunner(&opt)
 
 	env.Override(&opt)
 	p, err := gocli.NewParser(&opt, os.Args[1:])

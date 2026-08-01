@@ -36,6 +36,18 @@ func newCLIFakeV2(t *testing.T) *cliFakeVault {
 	return fv
 }
 
+// denyMetadataGet makes a metadata GET (not list) for path answer 403,
+// simulating a token that can list and read a secret's data but was never
+// granted read on its metadata.
+func (f *cliFakeVault) denyMetadataGet(path string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.forbidMetadataGet == nil {
+		f.forbidMetadataGet = map[string]bool{}
+	}
+	f.forbidMetadataGet[path] = true
+}
+
 // setV2 appends one version per map given, oldest first, at a literal Vault
 // path. Calling it twice on the same path keeps appending.
 func (f *cliFakeVault) setV2(path string, values ...map[string]string) {
@@ -234,6 +246,12 @@ func (f *cliFakeVault) serveV2Metadata(w http.ResponseWriter, r *http.Request, p
 			return
 		}
 		writeJSON(w, map[string]any{"data": map[string]any{"keys": keys}})
+		return
+	}
+
+	if r.Method == http.MethodGet && f.forbidMetadataGet[path] {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"errors":["permission denied"]}`))
 		return
 	}
 

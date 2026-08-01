@@ -411,10 +411,23 @@ func (c *CLI) cmdLs(command string, args ...string) error {
 							if vault.IsNotFound(err) {
 								continue
 							}
-
-							return err
-						}
-						if len(versions) == 0 || !versions[len(versions)-1].Alive() {
+							if !vaultkv.IsForbidden(err) {
+								return err
+							}
+							//A policy can grant list and read-the-data
+							// without also granting read-the-metadata, and
+							// such a token could list this folder before the
+							// liveness check moved to the metadata endpoint.
+							// Fall back to the read the check used to make,
+							// rather than aborting the whole listing on a
+							// capability it does not strictly need.
+							if _, err := v.Read(vault.EncodePath(child, "", 0)); err != nil {
+								if vault.IsNotFound(err) {
+									continue
+								}
+								return err
+							}
+						} else if len(versions) == 0 || !versions[len(versions)-1].Alive() {
 							continue
 						}
 					}

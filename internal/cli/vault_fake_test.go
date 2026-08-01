@@ -42,6 +42,10 @@ type cliFakeVault struct {
 	// plaintext it never prints, and a flag that promises to skip a lookup
 	// has to actually skip it. Neither shows up in the output.
 	log []string
+	//forbidMetadataGet names version 2 paths whose metadata GET (not list)
+	// answers 403, for tests simulating a token without metadata-read
+	// capability. See denyMetadataGet.
+	forbidMetadataGet map[string]bool
 }
 
 // fakeVersion is one version of a version 2 secret. A version is alive until

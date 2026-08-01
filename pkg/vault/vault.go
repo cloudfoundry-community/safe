@@ -1030,7 +1030,12 @@ func DecodeErrorResponse(body []byte) error {
 func (v *Vault) FindSigningCA(cert *X509, certPath string, signPath string) (*X509, string, error) {
 	/* find the CA */
 	if signPath != "" {
-		if certPath == signPath {
+		// Compared canonicalized: a leading or trailing slash, or a doubled
+		// one, still names the same secret as certPath, and Sign's
+		// CA-rotation branch (ca == x) depends on this returning the
+		// certificate object itself -- by pointer identity -- for that
+		// case, not a second copy read back from the Vault.
+		if Canonicalize(certPath) == Canonicalize(signPath) {
 			return cert, certPath, nil
 		} else {
 			s, err := v.Read(signPath)

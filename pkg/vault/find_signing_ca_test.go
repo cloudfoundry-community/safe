@@ -91,6 +91,33 @@ func TestFindSigningCANamedAsItself(t *testing.T) {
 	}
 }
 
+// A --signed-by that spells the certificate's own path differently (a
+// leading or trailing slash, or a doubled one) still names the same secret,
+// and must take the self-signing branch: returning the certificate object
+// itself, not a second, separately-read copy of it. Sign's CA-rotation
+// branch (ca == x) compares the returned CA against the certificate by
+// pointer identity, so treating a differently-spelled alias as reading a
+// distinct authority breaks self-rotation for exactly the spellings the raw
+// comparison happens to miss -- and, since nothing is written at the
+// aliased path in this test, a fall-through to v.Read would fail closed
+// rather than silently pass.
+func TestFindSigningCARecognizesADifferentlySpelledSelfAlias(t *testing.T) {
+	t.Parallel()
+	v, _ := newTestVault(t)
+	ca := caNamed(t, "self")
+
+	got, path, err := v.FindSigningCA(ca, "secret/ca/", "secret/ca")
+	if err != nil {
+		t.Fatalf("FindSigningCA: %v", err)
+	}
+	if got != ca {
+		t.Error("FindSigningCA read a second copy instead of recognizing the alias")
+	}
+	if path != "secret/ca/" {
+		t.Errorf("path = %q, want secret/ca/ (the certificate's own path)", path)
+	}
+}
+
 func TestFindSigningCAReadsANamedAuthority(t *testing.T) {
 	t.Parallel()
 	v, _ := newTestVault(t)

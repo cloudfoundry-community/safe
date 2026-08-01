@@ -1057,8 +1057,14 @@ func (v *Vault) FindSigningCA(cert *X509, certPath string, signPath string) (*X5
 		if err == nil {
 			return cert, certPath, nil
 		} else {
-			// Lets see if we can guess the CA if none was provided
-			caPath := certPath[0:strings.LastIndex(certPath, "/")] + "/ca"
+			// Lets see if we can guess the CA if none was provided. A path
+			// with no '/' at all has no parent directory to guess a sibling
+			// under.
+			slash := strings.LastIndex(certPath, "/")
+			if slash < 0 {
+				return nil, "", fmt.Errorf("no signing authority provided and no 'ca' sibling found")
+			}
+			caPath := certPath[0:slash] + "/ca"
 			s, err := v.Read(caPath)
 			if err != nil {
 				return nil, "", fmt.Errorf("no signing authority provided and no 'ca' sibling found")

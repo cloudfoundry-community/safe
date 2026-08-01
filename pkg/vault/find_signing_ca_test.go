@@ -175,6 +175,25 @@ func TestFindSigningCAFindsTheCASibling(t *testing.T) {
 	}
 }
 
+// A certificate path with no '/' at all has no sibling to guess: the guess
+// is built by trimming the path back to its parent directory, which does not
+// exist here. It must be reported as no authority found, not panic building
+// the guessed path.
+func TestFindSigningCAWithNoSlashInPathDoesNotPanic(t *testing.T) {
+	t.Parallel()
+	v, _ := newTestVault(t)
+	ca := caNamed(t, "authority")
+	leaf := leafSignedBy(t, ca)
+
+	_, _, err := v.FindSigningCA(leaf, "leaf", "")
+	if err == nil {
+		t.Fatal("FindSigningCA guessed an authority out of nothing")
+	}
+	if !strings.Contains(err.Error(), "no signing authority provided and no 'ca' sibling found") {
+		t.Errorf("error %q should say no authority was found", err)
+	}
+}
+
 func TestFindSigningCAWithNoSiblingToGuess(t *testing.T) {
 	t.Parallel()
 	v, _ := newTestVault(t)

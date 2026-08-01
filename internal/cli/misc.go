@@ -106,6 +106,9 @@ const envvarsHelp = `@G{[SCRIPTING]}
   Encrypted private keys are not supported. Password authentication is also not
   supported.
 
+  A username or private key path containing special characters must be
+  percent-encoded in the URL, e.g. '%40' for '@'.
+
   Your known_hosts file is used to verify the remote ssh server's host key. If no
   key for the given server is present, you will be prompted to add the key. If no
   TTY when no host key is present, safe will return with a failure.
@@ -113,7 +116,13 @@ const envvarsHelp = `@G{[SCRIPTING]}
 `
 
 func (c *CLI) cmdEnvvars(command string, args ...string) error {
-	_, _ = fmt.Printf(envvarsHelp)
+	//envvarsHelp is handed to go-ansi's Printf as a format string, the same
+	// way Runner.Help hands help.Description to ansi.Fprintf, and for the
+	// same reason: it is how the @G{...} markup in it is read. A bare '%' in
+	// the text would then be taken for the start of a verb, so it goes
+	// through the same escapePercent Runner.Help applies before either one
+	// reaches a formatter.
+	_, _ = fmt.Printf(escapePercent(envvarsHelp))
 	return nil
 }
 

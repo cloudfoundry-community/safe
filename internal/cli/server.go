@@ -295,10 +295,9 @@ func (c *CLI) cmdInit(command string, args ...string) error {
 	if opt.UseTarget != "" {
 		target = opt.UseTarget
 	}
-	if err := cfg.SetTokenFor(target, token); err != nil {
-		return err
-	}
-	if err := cfg.Write(); err != nil {
+	if err := rc.Update(func(c *rc.Config) error {
+		return c.SetTokenFor(target, token)
+	}); err != nil {
 		return err
 	}
 	_ = os.Setenv("VAULT_TOKEN", token)

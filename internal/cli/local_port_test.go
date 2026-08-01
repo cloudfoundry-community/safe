@@ -40,35 +40,20 @@ func TestLocalAutoScanAvoidsHeldPort(t *testing.T) {
 	held := holdPort(t)
 
 	home := t.TempDir()
-	cmd, output, _ := startSafeLocal(t, home, engine, "dodger")
+	p := startSafeLocal(t, home, engine, "dodger")
 
-	deadline := time.Now().Add(30 * time.Second)
-	ready := false
-	for time.Now().Before(deadline) {
-		if strings.Contains(output.String(), "Now targeting") {
-			ready = true
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if !ready {
-		t.Fatalf("safe local did not become ready:\n%s", output.String())
-	}
+	awaitLocalReady(t, p, 30*time.Second)
 	cfg, ok := readSafercAt(t, home)
 	if !ok || cfg.Vaults["dodger"] == nil {
-		t.Fatalf("no registered target after readiness:\n%s", output.String())
+		t.Fatalf("no registered target after readiness:\n%s", p.output.String())
 	}
 	if url := cfg.Vaults["dodger"].URL; strings.HasSuffix(url, fmt.Sprintf(":%d", held)) {
 		t.Errorf("safe local claims the held port: %s", url)
 	}
 
-	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGINT)
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	select {
-	case <-done:
-	case <-time.After(15 * time.Second):
-		t.Errorf("safe local did not exit after SIGINT:\n%s", output.String())
+	_ = syscall.Kill(-p.cmd.Process.Pid, syscall.SIGINT)
+	if _, ok := p.waitExit(15 * time.Second); !ok {
+		t.Errorf("safe local did not exit after SIGINT:\n%s", p.output.String())
 	}
 }
 
@@ -80,20 +65,17 @@ func TestLocalExplicitPortHeldFailsAccurately(t *testing.T) {
 	held := holdPort(t)
 
 	home := t.TempDir()
-	cmd, output, _ := startSafeLocal(t, home, engine, "pinned", "--port", fmt.Sprintf("%d", held))
+	p := startSafeLocal(t, home, engine, "pinned", "--port", fmt.Sprintf("%d", held))
 
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	select {
-	case err := <-done:
-		if err == nil {
-			t.Errorf("safe local exited zero with its port held:\n%s", output.String())
-		}
-	case <-time.After(30 * time.Second):
-		t.Fatalf("safe local did not exit with its port held:\n%s", output.String())
+	err, ok := p.waitExit(30 * time.Second)
+	if !ok {
+		t.Fatalf("safe local did not exit with its port held:\n%s", p.output.String())
+	}
+	if err == nil {
+		t.Errorf("safe local exited zero with its port held:\n%s", p.output.String())
 	}
 
-	out := output.String()
+	out := p.output.String()
 	if !strings.Contains(out, fmt.Sprintf("port %d is already in use", held)) {
 		t.Errorf("failure does not diagnose the held port %d:\n%s", held, out)
 	}
@@ -118,27 +100,24 @@ func TestLocalRetryLoopIsBounded(t *testing.T) {
 	held := holdPort(t)
 
 	home := t.TempDir()
-	cmd, output, tmpDir := startSafeLocal(t, home, engine, "bounded",
+	p := startSafeLocal(t, home, engine, "bounded",
 		"--listener", fmt.Sprintf("address=127.0.0.1:%d", held))
 
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	select {
-	case err := <-done:
-		if err == nil {
-			t.Errorf("safe local exited zero with its listener address held:\n%s", output.String())
-		}
-	case <-time.After(60 * time.Second):
-		t.Fatalf("retry loop did not terminate:\n%s", output.String())
+	exitErr, ok := p.waitExit(60 * time.Second)
+	if !ok {
+		t.Fatalf("retry loop did not terminate:\n%s", p.output.String())
+	}
+	if exitErr == nil {
+		t.Errorf("safe local exited zero with its listener address held:\n%s", p.output.String())
 	}
 
-	if !strings.Contains(output.String(), "10 attempts") {
-		t.Errorf("failure does not report the bounded attempts:\n%s", output.String())
+	if !strings.Contains(p.output.String(), "10 attempts") {
+		t.Errorf("failure does not report the bounded attempts:\n%s", p.output.String())
 	}
 
 	// Every attempt's temp config file must be cleaned up. The process ran
 	// with a private TMPDIR, so anything left there is safe's own leak.
-	leftovers, err := filepath.Glob(filepath.Join(tmpDir, "kazoo*"))
+	leftovers, err := filepath.Glob(filepath.Join(p.tmpDir, "kazoo*"))
 	if err != nil {
 		t.Fatalf("glob: %v", err)
 	}

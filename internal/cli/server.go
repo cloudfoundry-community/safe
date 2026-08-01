@@ -143,7 +143,16 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 		URL:        fmt.Sprintf("http://127.0.0.1:%d", port),
 		SkipVerify: false,
 	})
-	_ = cfg.Write()
+	if err := rc.Update(func(c *rc.Config) error {
+		return c.SetTarget(name, rc.Vault{
+			URL:        fmt.Sprintf("http://127.0.0.1:%d", port),
+			SkipVerify: false,
+		})
+	}); err != nil {
+		// Nothing irreversible has happened yet: kill the server rather
+		// than leave one running that no config file points at.
+		die(fmt.Errorf("Unable to register '%s' in ~/.saferc: %w", name, err))
+	}
 
 	if _, err := rc.Apply(""); err != nil {
 		return err
@@ -195,9 +204,22 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 		die(fmt.Errorf("Unable to generate a new root token: %w", err))
 	}
 
-	_ = cfg.SetToken(token)
 	_ = os.Setenv("VAULT_TOKEN", token)
-	_ = cfg.Write()
+	// SetTokenFor, not SetToken: SetToken stores against whatever target is
+	// current in the state just read, which under concurrency can be some
+	// other process's vault. The token belongs to the server started here.
+	if err := rc.Update(func(c *rc.Config) error {
+		return c.SetTokenFor(name, token)
+	}); err != nil {
+		// The server is initialized and unsealed; aborting now would destroy
+		// it (unrecoverably, for --memory). Hand the operator what they need
+		// to reach it instead. The token going to stderr is deliberate: this
+		// flow already prints the seal key, and the server is loopback-only.
+		_, _ = fmt.Fprintf(os.Stderr, "@R{!! Unable to save the root token in ~/.saferc: %s}\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "@R{!! The %s server at} @C{http://127.0.0.1:%d} @R{is still running.}\n", engine.Title(), port)
+		_, _ = fmt.Fprintf(os.Stderr, "@R{!! Its root token is} @M{%s}\n", token)
+		_, _ = fmt.Fprintf(os.Stderr, "@R{!! To reach it:} @C{safe target %s http://127.0.0.1:%d && safe auth token}\n", name, port)
+	}
 	v = connect(true)
 
 	exists, err := v.MountExists("secret")
@@ -231,21 +253,24 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 
 	err = <-echan
 	_, _ = fmt.Fprintf(os.Stderr, "%s terminated normally, cleaning up...\n", engine.Title())
-	{
-		var applyErr error
-		cfg, applyErr = rc.Apply("")
-		if applyErr != nil {
-			return applyErr
+	if updateErr := rc.Update(func(c *rc.Config) error {
+		// Evaluated against the state as it is now, not as it was at
+		// startup: if another process has moved `current` to its own
+		// target in the meantime, it is left alone.
+		if c.Current == name {
+			c.Current = ""
+			if _, found, _ := c.Find(previous); found {
+				c.Current = previous
+			}
 		}
+		delete(c.Vaults, name)
+		return nil
+	}); updateErr != nil {
+		// The server is already gone; the config entry is now stale. Say
+		// so, but let the server's own exit status be what is returned.
+		_, _ = fmt.Fprintf(os.Stderr, "@R{!! Unable to remove '%s' from ~/.saferc: %s}\n", name, updateErr)
+		_, _ = fmt.Fprintf(os.Stderr, "@R{!! Remove it by hand with} @C{safe targets delete %s}\n", name)
 	}
-	if cfg.Current == name {
-		cfg.Current = ""
-		if _, found, _ := cfg.Find(previous); found {
-			cfg.Current = previous
-		}
-	}
-	delete(cfg.Vaults, name)
-	_ = cfg.Write()
 	return err
 }
 

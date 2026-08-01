@@ -108,6 +108,24 @@ func TestWriteFileAtomicFailureKeepsOriginal(t *testing.T) {
 	}
 }
 
+// A bare filename has no directory component; the temp file must land in
+// the working directory ("."), not fail or stray elsewhere.
+func TestWriteFileAtomicBareFilename(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	if err := writeFileAtomic("saferc", []byte("here"), 0600); err != nil {
+		t.Fatalf("writeFileAtomic: %s", err)
+	}
+
+	b, err := os.ReadFile("saferc")
+	if err != nil {
+		t.Fatalf("read back: %s", err)
+	}
+	if string(b) != "here" {
+		t.Errorf("content = %q, want %q", b, "here")
+	}
+}
+
 func TestWriteFileAtomicRejectsMissingDir(t *testing.T) {
 	err := writeFileAtomic(filepath.Join(t.TempDir(), "no", "such", "dir", "f"), []byte("x"), 0600)
 	if err == nil {

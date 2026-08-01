@@ -120,3 +120,60 @@ func TestRenewUnderTheSiblingThatSignedItWorks(t *testing.T) {
 		t.Errorf("issuer = %q, want signer", got)
 	}
 }
+
+// A --signed-by that spells the certificate's own path differently (a
+// trailing slash) names the same secret. The authority and the certificate
+// being reissued are then the same underlying record, so saving the
+// authority separately from the reissued certificate is a second, redundant
+// write to that record — and, because the CA object read a second time
+// under the differently-spelled path is not the same in-memory copy as the
+// certificate being reissued, its serial counter increment never reaches
+// what finally gets saved. One write, not two.
+func TestReissueSkipsRedundantSaveWhenSignedByAliasesItself(t *testing.T) {
+	isolateHome(t)
+	fv := newCLIFake(t)
+	storeCert(t, fv, "secret/ca", newCA(t, "root"))
+
+	c := newX509CLI(t)
+	c.opt.X509.Reissue.SignedBy = "secret/ca/"
+
+	fv.forgetRequests()
+	if err := c.cmdX509Reissue("x509 reissue", "secret/ca"); err != nil {
+		t.Fatalf("reissue under an aliased signed-by: %v", err)
+	}
+
+	writes := 0
+	for _, r := range fv.requests() {
+		if r == "PUT /v1/secret/ca" {
+			writes++
+		}
+	}
+	if writes != 1 {
+		t.Errorf("writes to secret/ca = %d, want 1", writes)
+	}
+}
+
+// The same aliasing collapses to one write for renew too.
+func TestRenewSkipsRedundantSaveWhenSignedByAliasesItself(t *testing.T) {
+	isolateHome(t)
+	fv := newCLIFake(t)
+	storeCert(t, fv, "secret/ca", newCA(t, "root"))
+
+	c := newX509CLI(t)
+	c.opt.X509.Renew.SignedBy = "/secret/ca"
+
+	fv.forgetRequests()
+	if err := c.cmdX509Renew("x509 renew", "secret/ca"); err != nil {
+		t.Fatalf("renew under an aliased signed-by: %v", err)
+	}
+
+	writes := 0
+	for _, r := range fv.requests() {
+		if r == "PUT /v1/secret/ca" {
+			writes++
+		}
+	}
+	if writes != 1 {
+		t.Errorf("writes to secret/ca = %d, want 1", writes)
+	}
+}

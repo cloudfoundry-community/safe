@@ -187,7 +187,7 @@ func TestWrite(t *testing.T) {
 				"prod": {URL: "https://vault.prod:8200", Token: "prod-token", Namespace: "ns"},
 			},
 		}
-		if err := c.Write(); err != nil {
+		if err := c.write(); err != nil {
 			t.Fatalf("Write: %s", err)
 		}
 
@@ -211,7 +211,7 @@ func TestWrite(t *testing.T) {
 		writeFile(t, filepath.Join(home, ".svtoken"), "stale: true\n")
 
 		c := Config{Version: 1} // Current empty => Vault("") returns nil
-		if err := c.Write(); err != nil {
+		if err := c.write(); err != nil {
 			t.Fatalf("Write: %s", err)
 		}
 		if _, err := os.Stat(filepath.Join(home, ".saferc")); err != nil {
@@ -230,7 +230,7 @@ func TestWrite(t *testing.T) {
 			Vaults:  map[string]*Vault{"prod": {URL: "https://vault.prod:8200", Token: "secret-token"}},
 			Options: Options{ManageVaultToken: true},
 		}
-		if err := c.Write(); err != nil {
+		if err := c.write(); err != nil {
 			t.Fatalf("Write: %s", err)
 		}
 		assertPerm(t, filepath.Join(home, ".vault-token"), 0600)
@@ -248,7 +248,7 @@ func TestWrite(t *testing.T) {
 				"prod": {URL: "https://vault.prod:8200", Token: "prod-token", SkipVerify: true, Namespace: "ns"},
 			},
 		}
-		if err := c.Write(); err != nil {
+		if err := c.write(); err != nil {
 			t.Fatalf("Write: %s", err)
 		}
 		got, err := Read()

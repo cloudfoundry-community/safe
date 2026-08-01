@@ -144,11 +144,11 @@ func Update(mutate func(c *Config) error) error {
 		if err := mutate(&c); err != nil {
 			return err
 		}
-		return c.Write()
+		return c.write()
 	})
 }
 
-func (c *Config) Write() error {
+func (c *Config) write() error {
 	b, err := yaml.Marshal(c)
 	if err != nil {
 		return err

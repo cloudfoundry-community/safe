@@ -54,18 +54,22 @@ func decoyVault(t *testing.T) (*httptest.Server, *atomic.Int64) {
 
 // startSafeLocal runs `safe local --memory --as <name>` in its own process
 // group under the given home, so the whole tree (safe plus the server child)
-// can be torn down without orphans.
-func startSafeLocal(t *testing.T, home, engine, name string) (*exec.Cmd, *strings.Builder) {
+// can be torn down without orphans. The process gets a private TMPDIR (also
+// returned) so tests can check exactly which temp files it leaves behind.
+func startSafeLocal(t *testing.T, home, engine, name string, extra ...string) (*exec.Cmd, *lockedBuffer, string) {
 	t.Helper()
-	cmd := exec.Command(safeBinary(t), "local", "--memory", "--engine", engine, "--as", name)
+	args := append([]string{"local", "--memory", "--engine", engine, "--as", name}, extra...)
+	tmpDir := t.TempDir()
+	cmd := exec.Command(safeBinary(t), args...)
 	cmd.Env = append(os.Environ(),
 		"HOME="+home,
+		"TMPDIR="+tmpDir,
 		"SAFE_TARGET=",
 		"VAULT_ADDR=",
 		"VAULT_TOKEN=",
 	)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	var output strings.Builder
+	var output lockedBuffer
 	cmd.Stdout = &output
 	cmd.Stderr = &output
 	if err := cmd.Start(); err != nil {
@@ -75,7 +79,7 @@ func startSafeLocal(t *testing.T, home, engine, name string) (*exec.Cmd, *string
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		_ = cmd.Wait()
 	})
-	return cmd, &output
+	return cmd, &output, tmpDir
 }
 
 func readSafercAt(t *testing.T, home string) (rc.Config, bool) {
@@ -104,23 +108,25 @@ func TestLocalNeverTouchesConfiguredTarget(t *testing.T) {
 		t.Fatalf("seeding ~/.saferc: %v", err)
 	}
 
-	cmd, output := startSafeLocal(t, home, engine, "isolated")
+	cmd, output, _ := startSafeLocal(t, home, engine, "isolated")
 
-	// The stored token appears only after init and unseal have succeeded
-	// against safe's own server.
+	// "Now targeting" is printed once setup is complete and safe has settled
+	// into waiting on its server; interrupting before that point exercises
+	// the setup error paths instead of the teardown.
 	deadline := time.Now().Add(30 * time.Second)
-	var token string
+	ready := false
 	for time.Now().Before(deadline) {
-		if cfg, ok := readSafercAt(t, home); ok {
-			if v, found := cfg.Vaults["isolated"]; found && v.Token != "" {
-				token = v.Token
-				break
-			}
+		if strings.Contains(output.String(), "Now targeting") {
+			ready = true
+			break
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if token == "" {
+	if !ready {
 		t.Fatalf("safe local did not become ready:\n%s", output.String())
+	}
+	if cfg, ok := readSafercAt(t, home); !ok || cfg.Vaults["isolated"] == nil || cfg.Vaults["isolated"].Token == "" {
+		t.Errorf("ready without a stored token for the temporary target")
 	}
 
 	// Wind the server down the way Ctrl-C would: SIGINT to the process
@@ -170,7 +176,7 @@ func TestLocalAbortsWhenConfigUnwritable(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(home, 0700) })
 
-	cmd, output := startSafeLocal(t, home, engine, "isolated")
+	cmd, output, _ := startSafeLocal(t, home, engine, "isolated")
 
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()

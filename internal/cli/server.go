@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -40,6 +41,134 @@ func connectLocal(port int, token string) (*vault.Vault, error) {
 	})
 }
 
+// localPortScanStart is where automatic port selection begins scanning.
+const localPortScanStart = 8201
+
+// findCandidatePort returns the first port at or after start that accepts a
+// loopback bind, probing with the same listen(2) the server child performs.
+// The old dial probe called a port free when connecting to it failed, which
+// TIME_WAIT remnants pass while the bind still fails. The probe listener
+// closes before the server launches, so the answer is only advisory: the
+// child's own bind failure is authoritative, and cmdLocal retries on it.
+func findCandidatePort(start int) (int, error) {
+	for port := start; port < 9999; port++ {
+		l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			continue
+		}
+		_ = l.Close()
+		return port, nil
+	}
+	return 0, fmt.Errorf("no free local port found between %d and 9998", start)
+}
+
+// localServer is one launched attempt at running the engine.
+type localServer struct {
+	cmd     *exec.Cmd
+	echan   chan error
+	output  *lockedBuffer
+	cfgFile string
+}
+
+// launchLocalServer renders the config, writes it to a temp file, and starts
+// the engine on it. The returned echan is buffered so the exit of a server
+// nobody is currently waiting on does not strand the reaper goroutine.
+func launchLocalServer(engine Engine, params localConfigParams) (*localServer, error) {
+	configBody, err := buildLocalConfig(params)
+	if err != nil {
+		return nil, err
+	}
+
+	f, err := os.CreateTemp("", "kazoo")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := f.WriteString(configBody); err != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		return nil, fmt.Errorf("Unable to write the %s config: %w", engine.Title(), err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(f.Name())
+		return nil, fmt.Errorf("Unable to write the %s config: %w", engine.Title(), err)
+	}
+
+	// Capture the server's output so a bad config (which safe deliberately
+	// does not validate) is reported instead of surfacing as a startup
+	// timeout. Config-parse errors go to stdout, so capture both streams.
+	// Pointing Stdout and Stderr at the same writer is the documented way
+	// to avoid an interleaving race (os/exec serializes the writes).
+	var output lockedBuffer
+	echan := make(chan error, 1)
+	// #nosec G204 - engine.Binary() is a PATH lookup of a known name, and
+	// f.Name() is a temp file we created
+	cmd := exec.Command(engine.Binary(), "server", "-config", f.Name())
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	if err := cmd.Start(); err != nil {
+		_ = os.Remove(f.Name())
+		return nil, fmt.Errorf("failed to start %s server: %w", engine.Title(), err)
+	}
+	go func() {
+		echan <- cmd.Wait()
+	}()
+	return &localServer{cmd: cmd, echan: echan, output: &output, cfgFile: f.Name()}, nil
+}
+
+// waitLocalReady polls until the launched server answers on its port. It
+// returns nil on readiness, and otherwise the reason: the server's own exit,
+// in its own words, or a timeout.
+//
+// An answer on the port is not readiness by itself. If the child lost the
+// bind race, whatever won it answers there instead -- and treating that
+// stranger as ready is how a safe once fed Init to a vault it never started.
+// Readiness is an answer, plus our child alive, plus no bind failure in its
+// output. The probe carries its own short timeout so a holder that accepts
+// and never speaks HTTP cannot stall the poll.
+func waitLocalReady(engine Engine, port int, srv *localServer) error {
+	const maxStartupWait = 5 * time.Second
+	const betweenChecksWait = 250 * time.Millisecond
+	probe := &http.Client{Timeout: time.Second}
+	begin := time.Now()
+	var lastErr error
+	for {
+		// If the server exited before becoming ready (most often a rejected
+		// config), report its own error rather than waiting out the timeout.
+		select {
+		case waitErr := <-srv.echan:
+			return fmt.Errorf("%s exited before it became ready: %s", engine.Title(), engineStartupError(srv.output.String(), waitErr))
+		default:
+		}
+
+		resp, err := probe.Get(localVaultURL(port) + "/v1/sys/seal-status")
+		if err == nil {
+			_ = resp.Body.Close()
+			if isAddrInUse(srv.output.String()) {
+				// Someone else answered; our child lost the bind and is on
+				// its way out. Reap it and report its own account.
+				waitErr := <-srv.echan
+				return fmt.Errorf("%s exited before it became ready: %s", engine.Title(), engineStartupError(srv.output.String(), waitErr))
+			}
+			select {
+			case waitErr := <-srv.echan:
+				return fmt.Errorf("%s exited before it became ready: %s", engine.Title(), engineStartupError(srv.output.String(), waitErr))
+			default:
+				return nil
+			}
+		}
+		lastErr = err
+
+		if time.Since(begin) > maxStartupWait {
+			if msg := strings.TrimSpace(srv.output.String()); msg != "" {
+				return fmt.Errorf("Timed out waiting for %s to begin listening: %s\n%s", engine.Title(), lastErr, msg)
+			}
+			return fmt.Errorf("Timed out waiting for %s to begin listening: %s", engine.Title(), lastErr)
+		}
+
+		time.Sleep(betweenChecksWait)
+	}
+}
+
 func (c *CLI) cmdLocal(command string, args ...string) error {
 	opt := c.opt
 
@@ -55,16 +184,12 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 		return fmt.Errorf("@R{%s}", err)
 	}
 
-	var port int
-	if opt.Local.Port != 0 {
-		port = opt.Local.Port
-	} else {
-		for port = 8201; port < 9999; port++ {
-			conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-			if err != nil {
-				break
-			}
-			_ = conn.Close()
+	autoScan := opt.Local.Port == 0
+	port := opt.Local.Port
+	if autoScan {
+		port, err = findCandidatePort(localPortScanStart)
+		if err != nil {
+			return err
 		}
 	}
 
@@ -76,60 +201,23 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 		}
 	}
 
-	configBody, err := buildLocalConfig(localConfigParams{
-		port:       port,
-		memory:     opt.Local.Memory,
-		filePath:   opt.Local.File,
-		engineName: engine.Name(),
-		global:     opt.Local.Config,
-		listener:   opt.Local.Listener,
-	})
-	if err != nil {
-		return err
-	}
-
-	f, err := os.CreateTemp("", "kazoo")
-	if err != nil {
-		return err
-	}
-	if _, err := f.WriteString(configBody); err != nil {
-		return fmt.Errorf("Unable to write the %s config: %w", engine.Title(), err)
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("Unable to write the %s config: %w", engine.Title(), err)
-	}
-
-	// Capture the server's output so a bad config (which safe deliberately
-	// does not validate) is reported instead of surfacing as a startup
-	// timeout. Config-parse errors go to stdout, so capture both streams.
-	// Pointing Stdout and Stderr at the same writer is the documented way
-	// to avoid an interleaving race (os/exec serializes the writes).
-	var engineOutput lockedBuffer
-	echan := make(chan error)
-	// #nosec G204 - engine.Binary() is a PATH lookup of a known name, and
-	// f.Name() is a temp file we created
-	cmd := exec.Command(engine.Binary(), "server", "-config", f.Name())
-	cmd.Stdout = &engineOutput
-	cmd.Stderr = &engineOutput
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start %s server: %w", engine.Title(), err)
-	}
-	go func() {
-		echan <- cmd.Wait()
-	}()
 	signal.Ignore(syscall.SIGINT)
 
+	var srv *localServer
 	die := func(err error) {
 		if err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "@R{!! %s}\n", err)
 		}
 		_, _ = fmt.Fprintf(os.Stderr, "@Y{shutting down %s...}\n", engine.Title())
-		// On the startup path the wait goroutine has usually reaped the
-		// process already; that is a clean shutdown, not a kill failure.
-		if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-			_, _ = fmt.Fprintf(os.Stderr, "@R{NOTE: Unable to terminate the %s process.}\n", engine.Title())
-			_, _ = fmt.Fprintf(os.Stderr, "@R{      You may have some environmental cleanup to do.}\n")
-			_, _ = fmt.Fprintf(os.Stderr, "@R{      Apologies.}\n")
+		if srv != nil {
+			// On the startup path the wait goroutine has usually reaped the
+			// process already; that is a clean shutdown, not a kill failure.
+			if err := srv.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+				_, _ = fmt.Fprintf(os.Stderr, "@R{NOTE: Unable to terminate the %s process.}\n", engine.Title())
+				_, _ = fmt.Fprintf(os.Stderr, "@R{      You may have some environmental cleanup to do.}\n")
+				_, _ = fmt.Fprintf(os.Stderr, "@R{      Apologies.}\n")
+			}
+			_ = os.Remove(srv.cfgFile)
 		}
 		rc.Cleanup()
 		os.Exit(1)
@@ -159,6 +247,57 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 	}
 	previous := cfg.Current
 
+	// Launch, retrying on the one failure that is safe to retry: the child's
+	// own report that the port was taken. The bind probe above narrows the
+	// race but cannot close it -- only the server's listen(2) is
+	// authoritative. A losing attempt exits immediately, so a retry costs
+	// milliseconds.
+	const maxPortAttempts = 10
+	for attempt := 1; ; attempt++ {
+		srv, err = launchLocalServer(engine, localConfigParams{
+			port:       port,
+			memory:     opt.Local.Memory,
+			filePath:   opt.Local.File,
+			engineName: engine.Name(),
+			global:     opt.Local.Config,
+			listener:   opt.Local.Listener,
+		})
+		if err != nil {
+			return err
+		}
+
+		startupErr := waitLocalReady(engine, port, srv)
+		if startupErr == nil {
+			break
+		}
+
+		if isAddrInUse(srv.output.String()) {
+			_ = os.Remove(srv.cfgFile)
+			if !autoScan {
+				// An explicit --port is a decision, not a preference:
+				// diagnose it accurately and let the operator make the
+				// next one.
+				die(fmt.Errorf("port %d is already in use; choose another with --port, or omit --port to let safe pick one", port))
+			}
+			if attempt < maxPortAttempts {
+				port, err = findCandidatePort(port + 1)
+				if err != nil {
+					die(err)
+				}
+				continue
+			}
+			die(fmt.Errorf("no free port found for %s after %d attempts (last tried %d)", engine.Title(), maxPortAttempts, port))
+		}
+		die(startupErr)
+	}
+
+	v, err := connectLocal(port, "")
+	if err != nil {
+		die(fmt.Errorf("Unable to build a client for the local %s server: %w", engine.Title(), err))
+	}
+
+	// Registered only now that the server is up on a port that is final: a
+	// failed or retried launch must not leave a target pointing at nothing.
 	if err := rc.Update(func(c *rc.Config) error {
 		return c.SetTarget(name, rc.Vault{
 			URL:        localVaultURL(port),
@@ -170,41 +309,9 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 		die(fmt.Errorf("Unable to register '%s' in ~/.saferc: %w", name, err))
 	}
 	// Outputs of the decision just made, for anything spawned from here on.
-	// Never read back as inputs: the client below is built from the port
+	// Never read back as inputs: the client above was built from the port
 	// directly.
 	_ = os.Setenv("VAULT_ADDR", localVaultURL(port))
-
-	v, err := connectLocal(port, "")
-	if err != nil {
-		die(fmt.Errorf("Unable to build a client for the local %s server: %w", engine.Title(), err))
-	}
-
-	const maxStartupWait = 5 * time.Second
-	const betweenChecksWait = 250 * time.Millisecond
-	startupCheckBeginTime := time.Now()
-	for {
-		// If the server exited before becoming ready (most often a rejected
-		// config), report its own error rather than waiting out the timeout.
-		select {
-		case waitErr := <-echan:
-			die(fmt.Errorf("%s exited before it became ready: %s", engine.Title(), engineStartupError(engineOutput.String(), waitErr)))
-		default:
-		}
-
-		_, err := v.Sealed()
-		if err == nil {
-			break
-		}
-
-		if time.Since(startupCheckBeginTime) > maxStartupWait {
-			if msg := strings.TrimSpace(engineOutput.String()); msg != "" {
-				die(fmt.Errorf("Timed out waiting for %s to begin listening: %s\n%s", engine.Title(), err, msg))
-			}
-			die(fmt.Errorf("Timed out waiting for %s to begin listening: %s", engine.Title(), err))
-		}
-
-		time.Sleep(betweenChecksWait)
-	}
 
 	token := ""
 	if len(keys) == 0 {
@@ -274,7 +381,8 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 		_, _ = fmt.Fprintf(os.Stderr, "Ctrl-C to shut down the %s server\n", engine.Title())
 	}
 
-	err = <-echan
+	err = <-srv.echan
+	_ = os.Remove(srv.cfgFile)
 	_, _ = fmt.Fprintf(os.Stderr, "%s terminated normally, cleaning up...\n", engine.Title())
 	if updateErr := rc.Update(func(c *rc.Config) error {
 		// Evaluated against the state as it is now, not as it was at

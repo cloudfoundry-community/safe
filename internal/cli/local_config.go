@@ -176,6 +176,23 @@ func (b *lockedBuffer) String() string {
 	return b.buf.String()
 }
 
+// isAddrInUse reports whether the server's output says its listener failed
+// because the address was taken -- the one startup failure it is correct to
+// retry on another port. Both engines print an "Error initializing listener"
+// line whose cause is the OS bind error: "address already in use" on unix,
+// "only one usage of each socket address" on Windows. An address-in-use
+// phrase anywhere else in the log is not the listener failing.
+func isAddrInUse(output string) bool {
+	lower := strings.ToLower(output)
+	idx := strings.Index(lower, "error initializing listener")
+	if idx < 0 {
+		return false
+	}
+	rest := lower[idx:]
+	return strings.Contains(rest, "address already in use") ||
+		strings.Contains(rest, "only one usage of each socket address")
+}
+
 // engineStartupError explains why the local server failed to start, preferring
 // the engine's own stderr output and falling back to the process wait error.
 func engineStartupError(stderr string, waitErr error) string {

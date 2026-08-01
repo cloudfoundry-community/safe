@@ -115,7 +115,7 @@ func writeSaferc(t *testing.T, body string) {
 }
 
 // twoTargets renders a config naming both Vaults, with alpha current. Neither
-// uses Strongbox, so the commands take the single-address branch; the
+// opts into Strongbox, so the commands take the single-address branch; the
 // Strongbox flag is exercised on its own in the tests that care about it.
 func twoTargets(alpha, beta *fakeSealVault) string {
 	return `version: 1
@@ -124,10 +124,8 @@ vaults:
   alpha:
     url: ` + alpha.url + `
     token: token-alpha
-    no_strongbox: true
   beta:
     url: ` + beta.url + `
     token: token-beta
-    no_strongbox: true
 `
 }

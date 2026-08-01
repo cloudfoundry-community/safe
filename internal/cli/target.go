@@ -59,7 +59,7 @@ func (c *CLI) cmdTargets(command string, args ...string) error {
 				URL:       details.URL,
 				Verify:    !details.SkipVerify,
 				Namespace: details.Namespace,
-				Strongbox: !details.NoStrongbox,
+				Strongbox: details.Strongbox,
 			})
 		}
 		b, err := json.MarshalIndent(vaults, "", "  ")
@@ -299,11 +299,11 @@ func (c *CLI) cmdTarget(command string, args ...string) error {
 		}
 
 		err = cfg.SetTarget(alias, rc.Vault{
-			URL:         url,
-			SkipVerify:  skipverify,
-			NoStrongbox: !opt.Target.Strongbox,
-			Namespace:   opt.Target.Namespace,
-			CACerts:     caCerts,
+			URL:        url,
+			SkipVerify: skipverify,
+			Strongbox:  opt.Target.Strongbox,
+			Namespace:  opt.Target.Namespace,
+			CACerts:    caCerts,
 		})
 		if err != nil {
 			return err

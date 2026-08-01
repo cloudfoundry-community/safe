@@ -87,7 +87,7 @@ vaults:
     url: https://vault.dev:8200
     token: dev-token
     skip_verify: true
-    no_strongbox: true
+    strongbox: true
     namespace: dev-ns
 options:
   manage_vault_token: true
@@ -106,11 +106,37 @@ options:
 			t.Errorf("prod vault wrong: %+v", prod)
 		}
 		dev := c.Vaults["dev"]
-		if dev == nil || !dev.SkipVerify || !dev.NoStrongbox || dev.Namespace != "dev-ns" {
+		if dev == nil || !dev.SkipVerify || !dev.Strongbox || dev.Namespace != "dev-ns" {
 			t.Errorf("dev vault wrong: %+v", dev)
 		}
 		if !c.Options.ManageVaultToken {
 			t.Error("expected ManageVaultToken to be true")
+		}
+	})
+
+	t.Run("ignores the no_strongbox key older configs carry", func(t *testing.T) {
+		home := setHome(t)
+		//Both spellings a pre-opt-in config could hold: true asked for what is
+		// now the default, and false asked for the Strongbox that now takes
+		// strongbox: true to get. Neither target has one.
+		writeFile(t, filepath.Join(home, ".saferc"), `version: 1
+current: prod
+vaults:
+  prod:
+    url: https://vault.prod:8200
+    no_strongbox: false
+  dev:
+    url: https://vault.dev:8200
+    no_strongbox: true
+`)
+		c, err := Read()
+		if err != nil {
+			t.Fatalf("unexpected error: %s", err)
+		}
+		for name, v := range c.Vaults {
+			if v.Strongbox {
+				t.Errorf("%s: got Strongbox, want none without strongbox: true", name)
+			}
 		}
 	})
 
@@ -551,11 +577,11 @@ func TestConfigAccessors(t *testing.T) {
 		c := Config{
 			Current: "prod",
 			Vaults: map[string]*Vault{"prod": {
-				URL:         "https://vault.prod:8200",
-				SkipVerify:  true,
-				NoStrongbox: true,
-				CACerts:     []string{"ca"},
-				Namespace:   "ns",
+				URL:        "https://vault.prod:8200",
+				SkipVerify: true,
+				Strongbox:  true,
+				CACerts:    []string{"ca"},
+				Namespace:  "ns",
 			}},
 		}
 		if c.URL() != "https://vault.prod:8200" {
@@ -564,8 +590,8 @@ func TestConfigAccessors(t *testing.T) {
 		if c.Verified() {
 			t.Error("Verified: got true, want false (SkipVerify set)")
 		}
-		if c.HasStrongbox() {
-			t.Error("HasStrongbox: got true, want false (NoStrongbox set)")
+		if !c.HasStrongbox() {
+			t.Error("HasStrongbox: got false, want true (Strongbox set)")
 		}
 		if got := c.CACerts(); len(got) != 1 || got[0] != "ca" {
 			t.Errorf("CACerts: got %v", got)

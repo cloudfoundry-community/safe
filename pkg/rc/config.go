@@ -34,10 +34,39 @@ type Vault struct {
 	SkipVerify bool     `yaml:"skip_verify,omitempty"`
 
 	// Strongbox opts a target into the Strongbox seal-state service on port
-	// :8484. Older configs wrote a no_strongbox key instead; it is ignored on
-	// read, and no target has Strongbox unless it says strongbox: true.
+	// :8484. Older configs wrote a no_strongbox key instead, with the
+	// opposite default: Strongbox was on unless no_strongbox: true.
+	// UnmarshalYAML honors that key when the file has it, so an upgrade
+	// does not silently disarm Strongbox for every pre-existing target; a
+	// file with neither key gets the new opt-in default (false).
 	Strongbox bool   `yaml:"strongbox,omitempty"`
 	Namespace string `yaml:"namespace,omitempty"`
+}
+
+// UnmarshalYAML translates the legacy no_strongbox key into Strongbox when
+// the key is present in the document, and leaves Strongbox at its zero value
+// (the new opt-in default) when it is not. Marshal only ever writes the
+// strongbox key, so the translated intent -- not the legacy key -- is what a
+// subsequent write persists.
+func (v *Vault) UnmarshalYAML(unmarshal func(any) error) error {
+	type vaultAlias Vault
+	if err := unmarshal((*vaultAlias)(v)); err != nil {
+		return err
+	}
+
+	var legacy struct {
+		NoStrongbox *bool `yaml:"no_strongbox"`
+	}
+	// The decoder replays the same node into a second target; unrecognized
+	// keys (url, token, ...) are ignored here just as strongbox is ignored
+	// above by vaultAlias, which has no no_strongbox field.
+	if err := unmarshal(&legacy); err != nil {
+		return err
+	}
+	if legacy.NoStrongbox != nil {
+		v.Strongbox = !*legacy.NoStrongbox
+	}
+	return nil
 }
 
 type oldConfig struct {

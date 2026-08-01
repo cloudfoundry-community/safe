@@ -114,11 +114,14 @@ options:
 		}
 	})
 
-	t.Run("ignores the no_strongbox key older configs carry", func(t *testing.T) {
+	t.Run("honors the legacy no_strongbox key when present", func(t *testing.T) {
 		home := setHome(t)
-		//Both spellings a pre-opt-in config could hold: true asked for what is
-		// now the default, and false asked for the Strongbox that now takes
-		// strongbox: true to get. Neither target has one.
+		// Pre-opt-in configs wrote no_strongbox with the opposite default:
+		// Strongbox was on unless no_strongbox: true. prod carries the
+		// harmful spelling -- no_strongbox: false meant "yes, Strongbox" --
+		// and must still mean Strongbox. dev's explicit opt-out must still
+		// mean no Strongbox. legacy has neither key at all, which under the
+		// pre-rename default also meant Strongbox.
 		writeFile(t, filepath.Join(home, ".saferc"), `version: 1
 current: prod
 vaults:
@@ -133,10 +136,32 @@ vaults:
 		if err != nil {
 			t.Fatalf("unexpected error: %s", err)
 		}
-		for name, v := range c.Vaults {
-			if v.Strongbox {
-				t.Errorf("%s: got Strongbox, want none without strongbox: true", name)
-			}
+		if v := c.Vaults["prod"]; v == nil || !v.Strongbox {
+			t.Errorf("prod: got Strongbox=%v, want true (no_strongbox: false)", v != nil && v.Strongbox)
+		}
+		if v := c.Vaults["dev"]; v == nil || v.Strongbox {
+			t.Errorf("dev: got Strongbox=%v, want false (no_strongbox: true)", v != nil && v.Strongbox)
+		}
+	})
+
+	t.Run("does not fabricate Strongbox for a config with neither key", func(t *testing.T) {
+		home := setHome(t)
+		// A config written entirely under the new opt-in scheme, or one this
+		// process already rewrote, has neither key. The opt-in default (off)
+		// is deliberate and must not be flipped just because the file is old
+		// enough to be missing the new field.
+		writeFile(t, filepath.Join(home, ".saferc"), `version: 1
+current: prod
+vaults:
+  prod:
+    url: https://vault.prod:8200
+`)
+		c, err := Read()
+		if err != nil {
+			t.Fatalf("unexpected error: %s", err)
+		}
+		if v := c.Vaults["prod"]; v == nil || v.Strongbox {
+			t.Errorf("prod: got Strongbox=%v, want false (no key present)", v != nil && v.Strongbox)
 		}
 	})
 

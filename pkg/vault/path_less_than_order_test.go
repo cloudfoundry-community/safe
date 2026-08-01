@@ -22,6 +22,7 @@ var orderingSample = []string{
 	"secret/a",
 	"secret/a/",
 	"/secret/a",
+	"secret//a",
 	"secret/ab",
 	"secret/a/x",
 	"secret/a/y",

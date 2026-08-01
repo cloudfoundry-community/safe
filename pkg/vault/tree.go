@@ -210,22 +210,30 @@ func PathLessThan(left, right string) bool {
 		}
 	}
 
-	if len(left) < len(right) {
-		return true
-	} else if len(left) > len(right) {
-		return false
+	if len(leftSplit) != len(rightSplit) {
+		return len(leftSplit) < len(rightSplit)
 	}
 
-	//No path is less than itself. Without this, every path that does not end
-	// in a slash compares less than a copy of itself, which is not an ordering
-	// sort.Slice is entitled to be given. Reaching here with different strings
-	// means they differ only in slashes -- `/secret/a` against `secret/a/` --
-	// and the one that is not a folder sorts first.
-	if left == right {
-		return false
+	//The canonical paths agree on every segment: the two are either the same
+	// path spelled differently -- `/secret/a` against `secret//a` -- or one
+	// names a folder and the other the secret at that folder's own path --
+	// `secret/a/` against `secret/a`. A folder sorts after the secret at its
+	// own path, since the folder's contents nest under that same prefix.
+	leftIsDir := strings.HasSuffix(left, "/")
+	rightIsDir := strings.HasSuffix(right, "/")
+	if leftIsDir != rightIsDir {
+		return !leftIsDir
 	}
 
-	return !strings.HasSuffix(left, "/")
+	//Neither the canonical path nor the folder/secret distinction tells the
+	// two apart, which happens for two raw spellings of the very same path
+	// (including left == right, where this reports false, satisfying no
+	// path being less than itself). Breaking the tie on the raw string
+	// itself, rather than looking at left alone, keeps the result the same
+	// regardless of which side of the call left and right land on --
+	// required for a strict weak ordering, and violated before this by
+	// depending only on left's own trailing slash.
+	return left < right
 }
 
 func (s Secrets) Sort() {

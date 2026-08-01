@@ -310,7 +310,11 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 	if !opt.Local.Memory {
 		opt.Local.File = filepath.ToSlash(opt.Local.File)
 		if _, err := os.Stat(opt.Local.File); err == nil || !os.IsNotExist(err) {
-			keys = append(keys, pr("Unseal Key", false, true))
+			key, err := pr("Unseal Key", false, true)
+			if err != nil {
+				return err
+			}
+			keys = append(keys, key)
 		}
 	}
 
@@ -809,7 +813,11 @@ func (c *CLI) cmdUnseal(command string, args ...string) error {
 	keys := make([]string, nkeys)
 
 	for i := range nkeys {
-		keys[i] = pr(fmt.Sprintf("Key #%d", i+1), false, true)
+		key, err := pr(fmt.Sprintf("Key #%d", i+1), false, true)
+		if err != nil {
+			return err
+		}
+		keys[i] = key
 	}
 
 	for _, addr := range addrs {

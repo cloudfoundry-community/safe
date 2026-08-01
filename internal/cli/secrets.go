@@ -71,7 +71,10 @@ func (c *CLI) writeHelper(prompt bool, insecure bool, command string, args ...st
 			continue
 		}
 		if missing {
-			v = pr(k, prompt, insecure)
+			v, err = pr(k, prompt, insecure)
+			if err != nil {
+				return err
+			}
 		}
 		err = s.Set(k, v, opt.SkipIfExists)
 		if err != nil {
@@ -549,7 +552,10 @@ func (c *CLI) cmdValues(command string, args ...string) error {
 		values = append(values, value)
 	}
 	if len(values) == 0 {
-		value := pr("value", false, true)
+		value, err := pr("value", false, true)
+		if err != nil {
+			return err
+		}
 		if value == "" {
 			return fmt.Errorf("no values specified to search for")
 		}

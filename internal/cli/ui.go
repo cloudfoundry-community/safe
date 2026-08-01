@@ -122,21 +122,27 @@ func assertWritablePaths(paths ...string) error {
 	return nil
 }
 
-func pr(label string, confirm bool, secure bool) string {
+func pr(label string, confirm bool, secure bool) (string, error) {
 	if !confirm {
 		if secure {
-			return prompt.Secure("%s: ", label)
+			return prompt.SecureE("%s: ", label)
 		}
-		return prompt.Normal("%s: ", label)
+		return prompt.NormalE("%s: ", label)
 	}
 
 	for {
-		a := prompt.Secure("%s @Y{[hidden]:} ", label)
-		b := prompt.Secure("%s @C{[confirm]:} ", label)
+		a, err := prompt.SecureE("%s @Y{[hidden]:} ", label)
+		if err != nil {
+			return "", err
+		}
+		b, err := prompt.SecureE("%s @C{[confirm]:} ", label)
+		if err != nil {
+			return "", err
+		}
 
 		if a == b && a != "" {
 			_, _ = ansi.Fprintf(os.Stderr, "\n")
-			return a
+			return a, nil
 		}
 		_, _ = ansi.Fprintf(os.Stderr, "\n@Y{oops, try again }(Ctrl-C to cancel)\n\n")
 	}

@@ -40,7 +40,7 @@ func TestCmdStatusReadsTheStrongboxFlagOfTheDashTTarget(t *testing.T) {
 	isolateHome(t)
 	alpha := newSealFake(t, false)
 	beta := newSealFake(t, true)
-	//alpha uses Strongbox, beta does not. Asking alpha's flag sends the
+	//alpha opted into Strongbox, beta did not. Asking alpha's flag sends the
 	// command down the Strongbox branch, which beta cannot answer.
 	writeSaferc(t, `version: 1
 current: alpha
@@ -48,10 +48,10 @@ vaults:
   alpha:
     url: `+alpha.url+`
     token: token-alpha
+    strongbox: true
   beta:
     url: `+beta.url+`
     token: token-beta
-    no_strongbox: true
 `)
 
 	c := newTestCLI(t)

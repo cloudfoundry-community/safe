@@ -27,12 +27,16 @@ type Options struct {
 }
 
 type Vault struct {
-	URL         string   `yaml:"url"`
-	Token       string   `yaml:"token"`
-	CACerts     []string `yaml:"ca_certs,omitempty"`
-	SkipVerify  bool     `yaml:"skip_verify,omitempty"`
-	NoStrongbox bool     `yaml:"no_strongbox,omitempty"`
-	Namespace   string   `yaml:"namespace,omitempty"`
+	URL        string   `yaml:"url"`
+	Token      string   `yaml:"token"`
+	CACerts    []string `yaml:"ca_certs,omitempty"`
+	SkipVerify bool     `yaml:"skip_verify,omitempty"`
+
+	// Strongbox opts a target into the Strongbox seal-state service on port
+	// :8484. Older configs wrote a no_strongbox key instead; it is ignored on
+	// read, and no target has Strongbox unless it says strongbox: true.
+	Strongbox bool   `yaml:"strongbox,omitempty"`
+	Namespace string `yaml:"namespace,omitempty"`
 }
 
 type oldConfig struct {
@@ -368,7 +372,7 @@ func (c *Config) Verified() bool {
 
 func (c *Config) HasStrongbox() bool {
 	if v, ok, _ := c.Find(c.Current); ok {
-		return !v.NoStrongbox
+		return v.Strongbox
 	}
 	return false
 }

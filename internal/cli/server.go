@@ -140,9 +140,8 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 	previous := cfg.Current
 
 	_ = cfg.SetTarget(name, rc.Vault{
-		URL:         fmt.Sprintf("http://127.0.0.1:%d", port),
-		SkipVerify:  false,
-		NoStrongbox: true,
+		URL:        fmt.Sprintf("http://127.0.0.1:%d", port),
+		SkipVerify: false,
 	})
 	_ = cfg.Write()
 

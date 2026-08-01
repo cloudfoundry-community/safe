@@ -116,10 +116,11 @@ func connect(auth bool) *vault.Vault {
 }
 
 // usesStrongbox reports whether a command should look for Strongbox alongside
-// the Vault it is acting on. A nil target means no Vault is configured and the
-// address came from the environment, where there is no flag to consult.
+// the Vault it is acting on. Strongbox is opt-in: only a target made with
+// --strongbox has one, and a nil target -- an address straight from the
+// environment -- never does.
 func usesStrongbox(target *rc.Vault) bool {
-	return target != nil && !target.NoStrongbox
+	return target != nil && target.Strongbox
 }
 
 // targetAddress is the address the client returned by connect is talking to.
@@ -375,8 +376,6 @@ func Main(version, buildTime, gitCommit string) {
 	opt.Init.Persist = true
 	opt.Rekey.Persist = true
 
-	opt.Target.Strongbox = true
-
 	go Signals()
 
 	r := NewRunner()
@@ -432,8 +431,10 @@ as skipping validation from then on.
 effect if the given URL uses an HTTPS scheme.
 
 -s (--strongbox) specifies that the targeted Vault has a strongbox deployed at
-its IP on port :8484. This is true by default. --no-strongbox will cause commands
-that would otherwise use strongbox to run against only the targeted Vault.
+its IP on port :8484, and the seal-state commands -- status, seal, unseal --
+should ask it about every node in the cluster. Without it, which is the
+default, those commands speak to the targeted Vault alone through Vault's own
+API, which any Vault can answer. --no-strongbox is still accepted.
 
 -n (--namespace) specifies a Vault Enterprise namespace to run commands against
 for this target.
@@ -466,12 +467,11 @@ left alone.
 		Type:    AdministrativeCommand,
 		Usage:   "safe status",
 		Description: `
-Returns the seal status of each node in the Vault cluster.
+Returns the seal status of the targeted Vault, read from its @C{/sys/health}
+endpoint, which any Vault can answer.
 
-If strongbox is configured for this target, then strongbox is queried for seal
-status of all nodes in the cluster. If strongbox is disabled for the target,
-the /sys/health endpoint is queried for the target box to return the health of
-just this Vault instance.
+If the target was made with @B{--strongbox}, strongbox is queried instead for
+the seal status of every node in the cluster.
 
 The following options are recognized:
 

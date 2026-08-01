@@ -542,6 +542,28 @@ func TestWriteRequiresEncodedColonPath(t *testing.T) {
 	}
 }
 
+// Writing an empty Secret is how a caller clears a path (safe import of an
+// entry with no keys), and it routes through deleteIfPresent. Write already
+// parsed the path:key syntax once; deleteIfPresent must not re-split a
+// literal colon in the resulting secret path as if it were the path:key
+// separator, or it deletes a key from the wrong sibling secret entirely.
+func TestWriteEmptySecretToColonPathDeletesOnlyThatSecret(t *testing.T) {
+	t.Parallel()
+	v, fv := newTestVault(t)
+	fv.set("secret/host:8200/creds", map[string]string{"user": "admin"})
+	fv.set("secret/host", map[string]string{"alpha": "untouched"})
+
+	err := v.Write(vault.EncodePath("secret/host:8200/creds", "", 0), vault.NewSecret())
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	secretAbsent(t, fv, "secret/host:8200/creds")
+	if kv := mustGetSecret(t, fv, "secret/host"); kv["alpha"] != "untouched" {
+		t.Errorf("sibling secret/host was modified: %v", kv)
+	}
+}
+
 // The tree walk names key nodes "<raw path>:<escaped key>". Basename splits at
 // the last colon not preceded by a backslash, which is always the join colon,
 // so a colon or caret in the path half cannot steal the key. This locks that

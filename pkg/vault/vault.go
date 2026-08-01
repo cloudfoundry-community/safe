@@ -292,7 +292,7 @@ func (v *Vault) Write(path string, s *Secret) error {
 	}
 
 	if s.Empty() {
-		return v.deleteIfPresent(path, DeleteOpts{})
+		return v.deleteIfPresent(EncodePath(path, "", 0), DeleteOpts{})
 	}
 
 	_, err := v.client.Set(path, s.data, nil)
@@ -712,7 +712,7 @@ func (v *Vault) Undelete(path string) error {
 // and if so, it deletes it. Otherwise, no error is thrown
 func (v *Vault) deleteIfPresent(path string, opts DeleteOpts) error {
 	secretpath, _, _ := ParsePath(path)
-	if _, err := v.Read(secretpath); err != nil {
+	if _, err := v.Read(EncodePath(secretpath, "", 0)); err != nil {
 		if IsSecretNotFound(err) {
 			return nil
 		}

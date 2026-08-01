@@ -14,9 +14,11 @@ package cli
 // this file.
 
 import (
+	"errors"
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -308,6 +310,48 @@ func TestCmdLocal_MountListFailureSurfaces(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "Could not list mounts") {
 		t.Errorf("unexpected error wording: %v", err)
+	}
+}
+
+// The paths through die() end in os.Exit, so they can only be observed from
+// outside the process: run the built safe binary against a vault whose
+// server subcommand refuses to start, the way a rejected config plays out.
+func TestSafeLocal_ReportsVaultStartupFailure(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "vault")
+	if err := os.WriteFile(script, []byte(`#!/bin/sh
+if [ "$1" = "version" ]; then
+  echo "Vault v1.15.4"
+  exit 0
+fi
+echo "Error parsing config: oops" >&2
+exit 1
+`), 0700); err != nil { // #nosec G306 -- must be executable
+		t.Fatalf("writing fake vault: %v", err)
+	}
+
+	cmd := exec.Command(safeBinary(t), "local", "--memory", "--port", "8219")
+	cmd.Env = append(os.Environ(),
+		"HOME="+t.TempDir(),
+		"SAFE_TARGET=", "VAULT_ADDR=", "VAULT_TOKEN=",
+		"PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"),
+	)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("expected safe local to exit nonzero, got %v\nstderr:\n%s", err, stderr.String())
+	}
+	if exitErr.ExitCode() != 1 {
+		t.Errorf("exit code: got %d, want 1", exitErr.ExitCode())
+	}
+	if !strings.Contains(stderr.String(), "Vault exited before it became ready") {
+		t.Errorf("expected the early exit reported, got:\n%s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Error parsing config: oops") {
+		t.Errorf("expected Vault's own complaint relayed, got:\n%s", stderr.String())
 	}
 }
 

@@ -130,7 +130,11 @@ func launchLocalServer(engine Engine, params localConfigParams) (*localServer, e
 // answer on the port. The probe carries its own short timeout so a holder
 // that accepts and never speaks HTTP cannot stall the poll.
 func waitLocalReady(engine Engine, port int, srv *localServer) error {
-	const maxStartupWait = 5 * time.Second
+	// The ceiling is generous because it is not the usual way out: a server
+	// that fails exits, and the exit is caught on the spot. The timeout only
+	// catches one that hangs without a word, and a loaded machine can make
+	// an honest startup look like that for longer than you would think.
+	const maxStartupWait = 30 * time.Second
 	const betweenChecksWait = 250 * time.Millisecond
 	probe := &http.Client{Timeout: time.Second}
 	begin := time.Now()

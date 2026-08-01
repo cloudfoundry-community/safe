@@ -1,6 +1,7 @@
 package rc
 
 import (
+	"errors"
 	"os"
 	"os/signal"
 	"runtime"
@@ -125,14 +126,35 @@ func Apply(use string) (Config, error) {
 	return c, nil
 }
 
+// Update applies a single mutation to the persisted configuration. It takes
+// the config write lock, reads the current on-disk state, invokes mutate on
+// it, writes the result atomically, and releases the lock.
+//
+// Reading under the lock, immediately before mutating, is what makes a
+// concurrent writer's delta survive: each mutation lands on the latest file,
+// not on whatever this process read at startup. Keep mutate to the mutation
+// itself -- the lock is held for its duration, so no prompts, no network I/O,
+// nothing slower than the file writes it protects.
+func Update(mutate func(c *Config) error) error {
+	return withLock(func() error {
+		c, err := Read()
+		if err != nil {
+			return err
+		}
+		if err := mutate(&c); err != nil {
+			return err
+		}
+		return c.Write()
+	})
+}
+
 func (c *Config) Write() error {
 	b, err := yaml.Marshal(c)
 	if err != nil {
 		return err
 	}
 
-	err = os.WriteFile(saferc(), b, 0600)
-	if err != nil {
+	if err := writeFileAtomic(saferc(), b, 0600); err != nil {
 		return err
 	}
 
@@ -141,7 +163,9 @@ func (c *Config) Write() error {
 		return err
 	}
 	if v == nil {
-		_ = os.Remove(svtoken())
+		if err := os.Remove(svtoken()); err != nil && !os.IsNotExist(err) {
+			return err
+		}
 		return nil
 	}
 
@@ -162,11 +186,15 @@ func (c *Config) Write() error {
 	if err != nil {
 		return err
 	}
-	if c.Options.ManageVaultToken {
-		_ = os.WriteFile(fmt.Sprintf("%s/.vault-token", userHomeDir()), []byte(v.Token), 0600)
-	}
 
-	return os.WriteFile(svtoken(), b, 0600)
+	// .vault-token before .svtoken, with both attempted and both reported:
+	// managing ~/.vault-token is an explicit operator opt-in, and failing it
+	// silently leaves the Vault CLI authenticated as whoever wrote it last.
+	var tokenErr error
+	if c.Options.ManageVaultToken {
+		tokenErr = writeFileAtomic(fmt.Sprintf("%s/.vault-token", userHomeDir()), []byte(v.Token), 0600)
+	}
+	return errors.Join(tokenErr, writeFileAtomic(svtoken(), b, 0600))
 }
 
 // Returns the path of the file that the certificates were written into

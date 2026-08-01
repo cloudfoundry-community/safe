@@ -38,6 +38,55 @@ func TestIssueRefusesToOverwriteItsOwnSigningCA(t *testing.T) {
 	}
 }
 
+// A trailing slash on the signing authority's path names the same secret,
+// so the refusal has to fire for it too.
+func TestIssueRefusesToOverwriteItsOwnSigningCATrailingSlash(t *testing.T) {
+	isolateHome(t)
+	fv := newCLIFake(t)
+	storeCert(t, fv, "secret/ca", newCA(t, "root"))
+	before := fv.get("secret/ca")
+
+	c := newX509CLI(t)
+	c.opt.X509.Issue.Name = []string{"leaf.example.com"}
+	c.opt.X509.Issue.SignedBy = "secret/ca/"
+
+	err := c.cmdX509Issue("x509 issue", "secret/ca")
+	if err == nil {
+		t.Fatal("issue onto its own CA (trailing slash) = nil, want an error")
+	}
+
+	after := fv.get("secret/ca")
+	for _, attr := range []string{"certificate", "key", "serial", "crl"} {
+		if after[attr] != before[attr] {
+			t.Errorf("the CA's %s attribute changed", attr)
+		}
+	}
+}
+
+// A leading slash on the destination names the same secret too.
+func TestIssueRefusesToOverwriteItsOwnSigningCALeadingSlash(t *testing.T) {
+	isolateHome(t)
+	fv := newCLIFake(t)
+	storeCert(t, fv, "secret/ca", newCA(t, "root"))
+	before := fv.get("secret/ca")
+
+	c := newX509CLI(t)
+	c.opt.X509.Issue.Name = []string{"leaf.example.com"}
+	c.opt.X509.Issue.SignedBy = "secret/ca"
+
+	err := c.cmdX509Issue("x509 issue", "/secret/ca")
+	if err == nil {
+		t.Fatal("issue onto its own CA (leading slash) = nil, want an error")
+	}
+
+	after := fv.get("secret/ca")
+	for _, attr := range []string{"certificate", "key", "serial", "crl"} {
+		if after[attr] != before[attr] {
+			t.Errorf("the CA's %s attribute changed", attr)
+		}
+	}
+}
+
 // Issuing somewhere else under the same authority is untouched.
 func TestIssueUnderACAWritesBothPaths(t *testing.T) {
 	isolateHome(t)

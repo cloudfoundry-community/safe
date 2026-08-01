@@ -20,6 +20,11 @@ import (
 	"golang.org/x/net/http/httpproxy"
 )
 
+// isTerminal reports whether fd is attached to an interactive terminal. A
+// package variable, the same seam prompt.SetReader provides for stdin, so
+// tests can simulate a tty or its absence without a real one.
+var isTerminal = isatty.IsTerminal
+
 type ProxyRouter struct {
 	ProxyConf httpproxy.Config
 }
@@ -165,15 +170,23 @@ func StartSSHTunnel(conf SOCKS5SSHConfig) (*ssh.Client, error) {
 	var err error
 
 	if !conf.SkipHostKeyValidation {
-		if conf.KnownHostsFile == "" {
+		derivedDefault := conf.KnownHostsFile == ""
+		if derivedDefault {
 			if os.Getenv("HOME") == "" {
 				return nil, fmt.Errorf("no home directory set and no known hosts file explicitly given; cannot validate host key")
 			}
 			conf.KnownHostsFile = filepath.Join(os.Getenv("HOME"), ".ssh", "known_hosts")
 		}
 
-		if err = ensureKnownHostsFile(conf.KnownHostsFile); err != nil {
-			return nil, err
+		// Only create the file when its path was derived. A path the caller
+		// named explicitly (SAFE_KNOWN_HOSTS_FILE) must fail hard if it is
+		// missing rather than silently start empty -- see
+		// knownHostsPromptCallback's error below, which is what a missing
+		// explicit file now produces.
+		if derivedDefault {
+			if err = ensureKnownHostsFile(conf.KnownHostsFile); err != nil {
+				return nil, err
+			}
 		}
 
 		hostKeyCallback, err = knownHostsPromptCallback(conf.KnownHostsFile)
@@ -321,8 +334,13 @@ Host key verification failed`
 		}
 
 		//If not, then the key doesn't exist in the host key file
-		//Let's see if we can ask the user if they want to add it
-		if !isatty.IsTerminal(os.Stderr.Fd()) || !promptAddNewKnownHost(hostname, remote, key) {
+		//Let's see if we can ask the user if they want to add it. The
+		//prompt reads its answer from stdin, so whether it can run has to
+		//depend on stdin being a terminal -- gating on stderr let a
+		//redirected stdin (`safe -T bastion import < data.json`) be drained
+		//by the prompt loop looking for "yes"/"no" while stderr happened to
+		//be a terminal.
+		if !isTerminal(os.Stdin.Fd()) || !promptAddNewKnownHost(hostname, remote, key) {
 			//If its not a terminal or the user declined, we're rejecting it
 			return fmt.Errorf("host key verification failed: %w", callbackErr)
 		}

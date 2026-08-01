@@ -109,7 +109,10 @@ func TestFakeLocalVaultHelper(t *testing.T) {
 			if os.Getenv("SAFE_FAKE_VAULT_FAIL") == "mounts-list" {
 				w.WriteHeader(http.StatusInternalServerError)
 				_, _ = w.Write([]byte(`{"errors":["mount listing is down"]}`))
-				scheduleExit(&exitOnce, done)
+				// Deliberately does not scheduleExit: whether this process
+				// goes away is exactly what the die()-path tests need to
+				// observe, and it must be safe's kill that ends it, not a
+				// self-timeout that would pass regardless.
 				return
 			}
 			_, _ = w.Write([]byte(`{"data":{}}`))
@@ -118,7 +121,7 @@ func TestFakeLocalVaultHelper(t *testing.T) {
 			if os.Getenv("SAFE_FAKE_VAULT_FAIL") == "mounts-create" {
 				w.WriteHeader(http.StatusInternalServerError)
 				_, _ = w.Write([]byte(`{"errors":["mount creation is down"]}`))
-				scheduleExit(&exitOnce, done)
+				// See the mounts-list branch above: no scheduleExit here either.
 				return
 			}
 			w.WriteHeader(http.StatusNoContent)
@@ -129,9 +132,14 @@ func TestFakeLocalVaultHelper(t *testing.T) {
 		case r.URL.Path == "/v1/secret/handshake" &&
 			(r.Method == http.MethodPut || r.Method == http.MethodPost):
 			w.WriteHeader(http.StatusNoContent)
-			// The handshake write is the last thing cmdLocal asks of the
-			// Vault; shut down shortly after so the response gets out first.
-			scheduleExit(&exitOnce, done)
+			if os.Getenv("SAFE_FAKE_VAULT_FAIL") != "hang" {
+				// The handshake write is the last thing cmdLocal asks of the
+				// Vault; shut down shortly after so the response gets out
+				// first. "hang" skips this: a signal-teardown test needs
+				// cmdLocal still waiting on this process when the signal
+				// arrives, not racing its own on-schedule exit.
+				scheduleExit(&exitOnce, done)
+			}
 
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -313,29 +321,12 @@ exit 0
 	}
 }
 
-func TestCmdLocal_MountListFailureSurfaces(t *testing.T) {
-	// No t.Parallel — captureStderr mutates os.Stderr.
-	isolateHome(t)
-	installFakeLocalVault(t)
-	t.Setenv("SAFE_FAKE_VAULT_FAIL", "mounts-list")
-	c := localCLI(t)
-	c.opt.Local.Memory = true
-	c.opt.Local.Port = freePort(t)
-	c.opt.Local.As = "local-lsfail-test"
-
-	var err error
-	captureStdout(t, func() {
-		captureStderr(t, func() {
-			err = c.cmdLocal("local")
-		})
-	})
-	if err == nil {
-		t.Fatal("expected the mount-listing failure to surface, got nil")
-	}
-	if !strings.Contains(err.Error(), "Could not list mounts") {
-		t.Errorf("unexpected error wording: %v", err)
-	}
-}
+// TestCmdLocal_MountListFailureSurfaces and TestCmdLocal_MountCreateFailureSurfaces
+// used to call cmdLocal in-process and assert on its returned error. Now that
+// a mount-listing or mount-creation failure routes through die() (os.Exit),
+// calling cmdLocal in-process would end this test binary instead of just the
+// one case; see TestLocalMountFailureKillsEngine (local_port_test.go), which
+// drives the same failures through the built safe binary instead.
 
 // The paths through die() end in os.Exit, so they can only be observed from
 // outside the process: run the built safe binary against a vault whose
@@ -376,29 +367,5 @@ exit 1
 	}
 	if !strings.Contains(stderr.String(), "Error parsing config: oops") {
 		t.Errorf("expected Vault's own complaint relayed, got:\n%s", stderr.String())
-	}
-}
-
-func TestCmdLocal_MountCreateFailureSurfaces(t *testing.T) {
-	// No t.Parallel — captureStderr mutates os.Stderr.
-	isolateHome(t)
-	installFakeLocalVault(t)
-	t.Setenv("SAFE_FAKE_VAULT_FAIL", "mounts-create")
-	c := localCLI(t)
-	c.opt.Local.Memory = true
-	c.opt.Local.Port = freePort(t)
-	c.opt.Local.As = "local-mkfail-test"
-
-	var err error
-	captureStdout(t, func() {
-		captureStderr(t, func() {
-			err = c.cmdLocal("local")
-		})
-	})
-	if err == nil {
-		t.Fatal("expected the mount-creation failure to surface, got nil")
-	}
-	if !strings.Contains(err.Error(), "Could not add") {
-		t.Errorf("unexpected error wording: %v", err)
 	}
 }

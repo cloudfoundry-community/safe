@@ -149,6 +149,45 @@ func TestListDoesNotLookUpFolders(t *testing.T) {
 	}
 }
 
+// A token that can list and read the data of a folder's secrets, but was
+// never granted read on their metadata, used to list the folder before the
+// liveness check moved to the metadata endpoint. It has to be able to list
+// the folder still: a 403 on the metadata lookup falls back to the data read
+// the check used to make, rather than aborting the whole listing.
+func TestListFallsBackToADataReadWhenMetadataIsForbidden(t *testing.T) {
+	isolateHome(t)
+	fv := walkFixture(t)
+	fv.denyMetadataGet("secret/app/db")
+	c := newTestCLI(t)
+
+	fv.forgetRequests()
+	got := lsOut(t, c, "secret/app")
+
+	if !sameEntries(got, []string{"api", "db"}) {
+		t.Errorf("ls secret/app = %v, want [api db] with the fallback keeping db", got)
+	}
+	if reads := dataReads(fv); reads != 1 {
+		t.Errorf("ls fell back with %d data reads, want 1 (only for the "+
+			"secret denied metadata):\n%s", reads, strings.Join(fv.requests(), "\n"))
+	}
+}
+
+// The fallback still drops a secret that is not there at all, on either
+// endpoint, rather than treating a metadata 403 as automatic liveness.
+func TestListFallbackStillOmitsASecretMissingFromBothEndpoints(t *testing.T) {
+	isolateHome(t)
+	fv := walkFixture(t)
+	fv.denyMetadataGet("secret/app/db")
+	fv.deleteV2("secret/app/db", 2)
+	c := newTestCLI(t)
+
+	got := lsOut(t, c, "secret/app")
+
+	if !sameEntries(got, []string{"api"}) {
+		t.Errorf("ls secret/app = %v, want [api] with the deleted, forbidden-metadata db left out", got)
+	}
+}
+
 // sameEntries compares two listings without caring about order.
 func sameEntries(got, want []string) bool {
 	if len(got) != len(want) {

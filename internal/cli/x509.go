@@ -157,7 +157,7 @@ func (c *CLI) cmdX509Issue(command string, args ...string) error {
 	// command line — replaces the authority with the certificate it just
 	// signed, taking its private key, its serial number, and its revocation
 	// list with it, and everything it ever issued becomes unverifiable.
-	if args[0] == opt.X509.Issue.SignedBy {
+	if vault.Canonicalize(args[0]) == vault.Canonicalize(opt.X509.Issue.SignedBy) {
 		return fmt.Errorf("refusing to overwrite the signing authority %s with the certificate it signs", args[0])
 	}
 
@@ -366,7 +366,14 @@ func (c *CLI) cmdX509Reissue(command string, args ...string) error {
 	if err != nil {
 		return err
 	}
-	if caPath != args[0] {
+	//caPath and args[0] can spell the same secret differently (a leading or
+	// trailing slash); FindSigningCA compares them as raw strings and, not
+	// recognizing the alias, reads the authority as a second, separate copy.
+	// Saving that copy back is then a second write to the record the
+	// reissued certificate below is about to overwrite anyway — one that
+	// carries a serial-counter increment the final write does not, since it
+	// lands on a copy that is discarded rather than the one that is saved.
+	if vault.Canonicalize(caPath) != vault.Canonicalize(args[0]) {
 		err = ca.SaveTo(v, caPath, false)
 		if err != nil {
 			return err
@@ -477,7 +484,10 @@ func (c *CLI) cmdX509Renew(command string, args ...string) error {
 	if err != nil {
 		return err
 	}
-	if caPath != args[0] {
+	//See the matching comment in cmdX509Reissue: caPath and args[0] can
+	// spell the same secret differently, and the raw comparison here has to
+	// see through that or write the same record twice.
+	if vault.Canonicalize(caPath) != vault.Canonicalize(args[0]) {
 		err = ca.SaveTo(v, caPath, false)
 		if err != nil {
 			return err

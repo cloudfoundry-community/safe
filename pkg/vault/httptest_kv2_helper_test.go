@@ -172,6 +172,10 @@ func (f *fakeVault) handleKVv2(w http.ResponseWriter, r *http.Request, mount, su
 	case "data":
 		f.serveV2Data(w, r, path)
 	case "metadata":
+		if r.URL.Query().Get("list") == "true" {
+			f.serveV2List(w, r, path)
+			return
+		}
 		f.serveV2Metadata(w, r, path)
 	case "delete":
 		f.applyToVersions(w, r, path, func(v *fakeV2Version) {
@@ -196,8 +200,65 @@ func (f *fakeVault) handleKVv2(w http.ResponseWriter, r *http.Request, mount, su
 	}
 }
 
-// serveV2Data answers reads, writes, and the versionless delete. Callers
+// serveV2List answers a directory listing over a v2 mount's metadata
+// endpoint (the request that vaultkv's V2List sends, ?list=true). It mirrors
+// listUnder, but walks the v2 secret keys rather than the v1 ones. Callers
 // hold f.mu.
+func (f *fakeVault) serveV2List(w http.ResponseWriter, r *http.Request, path string) {
+	if r.Method != http.MethodGet {
+		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if f.forbidden[path] {
+		jsonErr(w, http.StatusForbidden, "permission denied")
+		return
+	}
+
+	children := f.listUnderV2Locked(path)
+	if len(children) == 0 {
+		jsonErr(w, http.StatusNotFound, "")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"data": map[string]any{
+			"keys": children,
+		},
+	})
+}
+
+// listUnderV2Locked returns immediate children under prefix (relative
+// paths), the v2 counterpart of listUnder. Callers hold f.mu.
+func (f *fakeVault) listUnderV2Locked(prefix string) []string {
+	prefix = strings.TrimRight(prefix, "/") + "/"
+	seen := map[string]bool{}
+	var out []string
+	for p, h := range f.v2data {
+		if h == nil || len(h.versions) == 0 {
+			continue
+		}
+		if !strings.HasPrefix(p, prefix) {
+			continue
+		}
+		rel := strings.TrimPrefix(p, prefix)
+		parts := strings.SplitN(rel, "/", 2)
+		entry := parts[0]
+		if len(parts) == 2 {
+			entry = parts[0] + "/"
+		}
+		if !seen[entry] {
+			seen[entry] = true
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+// serveV2Data answers reads, writes, and the versionless delete. A GET
+// (secret read) on a path marked forbidden 403s, modeling a policy that
+// grants list/metadata on a subtree but denies the data read -- the case
+// workGet has to skip and count rather than aborting the whole walk.
+// Callers hold f.mu.
 func (f *fakeVault) serveV2Data(w http.ResponseWriter, r *http.Request, path string) {
 	switch r.Method {
 	case http.MethodPut, http.MethodPost:
@@ -222,6 +283,10 @@ func (f *fakeVault) serveV2Data(w http.ResponseWriter, r *http.Request, path str
 		w.WriteHeader(http.StatusNoContent)
 
 	case http.MethodGet:
+		if f.forbidden[path] {
+			jsonErr(w, http.StatusForbidden, "permission denied")
+			return
+		}
 		number := uint(0)
 		if q := r.URL.Query().Get("version"); q != "" {
 			parsed, err := strconv.ParseUint(q, 10, 64)

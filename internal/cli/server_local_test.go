@@ -93,6 +93,27 @@ func TestCmdLocal_MalformedConfigPairErrors(t *testing.T) {
 	}
 }
 
+// A --listener override that turns TLS on cannot be auto-targeted: the probe
+// and client cmdLocal builds for its own server speak plain HTTP only, so
+// guessing a scheme or trusting a self-signed cert is not on the table. This
+// must be refused before a server is even spawned.
+func TestCmdLocal_ListenerOverrideEnablingTLSIsRefused(t *testing.T) {
+	isolateHome(t)
+	installFakeVaultVersionOnly(t, "Vault v1.15.4")
+	c := localCLI(t)
+	c.opt.Local.Memory = true
+	c.opt.Local.Port = 8219
+	c.opt.Local.Listener = []string{"tls_disable=0"}
+
+	err := c.cmdLocal("local")
+	if err == nil {
+		t.Fatal("expected an error for a --listener override that enables TLS, got nil")
+	}
+	if !strings.Contains(err.Error(), "TLS") {
+		t.Errorf("unexpected error wording: %v", err)
+	}
+}
+
 func TestCmdLocal_MalformedListenerPairErrorsWithOldVault(t *testing.T) {
 	isolateHome(t)
 	// A pre-0.8 Vault takes the legacy "backend" storage-key branch before

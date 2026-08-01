@@ -1,6 +1,8 @@
 package vault_test
 
 import (
+	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -13,9 +15,12 @@ import (
 // server. A prompt that terminates the process instead would skip that defer
 // and strand the Vault mid-rekey.
 //
-// Both cases assert on the fake's rekey state rather than on the cancel call
-// itself: the fake only clears rekeyActive when the DELETE arrives, and only
-// the deferred cancel sends one here.
+// It must also abort without submitting the keys already typed: Submit posts
+// each key to the server in turn, so padding the short slice with an empty
+// string and submitting it anyway would transmit real key material for a
+// rekey already known to be unsatisfiable, before the empty entry is even
+// reached. rekeyUpdateCalls never resets, unlike rekeyProgress, so it is what
+// proves no key reached the server.
 func TestReKeyCancelsOnClosedStdin(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -42,12 +47,10 @@ func TestReKeyCancelsOnClosedStdin(t *testing.T) {
 				t.Errorf("ReKey: expected no keys on failure, got %v", keys)
 			}
 
-			// The message comes from the client rejecting an empty key, and
-			// is what the caller prints. Asserting on it keeps safe out of
-			// the business of inventing its own wording for this failure.
-			want := "key submission failed: no key provided"
-			if !strings.Contains(err.Error(), want) {
-				t.Errorf("ReKey error = %q, want it to contain %q", err, want)
+			// The prompt hit EOF before every key arrived; the error must
+			// still say so, whatever wording wraps it.
+			if !errors.Is(err, io.EOF) {
+				t.Errorf("ReKey error = %v, want it to wrap io.EOF", err)
 			}
 
 			if fv.rekeyNonce == "" {
@@ -55,6 +58,9 @@ func TestReKeyCancelsOnClosedStdin(t *testing.T) {
 			}
 			if fv.rekeyActive {
 				t.Error("rekey still in progress: the deferred cancel did not run")
+			}
+			if fv.rekeyUpdateCalls != 0 {
+				t.Errorf("rekeyUpdateCalls = %d, want 0: a key was submitted although the set could not be completed", fv.rekeyUpdateCalls)
 			}
 		})
 	}

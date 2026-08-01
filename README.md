@@ -140,6 +140,43 @@ hosts* sharing one home directory are not serialized against each
 other.  Writes are still atomic there, so `~/.saferc` cannot be
 corrupted; a simultaneous change from another host can be lost.
 
+### Strongbox targets
+
+A target that has a [Strongbox](https://github.com/starkandwayne/strongbox)
+seal-state service running alongside it (typically on `:8484`)
+needs that recorded so `safe status`, `safe seal`, and `safe
+unseal` know to ask Strongbox about the whole cluster instead of
+just the one node the target's URL points at.  Record it with
+`-s`/`--strongbox` when you create or update the target:
+
+```
+safe target --strongbox https://vault.example.com myvault
+```
+
+`--no-strongbox` is still accepted, and is the default for a
+target created without either flag.
+
+Older versions of `safe` recorded this the other way around, with
+a `no_strongbox` key and Strongbox on by default.  `safe` still
+reads that key when it is present in a `~/.saferc` written by one
+of those versions, and translates it the first time the config is
+read: `no_strongbox: true` carries forward as an explicit
+opt-out, and `no_strongbox: false` carries forward as Strongbox
+enabled — the same meaning either spelling had before.  The next
+command that rewrites `~/.saferc` (`safe target`, `safe auth`,
+`safe local`, and so on) persists that as the new `strongbox` key
+and drops `no_strongbox`; nothing needs to be recreated by hand.
+
+That translation only fires when the key is actually in the file.
+The old default being *on* meant most targets that had Strongbox
+never wrote `no_strongbox` at all, so a `~/.saferc` with neither
+key is ambiguous: it could be a target that never had Strongbox,
+or one that had it under the old default and simply never
+recorded the key.  `safe` resolves that ambiguity in favor of the
+new opt-in default (off) rather than guessing, so a target that
+relied on the old default needs a one-time `safe target --strongbox`
+after upgrading.
+
 Proxies
 -------
 

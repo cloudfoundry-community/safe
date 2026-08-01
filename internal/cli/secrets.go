@@ -71,7 +71,10 @@ func (c *CLI) writeHelper(prompt bool, insecure bool, command string, args ...st
 			continue
 		}
 		if missing {
-			v = pr(k, prompt, insecure)
+			v, err = pr(k, prompt, insecure)
+			if err != nil {
+				return err
+			}
 		}
 		err = s.Set(k, v, opt.SkipIfExists)
 		if err != nil {
@@ -411,10 +414,23 @@ func (c *CLI) cmdLs(command string, args ...string) error {
 							if vault.IsNotFound(err) {
 								continue
 							}
-
-							return err
-						}
-						if len(versions) == 0 || !versions[len(versions)-1].Alive() {
+							if !vaultkv.IsForbidden(err) {
+								return err
+							}
+							//A policy can grant list and read-the-data
+							// without also granting read-the-metadata, and
+							// such a token could list this folder before the
+							// liveness check moved to the metadata endpoint.
+							// Fall back to the read the check used to make,
+							// rather than aborting the whole listing on a
+							// capability it does not strictly need.
+							if _, err := v.Read(vault.EncodePath(child, "", 0)); err != nil {
+								if vault.IsNotFound(err) {
+									continue
+								}
+								return err
+							}
+						} else if len(versions) == 0 || !versions[len(versions)-1].Alive() {
 							continue
 						}
 					}
@@ -536,7 +552,10 @@ func (c *CLI) cmdValues(command string, args ...string) error {
 		values = append(values, value)
 	}
 	if len(values) == 0 {
-		value := pr("value", false, true)
+		value, err := pr("value", false, true)
+		if err != nil {
+			return err
+		}
 		if value == "" {
 			return fmt.Errorf("no values specified to search for")
 		}
@@ -1228,6 +1247,7 @@ func (c *CLI) cmdOption(command string, args ...string) error {
 	}
 
 	changes := map[string]bool{}
+	updated := make([]string, 0, len(args))
 	for _, arg := range args {
 		argSplit := strings.Split(arg, "=")
 		if len(argSplit) != 2 {
@@ -1256,7 +1276,7 @@ func (c *CLI) cmdOption(command string, args ...string) error {
 			if opt.opt == optionKey {
 				found = true
 				changes[opt.opt] = optionVal
-				_, _ = fmt.Printf("updated @G{%s}\n", opt.opt)
+				updated = append(updated, opt.opt)
 				break
 			}
 		}
@@ -1266,12 +1286,19 @@ func (c *CLI) cmdOption(command string, args ...string) error {
 		}
 	}
 
-	return rc.Update(func(c *rc.Config) error {
+	if err := rc.Update(func(c *rc.Config) error {
 		for _, field := range optionFields(&c.Options) {
 			if val, ok := changes[field.opt]; ok {
 				*field.val = val
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+
+	for _, opt := range updated {
+		_, _ = fmt.Printf("updated @G{%s}\n", opt)
+	}
+	return nil
 }

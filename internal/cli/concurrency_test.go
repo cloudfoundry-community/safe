@@ -26,10 +26,13 @@ import (
 var fleetNames = []string{"alpha", "beta", "gamma", "delta"}
 
 // fleetMember is one fleet process plus the means to start it over, for the
-// single failure a member may honestly retry (see awaitFleetReady).
+// single failure a member may honestly retry (see awaitFleetReady), and when
+// this attempt was launched, to tell that failure apart from a readiness
+// regression producing the same message.
 type fleetMember struct {
 	*localProc
-	relaunch func() *localProc
+	relaunch  func() *localProc
+	startedAt time.Time
 }
 
 // startFleet launches one `safe local --memory` per name against a shared
@@ -45,7 +48,7 @@ func startFleet(t *testing.T, home, engine string, extraFor func(name string) []
 		launch := func() *localProc {
 			return startSafeLocal(t, home, engine, name, extra...)
 		}
-		fleet = append(fleet, &fleetMember{localProc: launch(), relaunch: launch})
+		fleet = append(fleet, &fleetMember{localProc: launch(), relaunch: launch, startedAt: time.Now()})
 	}
 	return fleet
 }
@@ -53,8 +56,19 @@ func startFleet(t *testing.T, home, engine string, extraFor func(name string) []
 // awaitFleetReady waits for every process to print its "Now targeting" line.
 // A member that dies fails the test right away, in the process's own words,
 // instead of sitting out the deadline -- with one exception: an engine that
-// lost to machine load, taking longer to listen than cmdLocal waits, is
-// started over a bounded number of times. Any other death is a finding.
+// lost to machine load is started over, a bounded number of times.
+//
+// That one exception used to be granted on message text alone: cmdLocal's
+// own startup-timeout message ("...begin listening...") is what a genuine
+// slow start under load produces, but it is also exactly what a readiness
+// regression produces -- a shorter effective timeout, a changed banner, a
+// probe pointed at the wrong address. All of those would go green here on
+// message text alone. A member that ran the whole maxStartupWait budget
+// before dying honestly waited it out; one that died in a fraction of that
+// did not, and text-matching the same message would have retried it into
+// passing regardless of why. Only the former is retried; the latter fails
+// immediately, elapsed time and all, so a fast failure with this exact
+// wording still reads as the finding it is.
 func awaitFleetReady(t *testing.T, fleet []*fleetMember) {
 	t.Helper()
 	deadline := time.Now().Add(60 * time.Second)
@@ -66,12 +80,14 @@ func awaitFleetReady(t *testing.T, fleet []*fleetMember) {
 			}
 			if m.exited() {
 				out := m.output.String()
-				if strings.Contains(out, "begin listening") && restarts < 2 {
+				elapsed := time.Since(m.startedAt)
+				if strings.Contains(out, "begin listening") && elapsed >= maxStartupWait && restarts < 2 {
 					restarts++
 					m.localProc = m.relaunch()
+					m.startedAt = time.Now()
 					continue
 				}
-				t.Fatalf("%s exited before becoming ready:\n%s", m.name, out)
+				t.Fatalf("%s exited after %s before becoming ready:\n%s", m.name, elapsed, out)
 			}
 			if time.Now().After(deadline) {
 				t.Fatalf("%s did not become ready:\n%s", m.name, m.output.String())
@@ -224,7 +240,7 @@ func TestConcurrentLocalExplicitPorts(t *testing.T) {
 
 	for _, name := range fleetNames {
 		if v, found := cfg.Vaults[name]; found {
-			want := localVaultURL(ports[name])
+			want := localVaultURL(fmt.Sprintf("127.0.0.1:%d", ports[name]))
 			if v.URL != want {
 				t.Errorf("target %q at %s, want %s", name, v.URL, want)
 			}

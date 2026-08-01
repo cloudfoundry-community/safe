@@ -86,6 +86,28 @@ func TestCmdEnvvars_OutputContainsSafeAllProxy(t *testing.T) {
 	}
 }
 
+// safe help envvars renders its Description through escapePercent
+// specifically because the body is handed to go-ansi's Printf as a format
+// string, and a bare '%' in it is read as the start of a verb. safe envvars
+// prints the same constant through a different path that skipped that step,
+// so the percent-encoding example the help text gives ('%40') mangled into
+// go-ansi's missing-verb marker instead of appearing literally.
+func TestCmdEnvvars_RendersAPercentSignLiterally(t *testing.T) {
+	// No t.Parallel — captureStdout mutates os.Stdout.
+	c := &CLI{opt: &Options{}, r: NewRunner()}
+	out := captureStdout(t, func() {
+		if err := c.cmdEnvvars("envvars"); err != nil {
+			t.Fatalf("cmdEnvvars returned unexpected error: %v", err)
+		}
+	})
+	if strings.Contains(out, "MISSING") {
+		t.Errorf("cmdEnvvars mangled a '%%' in its own help text:\n%s", out)
+	}
+	if !strings.Contains(out, "%40") {
+		t.Errorf("expected the literal percent-encoding example '%%40' in the output, got:\n%s", out)
+	}
+}
+
 func TestCmdEnvvars_ReturnsNil(t *testing.T) {
 	// No t.Parallel — captureStdout mutates os.Stdout.
 	c := &CLI{opt: &Options{}, r: NewRunner()}

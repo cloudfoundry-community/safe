@@ -8,6 +8,7 @@
 package vault_test
 
 import (
+	"bytes"
 	"crypto/x509"
 	"strings"
 	"testing"
@@ -87,6 +88,33 @@ func TestFindSigningCANamedAsItself(t *testing.T) {
 	}
 	if got != ca || path != "secret/ca" {
 		t.Errorf("returned %v at %q, want the certificate itself at secret/ca", got, path)
+	}
+}
+
+// A --signed-by that spells the certificate's own path differently (a
+// leading or trailing slash, or a doubled one) still names the same secret,
+// and must take the self-signing branch: returning the certificate object
+// itself, not a second, separately-read copy of it. Sign's CA-rotation
+// branch (ca == x) compares the returned CA against the certificate by
+// pointer identity, so treating a differently-spelled alias as reading a
+// distinct authority breaks self-rotation for exactly the spellings the raw
+// comparison happens to miss -- and, since nothing is written at the
+// aliased path in this test, a fall-through to v.Read would fail closed
+// rather than silently pass.
+func TestFindSigningCARecognizesADifferentlySpelledSelfAlias(t *testing.T) {
+	t.Parallel()
+	v, _ := newTestVault(t)
+	ca := caNamed(t, "self")
+
+	got, path, err := v.FindSigningCA(ca, "secret/ca/", "secret/ca")
+	if err != nil {
+		t.Fatalf("FindSigningCA: %v", err)
+	}
+	if got != ca {
+		t.Error("FindSigningCA read a second copy instead of recognizing the alias")
+	}
+	if path != "secret/ca/" {
+		t.Errorf("path = %q, want secret/ca/ (the certificate's own path)", path)
 	}
 }
 
@@ -174,6 +202,25 @@ func TestFindSigningCAFindsTheCASibling(t *testing.T) {
 	}
 }
 
+// A certificate path with no '/' at all has no sibling to guess: the guess
+// is built by trimming the path back to its parent directory, which does not
+// exist here. It must be reported as no authority found, not panic building
+// the guessed path.
+func TestFindSigningCAWithNoSlashInPathDoesNotPanic(t *testing.T) {
+	t.Parallel()
+	v, _ := newTestVault(t)
+	ca := caNamed(t, "authority")
+	leaf := leafSignedBy(t, ca)
+
+	_, _, err := v.FindSigningCA(leaf, "leaf", "")
+	if err == nil {
+		t.Fatal("FindSigningCA guessed an authority out of nothing")
+	}
+	if !strings.Contains(err.Error(), "no signing authority provided and no 'ca' sibling found") {
+		t.Errorf("error %q should say no authority was found", err)
+	}
+}
+
 func TestFindSigningCAWithNoSiblingToGuess(t *testing.T) {
 	t.Parallel()
 	v, _ := newTestVault(t)
@@ -205,6 +252,32 @@ func TestFindSigningCARefusesAStrangerSibling(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "--signed-by") {
 		t.Errorf("error %q should point at --signed-by", err)
+	}
+}
+
+// A CA rotated to a fresh key (what `safe x509 reissue secret/env/ca`
+// ordinarily does) keeps its Subject; every leaf issued under the old key no
+// longer verifies against the new one cryptographically, but the sibling is
+// still the right authority to renew or reissue under. FindSigningCA has to
+// accept it, or the ordinary rotation workflow is blocked for every leaf
+// underneath.
+func TestFindSigningCAAcceptsARotatedSibling(t *testing.T) {
+	t.Parallel()
+	v, _ := newTestVault(t)
+	oldCA := caNamed(t, "authority")
+	newCA := caNamed(t, "authority") // same subject, fresh key: a rotation
+	leaf := leafSignedBy(t, oldCA)
+	writeCert(t, v, "secret/x/ca", newCA)
+
+	got, path, err := v.FindSigningCA(leaf, "secret/x/cert", "")
+	if err != nil {
+		t.Fatalf("FindSigningCA: %v", err)
+	}
+	if path != "secret/x/ca" {
+		t.Errorf("path = %q, want secret/x/ca", path)
+	}
+	if !bytes.Equal(got.Certificate.Raw, newCA.Certificate.Raw) {
+		t.Error("FindSigningCA did not return the current (rotated) sibling")
 	}
 }
 

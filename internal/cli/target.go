@@ -400,6 +400,7 @@ func (c *CLI) cmdStatus(command string, args ...string) error {
 			statuses = append(statuses, status{addr, state == "sealed"})
 		}
 	} else {
+		hintStrongboxOff()
 		isSealed, err := v.Sealed()
 		if err != nil {
 			return err

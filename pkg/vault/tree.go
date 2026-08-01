@@ -210,22 +210,30 @@ func PathLessThan(left, right string) bool {
 		}
 	}
 
-	if len(left) < len(right) {
-		return true
-	} else if len(left) > len(right) {
-		return false
+	if len(leftSplit) != len(rightSplit) {
+		return len(leftSplit) < len(rightSplit)
 	}
 
-	//No path is less than itself. Without this, every path that does not end
-	// in a slash compares less than a copy of itself, which is not an ordering
-	// sort.Slice is entitled to be given. Reaching here with different strings
-	// means they differ only in slashes -- `/secret/a` against `secret/a/` --
-	// and the one that is not a folder sorts first.
-	if left == right {
-		return false
+	//The canonical paths agree on every segment: the two are either the same
+	// path spelled differently -- `/secret/a` against `secret//a` -- or one
+	// names a folder and the other the secret at that folder's own path --
+	// `secret/a/` against `secret/a`. A folder sorts after the secret at its
+	// own path, since the folder's contents nest under that same prefix.
+	leftIsDir := strings.HasSuffix(left, "/")
+	rightIsDir := strings.HasSuffix(right, "/")
+	if leftIsDir != rightIsDir {
+		return !leftIsDir
 	}
 
-	return !strings.HasSuffix(left, "/")
+	//Neither the canonical path nor the folder/secret distinction tells the
+	// two apart, which happens for two raw spellings of the very same path
+	// (including left == right, where this reports false, satisfying no
+	// path being less than itself). Breaking the tie on the raw string
+	// itself, rather than looking at left alone, keeps the result the same
+	// regardless of which side of the call left and right land on --
+	// required for a strict weak ordering, and violated before this by
+	// depending only on left's own trailing slash.
+	return left < right
 }
 
 func (s Secrets) Sort() {
@@ -882,11 +890,13 @@ func (w *treeWorker) workGet(t secretTree) ([]secretTree, error) {
 	}
 
 	s, err := w.vault.Read(EncodePath(path, "", uint64(t.Version)))
-	//For v1 backends, this is the first non-list Vault access.
-	// If we're unable to get a path that we could list because of permissions,
-	// don't explode.
+	//For v1 backends, this is the first non-list Vault access; for v2
+	// backends, workVersions already read the metadata, but a policy can
+	// grant metadata and deny the data read separately, so this is where
+	// that denial first shows up. Either way, a path we could list but
+	// cannot read is skipped rather than aborting the whole walk.
 	if err != nil {
-		if t.MountVersion == 1 && vaultkv.IsForbidden(err) {
+		if vaultkv.IsForbidden(err) {
 			w.opts.noteSkippedForbidden()
 			return nil, nil
 		}
@@ -1007,7 +1017,7 @@ func (w *treeWorker) workVersions(t secretTree) ([]secretTree, error) {
 		})
 	}
 
-	if !w.opts.FetchAllVersions {
+	if !w.opts.FetchAllVersions && len(ret) > 0 {
 		ret = ret[len(ret)-1:]
 	}
 

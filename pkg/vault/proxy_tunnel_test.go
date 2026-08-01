@@ -9,7 +9,6 @@ import (
 	"encoding/pem"
 	"io"
 	"net"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -213,7 +212,13 @@ func TestTunnelRefusesAnUnknownHostWithNoOneToAsk(t *testing.T) {
 	t.Parallel()
 	sshAddr, _ := startFakeSSHServer(t)
 
+	//An explicitly named known_hosts file is never auto-created; it must
+	//already exist, so seed an empty one to isolate this test's assertion
+	//to the unknown-host refusal it is checking.
 	knownHosts := filepath.Join(t.TempDir(), ".ssh", "known_hosts")
+	if err := ensureKnownHostsFile(knownHosts); err != nil {
+		t.Fatalf("seed known_hosts file: %v", err)
+	}
 	_, loginKey := makeSSHKeyPair(t)
 
 	_, err := StartSSHTunnel(SOCKS5SSHConfig{
@@ -227,12 +232,6 @@ func TestTunnelRefusesAnUnknownHostWithNoOneToAsk(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "host key verification failed") {
 		t.Errorf("unknown host refused for some other reason: %v", err)
-	}
-
-	//The file is made on the way past, so the next run has somewhere to record
-	// the key once it is accepted.
-	if _, statErr := os.Stat(knownHosts); statErr != nil {
-		t.Errorf("known_hosts was not created: %v", statErr)
 	}
 }
 

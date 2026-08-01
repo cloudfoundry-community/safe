@@ -22,6 +22,20 @@ engine_startup_mode "$ENGINE" >/dev/null || {
   echo >&2 "ENGINE must be one of: vault, bao (got '${ENGINE}')"
   exit 1
 }
+# _start_engine_config, the startup path for ENGINE=bao, drives the server's
+# HTTP API directly with curl and parses its JSON with jq. Neither is needed
+# by _start_engine_dev, which only greps a log file, so the check is scoped
+# to the engines that actually take that path rather than added unconditionally.
+if [[ "$(engine_startup_mode "$ENGINE")" == config ]]; then
+  missing=()
+  for dep in curl jq; do
+    command -v "$dep" >/dev/null 2>&1 || missing+=("$dep")
+  done
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    echo >&2 "missing required command(s) for ENGINE=${ENGINE}: ${missing[*]}"
+    exit 1
+  fi
+fi
 # Pin safe's own engine resolution to the one under test, so `safe vault`
 # passthroughs reach the downloaded binary rather than whatever the host has.
 export SAFE_ENGINE="$ENGINE"
@@ -306,6 +320,11 @@ cleanup() {
   # assertion had failed yet -- a suite that could not even download its
   # server would report green.
   local status=$?
+  # This handler ends in exit, which on a signal (INT/QUIT/TERM) fires the
+  # EXIT trap in turn. Clearing every trap here, once entered, keeps that
+  # second firing from running the whole cleanup -- rm -rf t/ and the
+  # pass/fail banner -- a second time.
+  trap - INT QUIT TERM EXIT
   export HOME=${old_home}
   rm -rf t/
   kill_running_engine
@@ -392,14 +411,22 @@ EOF
     dump_log 1
     exit 3
   fi
-  curl -sS -X PUT http://127.0.0.1:8198/v1/sys/unseal \
-    -d "{\"key\":\"$unseal_key\"}" >/dev/null
+  if ! curl -sS -f -X PUT http://127.0.0.1:8198/v1/sys/unseal \
+      -d "{\"key\":\"$unseal_key\"}" >/dev/null; then
+    failed "could not unseal ${ENGINE}"
+    dump_log 1
+    exit 3
+  fi
   # Non-dev mode does not mount secret/, so create it at KV v1 to match what
   # the -dev server leaves behind; the unmount and remount below then runs the
   # same way on both engines.
-  curl -sS -X POST -H "X-Vault-Token: $root_token" \
-    http://127.0.0.1:8198/v1/sys/mounts/secret \
-    -d '{"type":"kv","options":{"version":"1"}}' >/dev/null
+  if ! curl -sS -f -X POST -H "X-Vault-Token: $root_token" \
+      http://127.0.0.1:8198/v1/sys/mounts/secret \
+      -d '{"type":"kv","options":{"version":"1"}}' >/dev/null; then
+    failed "could not mount secret/ on ${ENGINE}"
+    dump_log 1
+    exit 3
+  fi
 }
 
 restart_engine_server() {

@@ -71,19 +71,22 @@ func TestKnownHostsFileIsLeftAloneWhenPresent(t *testing.T) {
 	}
 }
 
-// TestStartSSHTunnelCreatesKnownHostsFile checks the same through the caller.
-// The tunnel cannot be made here -- the private key is not one -- but the file
-// has to exist by the time that is the reason it fails, because a missing file
-// used to be the reason instead.
-func TestStartSSHTunnelCreatesKnownHostsFile(t *testing.T) {
-	t.Parallel()
-	path := filepath.Join(t.TempDir(), ".ssh", "known_hosts")
+// TestStartSSHTunnelCreatesDerivedKnownHostsFile checks the same through the
+// caller, for the case where no known_hosts file was named at all and safe
+// derives ~/.ssh/known_hosts. The tunnel cannot be made here -- the private
+// key is not one -- but the file has to exist by the time that is the reason
+// it fails, because a missing file used to be the reason instead.
+//
+// t.Setenv forbids t.Parallel, so this test runs serially.
+func TestStartSSHTunnelCreatesDerivedKnownHostsFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".ssh", "known_hosts")
 
 	_, err := StartSSHTunnel(SOCKS5SSHConfig{
-		Host:           "127.0.0.1:22",
-		User:           "someone",
-		PrivateKey:     []byte("this is not a private key"),
-		KnownHostsFile: path,
+		Host:       "127.0.0.1:22",
+		User:       "someone",
+		PrivateKey: []byte("this is not a private key"),
 	})
 	if err == nil {
 		t.Fatal("expected the unusable private key to be refused")
@@ -94,6 +97,36 @@ func TestStartSSHTunnelCreatesKnownHostsFile(t *testing.T) {
 
 	if _, statErr := os.Stat(path); statErr != nil {
 		t.Errorf("known_hosts was not created: %v", statErr)
+	}
+}
+
+// TestStartSSHTunnelRefusesMissingExplicitKnownHostsFile covers a
+// SAFE_KNOWN_HOSTS_FILE that names a curated file which is not there --
+// typically a typo'd path, or a mount that has not appeared yet. Before this
+// behavior was fixed, safe created an empty file at the mistake and silently
+// fell back to trust-on-first-use for whatever key the host offered, in
+// place of the verification the operator configured. A path the caller named
+// explicitly must fail hard instead, the way ssh itself refuses a bad
+// -o UserKnownHostsFile.
+func TestStartSSHTunnelRefusesMissingExplicitKnownHostsFile(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "curated", "known_hosts")
+
+	_, err := StartSSHTunnel(SOCKS5SSHConfig{
+		Host:           "127.0.0.1:22",
+		User:           "someone",
+		PrivateKey:     []byte("this is not a private key"),
+		KnownHostsFile: path,
+	})
+	if err == nil {
+		t.Fatal("expected the missing explicit known_hosts file to be refused")
+	}
+	if !strings.Contains(err.Error(), "known_hosts") && !strings.Contains(err.Error(), "known hosts") {
+		t.Errorf("tunnel failed for some reason other than the known_hosts file: %v", err)
+	}
+
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Errorf("explicit known_hosts file was created at a typo'd path: %v", statErr)
 	}
 }
 

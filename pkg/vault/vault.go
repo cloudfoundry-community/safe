@@ -292,7 +292,7 @@ func (v *Vault) Write(path string, s *Secret) error {
 	}
 
 	if s.Empty() {
-		return v.deleteIfPresent(path, DeleteOpts{})
+		return v.deleteIfPresent(EncodePath(path, "", 0), DeleteOpts{})
 	}
 
 	_, err := v.client.Set(path, s.data, nil)
@@ -712,7 +712,7 @@ func (v *Vault) Undelete(path string) error {
 // and if so, it deletes it. Otherwise, no error is thrown
 func (v *Vault) deleteIfPresent(path string, opts DeleteOpts) error {
 	secretpath, _, _ := ParsePath(path)
-	if _, err := v.Read(secretpath); err != nil {
+	if _, err := v.Read(EncodePath(secretpath, "", 0)); err != nil {
 		if IsSecretNotFound(err) {
 			return nil
 		}
@@ -1030,7 +1030,12 @@ func DecodeErrorResponse(body []byte) error {
 func (v *Vault) FindSigningCA(cert *X509, certPath string, signPath string) (*X509, string, error) {
 	/* find the CA */
 	if signPath != "" {
-		if certPath == signPath {
+		// Compared canonicalized: a leading or trailing slash, or a doubled
+		// one, still names the same secret as certPath, and Sign's
+		// CA-rotation branch (ca == x) depends on this returning the
+		// certificate object itself -- by pointer identity -- for that
+		// case, not a second copy read back from the Vault.
+		if Canonicalize(certPath) == Canonicalize(signPath) {
 			return cert, certPath, nil
 		} else {
 			s, err := v.Read(signPath)
@@ -1057,8 +1062,14 @@ func (v *Vault) FindSigningCA(cert *X509, certPath string, signPath string) (*X5
 		if err == nil {
 			return cert, certPath, nil
 		} else {
-			// Lets see if we can guess the CA if none was provided
-			caPath := certPath[0:strings.LastIndex(certPath, "/")] + "/ca"
+			// Lets see if we can guess the CA if none was provided. A path
+			// with no '/' at all has no parent directory to guess a sibling
+			// under.
+			slash := strings.LastIndex(certPath, "/")
+			if slash < 0 {
+				return nil, "", fmt.Errorf("no signing authority provided and no 'ca' sibling found")
+			}
+			caPath := certPath[0:slash] + "/ca"
 			s, err := v.Read(caPath)
 			if err != nil {
 				return nil, "", fmt.Errorf("no signing authority provided and no 'ca' sibling found")
@@ -1075,11 +1086,18 @@ func (v *Vault) FindSigningCA(cert *X509, certPath string, signPath string) (*X5
 			// with a different issuer than the one it went in with, which
 			// is not what renewing or reissuing was asked to do. Naming an
 			// authority explicitly still moves a certificate to a new one.
-			if err := ca.Certificate.CheckSignature(
-				cert.Certificate.SignatureAlgorithm,
-				cert.Certificate.RawTBSCertificate,
-				cert.Certificate.Signature,
-			); err != nil {
+			//
+			// A cryptographic signature check would also refuse the
+			// ordinary case of CA rotation: reissuing the CA itself with a
+			// fresh key (the ca == x branch in Sign) replaces its public
+			// key, so no certificate signed under the old key verifies
+			// against it anymore, even though the sibling is still the
+			// right authority. Comparing the sibling's Subject to the
+			// certificate's Issuer instead catches an unrelated stranger CA
+			// the same way, without being upset by a key rotation: the
+			// Subject and Issuer stay equal across one, and differ for a
+			// sibling that never issued the certificate at all.
+			if !bytes.Equal(ca.Certificate.RawSubject, cert.Certificate.RawIssuer) {
 				return nil, "", fmt.Errorf("%s did not sign %s; name its authority with --signed-by", caPath, certPath)
 			}
 			return ca, caPath, nil

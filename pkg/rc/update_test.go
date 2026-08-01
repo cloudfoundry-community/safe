@@ -70,6 +70,36 @@ func TestUpdateAppliesDeltaToLatestState(t *testing.T) {
 	}
 }
 
+// A current target that cannot be resolved (renamed away from under it, or a
+// legacy conversion that leaves Current ambiguous) must abort the whole write,
+// not just the trailing ~/.svtoken step: partial application leaves ~/.saferc
+// holding the mutation while ~/.svtoken goes stale, and every subsequent
+// command disagrees with itself about the current target.
+func TestUpdateAbortsWriteWhenCurrentUnresolvable(t *testing.T) {
+	setHome(t)
+
+	writeFile(t, saferc(), "version: 1\ncurrent: ghost\nvaults:\n  keep:\n    url: http://keep\n")
+	writeFile(t, svtoken(), "vault: http://stale\ntoken: stale-token\n")
+
+	beforeRC := readFile(t, saferc())
+	beforeSV := readFile(t, svtoken())
+
+	err := Update(func(c *Config) error {
+		c.Vaults["another"] = &Vault{URL: "http://another"}
+		return nil
+	})
+	if err == nil {
+		t.Fatalf("Update succeeded with an unresolvable current target")
+	}
+
+	if after := readFile(t, saferc()); after != beforeRC {
+		t.Errorf(".saferc changed after aborted write:\n%s", after)
+	}
+	if after := readFile(t, svtoken()); after != beforeSV {
+		t.Errorf(".svtoken changed after aborted write:\n%s", after)
+	}
+}
+
 func TestUpdateMutationErrorAbortsWrite(t *testing.T) {
 	setHome(t)
 
@@ -122,6 +152,36 @@ func TestUpdateUpgradesLegacyConfig(t *testing.T) {
 	}
 	if v.Token != "sekrit-token" || !v.SkipVerify {
 		t.Errorf("legacy target = %+v", v)
+	}
+}
+
+// A legacy no_strongbox key, once translated into Strongbox on read, must
+// come back out on the next write as the new strongbox key -- not as the
+// legacy key re-emitted, and not lost. That is what makes the translated
+// intent durable instead of re-derived (or re-lost) on every read.
+func TestUpdateCarriesLegacyStrongboxIntentForward(t *testing.T) {
+	setHome(t)
+
+	writeFile(t, saferc(), "version: 1\ncurrent: prod\nvaults:\n  prod:\n    url: http://prod\n    no_strongbox: false\n")
+
+	if err := Update(func(c *Config) error { return nil }); err != nil {
+		t.Fatalf("Update: %s", err)
+	}
+
+	raw := readFile(t, saferc())
+	if strings.Contains(raw, "no_strongbox") {
+		t.Errorf(".saferc still carries the legacy key:\n%s", raw)
+	}
+	if !strings.Contains(raw, "strongbox: true") {
+		t.Errorf(".saferc did not carry Strongbox forward as the new key:\n%s", raw)
+	}
+
+	c, err := Read()
+	if err != nil {
+		t.Fatalf("Read: %s", err)
+	}
+	if v := c.Vaults["prod"]; v == nil || !v.Strongbox {
+		t.Errorf("prod: got Strongbox=%v after rewrite, want true", v != nil && v.Strongbox)
 	}
 }
 

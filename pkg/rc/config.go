@@ -34,10 +34,39 @@ type Vault struct {
 	SkipVerify bool     `yaml:"skip_verify,omitempty"`
 
 	// Strongbox opts a target into the Strongbox seal-state service on port
-	// :8484. Older configs wrote a no_strongbox key instead; it is ignored on
-	// read, and no target has Strongbox unless it says strongbox: true.
+	// :8484. Older configs wrote a no_strongbox key instead, with the
+	// opposite default: Strongbox was on unless no_strongbox: true.
+	// UnmarshalYAML honors that key when the file has it, so an upgrade
+	// does not silently disarm Strongbox for every pre-existing target; a
+	// file with neither key gets the new opt-in default (false).
 	Strongbox bool   `yaml:"strongbox,omitempty"`
 	Namespace string `yaml:"namespace,omitempty"`
+}
+
+// UnmarshalYAML translates the legacy no_strongbox key into Strongbox when
+// the key is present in the document, and leaves Strongbox at its zero value
+// (the new opt-in default) when it is not. Marshal only ever writes the
+// strongbox key, so the translated intent -- not the legacy key -- is what a
+// subsequent write persists.
+func (v *Vault) UnmarshalYAML(unmarshal func(any) error) error {
+	type vaultAlias Vault
+	if err := unmarshal((*vaultAlias)(v)); err != nil {
+		return err
+	}
+
+	var legacy struct {
+		NoStrongbox *bool `yaml:"no_strongbox"`
+	}
+	// The decoder replays the same node into a second target; unrecognized
+	// keys (url, token, ...) are ignored here just as strongbox is ignored
+	// above by vaultAlias, which has no no_strongbox field.
+	if err := unmarshal(&legacy); err != nil {
+		return err
+	}
+	if legacy.NoStrongbox != nil {
+		v.Strongbox = !*legacy.NoStrongbox
+	}
+	return nil
 }
 
 type oldConfig struct {
@@ -154,37 +183,47 @@ func (c *Config) write() error {
 		return err
 	}
 
-	if err := writeFileAtomic(saferc(), b, 0600); err != nil {
-		return err
-	}
-
+	// Resolve the current target and marshal ~/.svtoken's content before
+	// replacing any file. c.Vault("") fails when Current names a target that
+	// is missing or ambiguous; catching that here means the failure aborts
+	// with nothing written, instead of leaving ~/.saferc replaced while
+	// ~/.svtoken -- and the token tools like Genesis read from it -- goes
+	// stale and the caller is told the write failed.
 	v, err := c.Vault("")
 	if err != nil {
 		return err
 	}
+
+	var svBytes []byte
+	if v != nil {
+		sv := struct {
+			Vault      string `yaml:"vault"` /* this is different than Vault.URL */
+			Token      string `yaml:"token"`
+			SkipVerify bool   `yaml:"skip_verify"`
+			CACerts    string `yaml:"ca_certs,omitempty"`
+			Namespace  string `yaml:"namespace,omitempty"`
+		}{
+			Vault:      v.URL,
+			Token:      v.Token,
+			SkipVerify: v.SkipVerify,
+			CACerts:    strings.Join(v.CACerts, "\n"),
+			Namespace:  v.Namespace,
+		}
+		svBytes, err = yaml.Marshal(sv)
+		if err != nil {
+			return err
+		}
+	}
+
+	if err := writeFileAtomic(saferc(), b, 0600); err != nil {
+		return err
+	}
+
 	if v == nil {
 		if err := os.Remove(svtoken()); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 		return nil
-	}
-
-	sv := struct {
-		Vault      string `yaml:"vault"` /* this is different than Vault.URL */
-		Token      string `yaml:"token"`
-		SkipVerify bool   `yaml:"skip_verify"`
-		CACerts    string `yaml:"ca_certs,omitempty"`
-		Namespace  string `yaml:"namespace,omitempty"`
-	}{
-		Vault:      v.URL,
-		Token:      v.Token,
-		SkipVerify: v.SkipVerify,
-		CACerts:    strings.Join(v.CACerts, "\n"),
-		Namespace:  v.Namespace,
-	}
-	b, err = yaml.Marshal(sv)
-	if err != nil {
-		return err
 	}
 
 	// .vault-token before .svtoken, with both attempted and both reported:
@@ -194,7 +233,7 @@ func (c *Config) write() error {
 	if c.Options.ManageVaultToken {
 		tokenErr = writeFileAtomic(fmt.Sprintf("%s/.vault-token", userHomeDir()), []byte(v.Token), 0600)
 	}
-	return errors.Join(tokenErr, writeFileAtomic(svtoken(), b, 0600))
+	return errors.Join(tokenErr, writeFileAtomic(svtoken(), svBytes, 0600))
 }
 
 // Returns the path of the file that the certificates were written into

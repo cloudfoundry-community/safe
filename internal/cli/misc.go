@@ -2,8 +2,10 @@ package cli
 
 import (
 	"io"
+	"net/http"
 	"net/http/httputil"
 	"os"
+	"slices"
 	"strings"
 
 	fmt "github.com/jhunt/go-ansi"
@@ -167,6 +169,15 @@ func (c *CLI) cmdFmt(command string, args ...string) error {
 	return v.Write(path, s)
 }
 
+// curlMethods are the methods safe curl will send. LIST is Vault's own; the
+// rest are the ones a Vault endpoint answers to.
+var curlMethods = []string{"GET", "LIST", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
+
+// isCurlMethod reports whether s names an HTTP method, whatever its case.
+func isCurlMethod(s string) bool {
+	return slices.Contains(curlMethods, strings.ToUpper(s))
+}
+
 func (c *CLI) cmdCurl(command string, args ...string) error {
 	opt := c.opt
 	r := c.r
@@ -180,13 +191,25 @@ func (c *CLI) cmdCurl(command string, args ...string) error {
 		data        []byte
 	)
 
+	//Whatever was given first was taken for the method and whatever was given
+	// alone was taken for the URI, neither of them read. So safe curl GET
+	// asked the Vault for /v1/GET, and safe curl /sys/health '{}' sent a
+	// request whose method was /SYS/HEALTH.
 	method = "GET"
-	if len(args) < 1 {
+	switch {
+	case len(args) < 1:
 		return r.Usage("curl")
-	} else if len(args) == 1 {
+	case len(args) == 1:
+		if isCurlMethod(args[0]) {
+			return fmt.Errorf("no REL-URI given to %s", strings.ToUpper(args[0]))
+		}
 		url = args[0]
-	} else {
+	default:
 		method = strings.ToUpper(args[0])
+		if !isCurlMethod(method) {
+			return fmt.Errorf("%s is not an HTTP method: give one of %s",
+				args[0], strings.Join(curlMethods, ", "))
+		}
 		url = args[1]
 		data = []byte(strings.Join(args[2:], " "))
 	}
@@ -206,8 +229,20 @@ func (c *CLI) cmdCurl(command string, args ...string) error {
 		_, _ = fmt.Fprintf(os.Stdout, "%s\n", string(b))
 
 	} else {
-		r, _ := httputil.DumpResponse(res, true)
-		_, _ = fmt.Fprintf(os.Stdout, "%s\n", r)
+		dump, err := httputil.DumpResponse(res, true)
+		if err != nil {
+			return fmt.Errorf("could not read the response to %s %s: %w", method, url, err)
+		}
+		_, _ = fmt.Fprintf(os.Stdout, "%s\n", dump)
+	}
+
+	//A request the Vault refused left safe exiting 0, so a script asking for
+	// a path it may not read, or one that is not there, could not tell that
+	// apart from a request that worked. Under --data-only, where the status
+	// line is not printed either, nothing at all said so. What Vault answered
+	// is printed either way: reading it is what the command is for.
+	if res.StatusCode >= http.StatusBadRequest {
+		return fmt.Errorf("%s %s: %s", method, url, res.Status)
 	}
 	return nil
 }

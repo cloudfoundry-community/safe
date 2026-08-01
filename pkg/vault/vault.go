@@ -121,8 +121,12 @@ func shouldDebug() bool {
 	return d != "" && d != "false" && d != "0" && d != "no" && d != "off"
 }
 
+// Curl sends one request to the Vault API. Only the path of the URI is
+// canonicalized: the rules for a secret path -- collapse repeated slashes,
+// drop a trailing one -- were run over the whole string, query and all, so a
+// query carrying a URL was sent with its slashes collapsed, ?u=http://a/b
+// arriving as ?u=http:/a/b, and a value ending in a slash arrived without it.
 func (v *Vault) Curl(method string, path string, body []byte) (*http.Response, error) {
-	path = Canonicalize(path)
 	u, err := url.Parse(path)
 	if err != nil {
 		return nil, fmt.Errorf("could not parse input path: %w", err)
@@ -133,7 +137,7 @@ func (v *Vault) Curl(method string, path string, body []byte) (*http.Response, e
 		return nil, fmt.Errorf("could not parse query: %w", err)
 	}
 
-	return v.client.Client.Curl(method, u.Path, query, bytes.NewBuffer(body))
+	return v.client.Client.Curl(method, Canonicalize(u.Path), query, bytes.NewBuffer(body))
 }
 
 // Read checks the Vault for a Secret at the specified path, and returns it.

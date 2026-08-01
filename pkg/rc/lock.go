@@ -10,9 +10,15 @@ import (
 )
 
 // configMutex serializes writers within one process. flock(2) locks are held
-// per open file description, not per process, so without it two goroutines
-// taking the file lock through separate opens would not conflict -- and two
-// through a shared one would silently succeed together.
+// per open file description, not per process, so two goroutines each taking
+// the lock through their own flock.New (as withLock does on every call)
+// already conflict correctly without any help; what they would not do is
+// queue quietly -- each ends up polling TryLockContext against the other at
+// lockRetryDelay until one gives up or wins, instead of one running while the
+// rest wait. configMutex turns that churn into a plain queue. It also covers
+// the case flock alone cannot: two goroutines sharing one open file
+// description (the same *flock.Flock, or an fd inherited across a fork)
+// would not conflict with themselves at all.
 var configMutex sync.Mutex
 
 // How long a writer waits for whoever holds the lock, and how often it asks

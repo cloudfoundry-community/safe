@@ -1075,11 +1075,18 @@ func (v *Vault) FindSigningCA(cert *X509, certPath string, signPath string) (*X5
 			// with a different issuer than the one it went in with, which
 			// is not what renewing or reissuing was asked to do. Naming an
 			// authority explicitly still moves a certificate to a new one.
-			if err := ca.Certificate.CheckSignature(
-				cert.Certificate.SignatureAlgorithm,
-				cert.Certificate.RawTBSCertificate,
-				cert.Certificate.Signature,
-			); err != nil {
+			//
+			// A cryptographic signature check would also refuse the
+			// ordinary case of CA rotation: reissuing the CA itself with a
+			// fresh key (the ca == x branch in Sign) replaces its public
+			// key, so no certificate signed under the old key verifies
+			// against it anymore, even though the sibling is still the
+			// right authority. Comparing the sibling's Subject to the
+			// certificate's Issuer instead catches an unrelated stranger CA
+			// the same way, without being upset by a key rotation: the
+			// Subject and Issuer stay equal across one, and differ for a
+			// sibling that never issued the certificate at all.
+			if !bytes.Equal(ca.Certificate.RawSubject, cert.Certificate.RawIssuer) {
 				return nil, "", fmt.Errorf("%s did not sign %s; name its authority with --signed-by", caPath, certPath)
 			}
 			return ca, caPath, nil

@@ -8,6 +8,7 @@
 package vault_test
 
 import (
+	"bytes"
 	"crypto/x509"
 	"strings"
 	"testing"
@@ -205,6 +206,32 @@ func TestFindSigningCARefusesAStrangerSibling(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "--signed-by") {
 		t.Errorf("error %q should point at --signed-by", err)
+	}
+}
+
+// A CA rotated to a fresh key (what `safe x509 reissue secret/env/ca`
+// ordinarily does) keeps its Subject; every leaf issued under the old key no
+// longer verifies against the new one cryptographically, but the sibling is
+// still the right authority to renew or reissue under. FindSigningCA has to
+// accept it, or the ordinary rotation workflow is blocked for every leaf
+// underneath.
+func TestFindSigningCAAcceptsARotatedSibling(t *testing.T) {
+	t.Parallel()
+	v, _ := newTestVault(t)
+	oldCA := caNamed(t, "authority")
+	newCA := caNamed(t, "authority") // same subject, fresh key: a rotation
+	leaf := leafSignedBy(t, oldCA)
+	writeCert(t, v, "secret/x/ca", newCA)
+
+	got, path, err := v.FindSigningCA(leaf, "secret/x/cert", "")
+	if err != nil {
+		t.Fatalf("FindSigningCA: %v", err)
+	}
+	if path != "secret/x/ca" {
+		t.Errorf("path = %q, want secret/x/ca", path)
+	}
+	if !bytes.Equal(got.Certificate.Raw, newCA.Certificate.Raw) {
+		t.Error("FindSigningCA did not return the current (rotated) sibling")
 	}
 }
 

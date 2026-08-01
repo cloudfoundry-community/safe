@@ -27,6 +27,22 @@ import (
 	"time"
 )
 
+// freePort reserves an ephemeral port for one test's Vault. Without it every
+// test here listens on cmdLocal's default port, and a helper from the
+// previous test that has not finished its post-response exit yet is still
+// holding it — the new helper dies with exit status 9 while cmdLocal talks
+// to the stale one and sees the wrong failure.
+func freePort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserving a port: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+	return port
+}
+
 // scheduleExit closes done once, a beat after the current response, so the
 // helper's answer reaches the client before the process goes away.
 func scheduleExit(once *sync.Once, done chan struct{}) {
@@ -157,6 +173,7 @@ func TestCmdLocal_MemoryBackedLifecycle(t *testing.T) {
 	installFakeLocalVault(t)
 	c := localCLI(t)
 	c.opt.Local.Memory = true
+	c.opt.Local.Port = freePort(t)
 	c.opt.Local.As = "local-mem-test"
 
 	var err error
@@ -201,6 +218,7 @@ func TestCmdLocal_FileBackedLifecycleWithRandomName(t *testing.T) {
 	installFakeLocalVault(t)
 	c := localCLI(t)
 	c.opt.Local.File = filepath.Join(t.TempDir(), "local-vault.db")
+	c.opt.Local.Port = freePort(t)
 
 	var err error
 	var stderr string
@@ -243,6 +261,7 @@ vaults:
 	installFakeLocalVault(t)
 	c := localCLI(t)
 	c.opt.Local.Memory = true
+	c.opt.Local.Port = freePort(t)
 	c.opt.Local.As = "local-prev-test"
 
 	var err error
@@ -297,6 +316,7 @@ func TestCmdLocal_MountListFailureSurfaces(t *testing.T) {
 	t.Setenv("SAFE_FAKE_VAULT_FAIL", "mounts-list")
 	c := localCLI(t)
 	c.opt.Local.Memory = true
+	c.opt.Local.Port = freePort(t)
 	c.opt.Local.As = "local-lsfail-test"
 
 	var err error
@@ -362,6 +382,7 @@ func TestCmdLocal_MountCreateFailureSurfaces(t *testing.T) {
 	t.Setenv("SAFE_FAKE_VAULT_FAIL", "mounts-create")
 	c := localCLI(t)
 	c.opt.Local.Memory = true
+	c.opt.Local.Port = freePort(t)
 	c.opt.Local.As = "local-mkfail-test"
 
 	var err error

@@ -20,6 +20,26 @@ import (
 	"github.com/cloudfoundry-community/safe/pkg/vault"
 )
 
+// localVaultURL is where the server cmdLocal starts can be reached: loopback,
+// plain HTTP, on the port cmdLocal chose.
+func localVaultURL(port int) string {
+	return fmt.Sprintf("http://127.0.0.1:%d", port)
+}
+
+// connectLocal builds a client aimed at the server cmdLocal launched --
+// deliberately not connect(), which derives its target from the environment
+// as applied from ~/.saferc. Everything cmdLocal does to its server -- the
+// readiness poll, Init, Unseal, the mount -- must go to the process it
+// started, and no state of ~/.saferc (stale, lost to a concurrent writer, or
+// corrupted) may aim those calls anywhere else. Init against a foreign vault
+// is the incident this guards against.
+func connectLocal(port int, token string) (*vault.Vault, error) {
+	return vault.NewVault(vault.VaultConfig{
+		URL:   localVaultURL(port),
+		Token: token,
+	})
+}
+
 func (c *CLI) cmdLocal(command string, args ...string) error {
 	opt := c.opt
 
@@ -139,13 +159,9 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 	}
 	previous := cfg.Current
 
-	_ = cfg.SetTarget(name, rc.Vault{
-		URL:        fmt.Sprintf("http://127.0.0.1:%d", port),
-		SkipVerify: false,
-	})
 	if err := rc.Update(func(c *rc.Config) error {
 		return c.SetTarget(name, rc.Vault{
-			URL:        fmt.Sprintf("http://127.0.0.1:%d", port),
+			URL:        localVaultURL(port),
 			SkipVerify: false,
 		})
 	}); err != nil {
@@ -153,11 +169,15 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 		// than leave one running that no config file points at.
 		die(fmt.Errorf("Unable to register '%s' in ~/.saferc: %w", name, err))
 	}
+	// Outputs of the decision just made, for anything spawned from here on.
+	// Never read back as inputs: the client below is built from the port
+	// directly.
+	_ = os.Setenv("VAULT_ADDR", localVaultURL(port))
 
-	if _, err := rc.Apply(""); err != nil {
-		return err
+	v, err := connectLocal(port, "")
+	if err != nil {
+		die(fmt.Errorf("Unable to build a client for the local %s server: %w", engine.Title(), err))
 	}
-	v := connect(false)
 
 	const maxStartupWait = 5 * time.Second
 	const betweenChecksWait = 250 * time.Millisecond
@@ -216,11 +236,14 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 		// to reach it instead. The token going to stderr is deliberate: this
 		// flow already prints the seal key, and the server is loopback-only.
 		_, _ = fmt.Fprintf(os.Stderr, "@R{!! Unable to save the root token in ~/.saferc: %s}\n", err)
-		_, _ = fmt.Fprintf(os.Stderr, "@R{!! The %s server at} @C{http://127.0.0.1:%d} @R{is still running.}\n", engine.Title(), port)
+		_, _ = fmt.Fprintf(os.Stderr, "@R{!! The %s server at} @C{%s} @R{is still running.}\n", engine.Title(), localVaultURL(port))
 		_, _ = fmt.Fprintf(os.Stderr, "@R{!! Its root token is} @M{%s}\n", token)
-		_, _ = fmt.Fprintf(os.Stderr, "@R{!! To reach it:} @C{safe target %s http://127.0.0.1:%d && safe auth token}\n", name, port)
+		_, _ = fmt.Fprintf(os.Stderr, "@R{!! To reach it:} @C{safe target %s %s && safe auth token}\n", name, localVaultURL(port))
 	}
-	v = connect(true)
+	v, err = connectLocal(port, token)
+	if err != nil {
+		return fmt.Errorf("Unable to build a client for the local %s server: %w", engine.Title(), err)
+	}
 
 	exists, err := v.MountExists("secret")
 	if err != nil {
@@ -240,7 +263,7 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 	_ = v.Write("secret/handshake", s)
 
 	if !opt.Quiet {
-		_, _ = fmt.Fprintf(os.Stderr, "Now targeting (temporary) @Y{%s} at @C{%s}\n", cfg.Current, cfg.URL())
+		_, _ = fmt.Fprintf(os.Stderr, "Now targeting (temporary) @Y{%s} at @C{%s}\n", name, localVaultURL(port))
 		if opt.Local.Memory {
 			_, _ = fmt.Fprintf(os.Stderr, "@R{This %s server is MEMORY-BACKED!}\n", engine.Title())
 			_, _ = fmt.Fprintf(os.Stderr, "If you want to @Y{retain your secrets} be sure to @C{safe export}.\n")

@@ -15,9 +15,10 @@
 //	DELETE /v1/<mount>/*           — delete secret
 //	LIST /v1/<mount>/*             — list secrets (uses X-List-Method or PROPFIND-style)
 //
-// Every KV mount the fake serves is version 1. A version 2 mount answers on
-// different paths again -- data/, metadata/, delete/, undelete/, destroy/ --
-// and is not modelled here.
+// Every KV mount added with mount() is version 1. A version 2 mount answers
+// on different paths again -- data/, metadata/, delete/, undelete/,
+// destroy/ -- and is modelled in httptest_kv2_helper_test.go; add one with
+// mountV2().
 package vault_test
 
 import (
@@ -46,6 +47,10 @@ type fakeMount struct {
 type fakeVault struct {
 	mu   sync.RWMutex
 	data map[string]map[string]string // path → key → value
+
+	// v2data holds the version histories of secrets on KV v2 mounts, keyed
+	// by their full path. See httptest_kv2_helper_test.go.
+	v2data map[string]*fakeV2History
 
 	// mounts holds the KV mounts the fake serves, keyed by mount name with no
 	// slashes. A Vault has more than one mount and safe reaches all of them
@@ -81,6 +86,7 @@ type fakeVault struct {
 func newFakeVault() *fakeVault {
 	return &fakeVault{
 		data:      make(map[string]map[string]string),
+		v2data:    make(map[string]*fakeV2History),
 		mounts:    map[string]fakeMount{"secret": {typ: "kv", version: 1}},
 		forbidden: make(map[string]bool),
 		pki:       make(map[string]bool),
@@ -108,6 +114,13 @@ func (f *fakeVault) mountFor(path string) (name string, sub string, ok bool) {
 		return "", "", false
 	}
 	return name, strings.Trim(sub, "/"), true
+}
+
+// mountVersion returns the KV version of a mount, or 0 if there is none.
+func (f *fakeVault) mountVersion(name string) int {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.mounts[name].version
 }
 
 // forbid makes list and get requests for a secret path return 403.
@@ -312,6 +325,11 @@ func (f *fakeVault) handleEnableMount(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *fakeVault) handleKV(w http.ResponseWriter, r *http.Request, mount, subpath string) {
+	if f.mountVersion(mount) == 2 {
+		f.handleKVv2(w, r, mount, subpath)
+		return
+	}
+
 	// LIST is sent as GET with ?list=true or as PROPFIND-alike.
 	// vaultkv sends it as a GET with ?list=true query param for v1.
 	isList := r.Method == "LIST" || r.URL.Query().Get("list") == "true"

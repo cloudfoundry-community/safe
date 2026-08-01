@@ -1097,8 +1097,13 @@ func (v *Vault) FindSigningCA(cert *X509, certPath string, signPath string) (*X5
 			// the same way, without being upset by a key rotation: the
 			// Subject and Issuer stay equal across one, and differ for a
 			// sibling that never issued the certificate at all.
-			if !bytes.Equal(ca.Certificate.RawSubject, cert.Certificate.RawIssuer) {
-				return nil, "", fmt.Errorf("%s did not sign %s; name its authority with --signed-by", caPath, certPath)
+			//
+			// --signed-by is taken at its word, so the remedy named here
+			// is also the way past this check: say so, rather than let it
+			// read as an instruction to run the same thing again naming
+			// the sibling that just got refused.
+			if !cert.IssuedBy(ca) {
+				return nil, "", fmt.Errorf("%s did not sign %s; name its authority with --signed-by (naming one that did not sign it moves the certificate under it)", caPath, certPath)
 			}
 			return ca, caPath, nil
 		}

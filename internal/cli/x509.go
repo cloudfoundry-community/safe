@@ -15,6 +15,25 @@ import (
 	"github.com/cloudfoundry-community/safe/pkg/vault"
 )
 
+// warnIfReparenting says so on standard error when the authority a
+// certificate is about to be signed under is not the one that issued it.
+// Signing under it hands back a certificate carrying an issuer it did not go
+// in with, which is the point when --signed-by names a new authority
+// deliberately and a surprise when it does not: FindSigningCA refuses a
+// guessed sibling that did not issue the certificate by naming --signed-by,
+// so following that advice with the refused path lands here. Renewing or
+// reissuing under the authority that did issue it -- including one that has
+// rotated its key, and a self-signed certificate answering for itself --
+// says nothing.
+func warnIfReparenting(cert, ca *vault.X509, caPath string) {
+	if cert == nil || ca == nil || cert.IssuedBy(ca) {
+		return
+	}
+	_, _ = fmt.Fprintf(os.Stderr,
+		"@Y{!!} @C{%s} did not issue this certificate; it moves from @C{%s} to @C{%s}\n",
+		caPath, cert.Issuer(), ca.Subject())
+}
+
 func (c *CLI) cmdX509(command string, args ...string) error {
 	r := c.r
 
@@ -292,6 +311,7 @@ func (c *CLI) cmdX509Reissue(command string, args ...string) error {
 	if err != nil {
 		return err
 	}
+	warnIfReparenting(cert, ca, caPath)
 
 	if len(opt.X509.Reissue.Name) > 0 {
 		ips, dns, email := vault.CategorizeSANs(uniq(opt.X509.Reissue.Name))
@@ -430,6 +450,7 @@ func (c *CLI) cmdX509Renew(command string, args ...string) error {
 	if err != nil {
 		return err
 	}
+	warnIfReparenting(cert, ca, caPath)
 
 	if len(opt.X509.Renew.Name) > 0 {
 		ips, dns, email := vault.CategorizeSANs(uniq(opt.X509.Renew.Name))

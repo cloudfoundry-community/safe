@@ -15,6 +15,7 @@ package cli
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -144,6 +145,9 @@ func TestFakeLocalVaultHelper(t *testing.T) {
 	}
 	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = srv.Serve(ln) }()
+	// The real engines announce a successful bind this way, and readiness in
+	// waitLocalReady requires seeing it.
+	fmt.Println("==> Vault server started! Log data will stream in below:")
 	<-done
 	os.Exit(0)
 }

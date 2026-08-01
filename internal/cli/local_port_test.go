@@ -11,8 +11,10 @@ package cli
 import (
 	"fmt"
 	"net"
+	"net/http"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -86,6 +88,65 @@ func TestLocalExplicitPortHeldFailsAccurately(t *testing.T) {
 	// No half-registered target may survive the failed start.
 	if cfg, ok := readSafercAt(t, home); ok {
 		if _, found := cfg.Vaults["pinned"]; found {
+			t.Errorf("failed start left a target in ~/.saferc")
+		}
+	}
+}
+
+// strangerVault answers on a port of our choosing like a live,
+// already-initialized vault, and records every Init it receives.
+func strangerVault(t *testing.T) (int, *atomic.Int64) {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("binding the stranger's port: %v", err)
+	}
+	var inits atomic.Int64
+	srv := &http.Server{
+		ReadHeaderTimeout: 5 * time.Second,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if strings.HasSuffix(r.URL.Path, "/sys/init") && r.Method != http.MethodGet {
+				inits.Add(1)
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"errors":["Vault is already initialized"]}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"initialized":true,"sealed":false,"standby":false}`))
+		}),
+	}
+	go func() { _ = srv.Serve(l) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return l.Addr().(*net.TCPAddr).Port, &inits
+}
+
+// A stranger already answering on the chosen port must be refused, never
+// initialized. The child loses the bind and says so, but not instantly --
+// and an answer on the port arrives before the child has even tried. If
+// that answer counts as readiness, safe sends Init to a vault it never
+// started, which is the incident, replayed deterministically.
+func TestLocalRefusesStrangerOnExplicitPort(t *testing.T) {
+	engine := localEngine(t)
+	port, inits := strangerVault(t)
+
+	home := t.TempDir()
+	p := startSafeLocal(t, home, engine, "usurped", "--port", fmt.Sprintf("%d", port))
+
+	err, ok := p.waitExit(30 * time.Second)
+	if !ok {
+		t.Fatalf("safe local did not exit with a stranger on its port:\n%s", p.output.String())
+	}
+	if err == nil {
+		t.Errorf("safe local exited zero with a stranger on its port:\n%s", p.output.String())
+	}
+	if n := inits.Load(); n != 0 {
+		t.Errorf("the stranger received %d Init calls; want 0\n%s", n, p.output.String())
+	}
+	if !strings.Contains(p.output.String(), fmt.Sprintf("port %d is already in use", port)) {
+		t.Errorf("failure does not diagnose the held port %d:\n%s", port, p.output.String())
+	}
+	if cfg, ok := readSafercAt(t, home); ok {
+		if _, found := cfg.Vaults["usurped"]; found {
 			t.Errorf("failed start left a target in ~/.saferc")
 		}
 	}

@@ -1241,6 +1241,7 @@ func (c *CLI) cmdOption(command string, args ...string) error {
 	}
 
 	changes := map[string]bool{}
+	updated := make([]string, 0, len(args))
 	for _, arg := range args {
 		argSplit := strings.Split(arg, "=")
 		if len(argSplit) != 2 {
@@ -1269,7 +1270,7 @@ func (c *CLI) cmdOption(command string, args ...string) error {
 			if opt.opt == optionKey {
 				found = true
 				changes[opt.opt] = optionVal
-				_, _ = fmt.Printf("updated @G{%s}\n", opt.opt)
+				updated = append(updated, opt.opt)
 				break
 			}
 		}
@@ -1279,12 +1280,19 @@ func (c *CLI) cmdOption(command string, args ...string) error {
 		}
 	}
 
-	return rc.Update(func(c *rc.Config) error {
+	if err := rc.Update(func(c *rc.Config) error {
 		for _, field := range optionFields(&c.Options) {
 			if val, ok := changes[field.opt]; ok {
 				*field.val = val
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+
+	for _, opt := range updated {
+		_, _ = fmt.Printf("updated @G{%s}\n", opt)
+	}
+	return nil
 }

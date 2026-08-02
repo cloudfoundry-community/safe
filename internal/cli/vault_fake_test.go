@@ -46,6 +46,23 @@ type cliFakeVault struct {
 	// answers 403, for tests simulating a token without metadata-read
 	// capability. See denyMetadataGet.
 	forbidMetadataGet map[string]bool
+	//forbidGet names paths whose read answers 403, for tests that need a
+	// read to fail for a reason other than the secret not being there. See
+	// denyGet.
+	forbidGet map[string]bool
+}
+
+// denyGet makes a read of path answer 403, simulating a token without read
+// capability on it. A secret that is absent and a secret that cannot be
+// looked at are different answers, and commands that treat "not there" as
+// permission to proceed have to tell them apart.
+func (f *cliFakeVault) denyGet(path string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.forbidGet == nil {
+		f.forbidGet = map[string]bool{}
+	}
+	f.forbidGet[path] = true
 }
 
 // fakeVersion is one version of a version 2 secret. A version is alive until
@@ -139,6 +156,11 @@ func (f *cliFakeVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 
 	default:
+		if f.forbidGet[path] {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"errors":["permission denied"]}`))
+			return
+		}
 		kv, ok := f.data[path]
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)

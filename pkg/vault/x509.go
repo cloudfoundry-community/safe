@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -418,6 +419,22 @@ func (x *X509) Issuer() string {
 
 func (x *X509) IntermediarySubject(n int) string {
 	return formatSubject(x.Intermediaries[n].Subject)
+}
+
+// IssuedBy reports whether ca is the authority the certificate came in
+// under, by comparing the authority's Subject to the certificate's Issuer.
+//
+// A cryptographic signature check would answer "no" for an authority that
+// has since rotated to a fresh key -- the ordinary `safe x509 reissue` of a
+// CA -- even though it is still the same authority, and every leaf beneath
+// it would become unrenewable. Subject and Issuer stay equal across a
+// rotation, and differ for an authority that never issued the certificate
+// at all.
+func (x *X509) IssuedBy(ca *X509) bool {
+	if x == nil || ca == nil || x.Certificate == nil || ca.Certificate == nil {
+		return false
+	}
+	return bytes.Equal(ca.Certificate.RawSubject, x.Certificate.RawIssuer)
 }
 
 func ParseSubject(subj string) (pkix.Name, error) {

@@ -191,7 +191,11 @@ func (c *CLI) cmdX509Issue(command string, args ...string) error {
 				_, _ = fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to create a new certificate in} @C{%s} @R{as it is already present in Vault}\n", args[0])
 			}
 			return nil
-		} else if err != nil && !vault.IsNotFound(err) {
+		} else if !vault.IsNotFound(err) {
+			//Reached only when the read failed, so err is not nil: a read
+			// that could not be made sense of is not the same answer as a
+			// path with nothing on it, and only the latter is permission
+			// to write.
 			return err
 		}
 	}

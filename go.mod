@@ -5,7 +5,7 @@ go 1.27.0
 require (
 	github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5
 	github.com/cloudfoundry-community/goutils v0.0.0-20230124234059-1add95a6ecd7
-	github.com/cloudfoundry-community/vaultkv v0.7.0
+	github.com/cloudfoundry-community/vaultkv v0.7.1
 	github.com/gofrs/flock v0.13.0
 	github.com/jhunt/go-ansi v0.0.0-20181127194324-5fd839f108b6
 	github.com/jhunt/go-cli v0.0.0-20210225050846-3732873ce073
@@ -27,6 +27,8 @@ require (
 	github.com/hashicorp/go-secure-stdlib/base62 v0.1.2 // indirect
 	github.com/hashicorp/go-uuid v1.0.3 // indirect
 	github.com/jhunt/go-snapshot v0.0.0-20171017043618-9ad8f5ee37a2 // indirect
+	github.com/kr/text v0.2.0 // indirect
+	github.com/rogpeppe/go-internal v1.16.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 )

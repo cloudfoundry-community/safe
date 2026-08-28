@@ -582,6 +582,17 @@ func (v *Vault) resolveAbsentCAS(path string) (*uint, error) {
 // write assigned. On a KV v1 mount this degrades to a plain
 // read-then-write -- no cas is ever sent, because no versioning exists to
 // check against; v1 stays last-writer-wins.
+//
+// A not-found read tries an optimistic cas=0 write first, never consulting
+// metadata: a path with no history at all -- the common case for every
+// fresh gen/ssh/rsa/set target -- has nothing there to consult, and the
+// guess lands. Only when that guess conflicts does Update ask why: the
+// very next attempt's own data read already tells apart a concurrent
+// create (data now present, handled by the ordinary observed-version
+// branch) from surviving metadata on a soft-deleted or destroyed-latest
+// path (data still absent, resolveAbsentCAS's dead-version case). The
+// metadata GET this pays is one request, charged only on that conflict,
+// never on the fast path.
 func (v *Vault) Update(path string, fn func(s *Secret, exists bool) (out *Secret, write bool, err error)) (uint, error) {
 	literal, key, version := ParsePath(path)
 	if key != "" {
@@ -624,33 +635,53 @@ func (v *Vault) Update(path string, fn func(s *Secret, exists bool) (out *Secret
 		}
 
 		//Resolved only once fn has asked for a write, so declining fns
-		// and error paths never pay the metadata request the absent
-		// branch can cost.
+		// and error paths never pay any request the absent branch can
+		// cost. A not-found path guesses cas=0 optimistically rather than
+		// consulting metadata up front -- see the doc comment above.
 		var cas *uint
+		optimistic := false
 		if mount == 2 {
 			if exists {
 				observed := ver
 				cas = &observed
 			} else {
-				cas, err = v.resolveAbsentCAS(literal)
-				if errors.Is(err, errStale404) {
-					lastConflict = err
-					continue
-				}
-				if err != nil {
-					return 0, err
-				}
+				zero := uint(0)
+				cas = &zero
+				optimistic = true
 			}
 		}
 
-		assigned, err := v.writeCAS(path, out, cas)
-		if err == nil {
+		assigned, werr := v.writeCAS(path, out, cas)
+		if werr == nil {
 			return assigned, nil
 		}
-		if !vaultkv.IsCASConflict(err) {
-			return 0, err
+		if !vaultkv.IsCASConflict(werr) {
+			return 0, werr
 		}
-		lastConflict = err
+		lastConflict = werr
+
+		if optimistic {
+			//The blind guess was wrong: metadata survives at this path.
+			// Consult it once, in this same pass, rather than paying a
+			// second full read whose answer -- still absent -- this
+			// conflict already told us.
+			resolved, rerr := v.resolveAbsentCAS(literal)
+			if errors.Is(rerr, errStale404) {
+				lastConflict = rerr
+				continue
+			}
+			if rerr != nil {
+				return 0, rerr
+			}
+			assigned, werr = v.writeCAS(path, out, resolved)
+			if werr == nil {
+				return assigned, nil
+			}
+			if !vaultkv.IsCASConflict(werr) {
+				return 0, werr
+			}
+			lastConflict = werr
+		}
 	}
 	return 0, fmt.Errorf("gave up writing %s after %d attempts against concurrent writers: %w", literal, casAttempts, lastConflict)
 }
@@ -717,35 +748,59 @@ func (v *Vault) UpdateSteps(path string, steps int, fn func(step int, s *Secret,
 				continue
 			}
 			//Resolved lazily at the pass's first write, so a chain whose
-			// steps all decline (or fail first) never pays the metadata
-			// request the absent branch can cost.
+			// steps all decline (or fail first) never pays any request
+			// the absent branch can cost. A not-found path guesses cas=0
+			// optimistically first, the same as Update -- see its doc
+			// comment for why that skips the metadata GET on the common,
+			// no-history case.
+			optimistic := false
 			if mount == 2 && !casResolved {
-				cas, err = v.resolveAbsentCAS(literal)
-				if errors.Is(err, errStale404) {
-					lastConflict = err
-					conflicted = true
-					break
-				}
-				if err != nil {
-					return err
-				}
+				zero := uint(0)
+				cas = &zero
 				casResolved = true
+				optimistic = true
 			}
-			assigned, err := v.writeCAS(path, s, cas)
-			if err == nil {
+			assigned, werr := v.writeCAS(path, s, cas)
+			if werr == nil {
 				persisted[i] = true
 				exists = true
 				if mount == 2 {
 					observed := assigned
 					cas = &observed
-					casResolved = true
 				}
 				continue
 			}
-			if !vaultkv.IsCASConflict(err) {
-				return err
+			if !vaultkv.IsCASConflict(werr) {
+				return werr
 			}
-			lastConflict = err
+			lastConflict = werr
+
+			if optimistic {
+				//The blind guess was wrong: metadata survives at this
+				// path. Consult it once, in this same pass, rather than
+				// paying a second full read whose answer -- still
+				// absent -- this conflict already told us.
+				resolved, rerr := v.resolveAbsentCAS(literal)
+				if errors.Is(rerr, errStale404) {
+					lastConflict = rerr
+					conflicted = true
+					break
+				}
+				if rerr != nil {
+					return rerr
+				}
+				assigned, werr = v.writeCAS(path, s, resolved)
+				if werr == nil {
+					persisted[i] = true
+					exists = true
+					cas = &assigned
+					continue
+				}
+				if !vaultkv.IsCASConflict(werr) {
+					return werr
+				}
+				lastConflict = werr
+			}
 			conflicted = true
 			break
 		}

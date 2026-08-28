@@ -116,10 +116,11 @@ func TestCmdGenNoClobberRefusesKeyWrittenConcurrently(t *testing.T) {
 	isolateHome(t)
 	fv := newCLIFakeV2(t)
 
-	//The path does not exist yet, so the create consults the metadata;
-	// the concurrent create lands right after that consultation, which
-	// makes our cas=0 write conflict.
-	fv.afterRequest(`^GET /v1/secret/metadata/x$`, 1,
+	//The path does not exist yet, so the create tries an optimistic cas=0
+	// write directly, without consulting metadata; the concurrent create
+	// lands right after our own read reported 404, which makes that cas=0
+	// write conflict.
+	fv.afterRequest(`^GET /v1/secret/data/x(\?.*)?$`, 1,
 		injectConcurrentV2Write(fv, "secret/x", map[string]string{"a": "keepme"}))
 
 	c := newKeygenCLI(t)

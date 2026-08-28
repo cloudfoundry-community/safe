@@ -238,9 +238,10 @@ func StartSOCKS5Server(dialFn func(string, string) (net.Conn, error)) (addr stri
 	}
 
 	go func() {
-		if serr := socks5Server.Serve(socks5Listener); serr != nil {
-			fmt.Fprintf(os.Stderr, "SOCKS5 proxy error: %s\n", serr)
-		}
+		// go-socks5's Serve always returns a non-nil error once the
+		// listener closes; log it unconditionally.
+		serr := socks5Server.Serve(socks5Listener)
+		fmt.Fprintf(os.Stderr, "SOCKS5 proxy error: %s\n", serr)
 	}()
 
 	return socks5Listener.Addr().String(), socks5Listener.Close, nil

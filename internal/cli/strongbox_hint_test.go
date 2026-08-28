@@ -70,8 +70,7 @@ func TestCmdUnsealHintsStrongboxOffWhenNotEnabled(t *testing.T) {
 	c := newTestCLI(t)
 
 	stdout := captureStdout(t, func() {
-		var stderr string
-		stderr = captureStderr(t, func() {
+		stderr := captureStderr(t, func() {
 			if err := c.cmdUnseal("unseal"); err != nil {
 				t.Fatalf("cmdUnseal: %v", err)
 			}
@@ -94,8 +93,7 @@ func TestCmdSealHintsStrongboxOffWhenNotEnabled(t *testing.T) {
 	c := newTestCLI(t)
 
 	stdout := captureStdout(t, func() {
-		var stderr string
-		stderr = captureStderr(t, func() {
+		stderr := captureStderr(t, func() {
 			if err := c.cmdSeal("seal"); err != nil {
 				t.Fatalf("cmdSeal: %v", err)
 			}

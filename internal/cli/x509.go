@@ -655,8 +655,11 @@ func (c *CLI) cmdX509Reissue(command string, args ...string) error {
 
 	cert.PrivateKey = newKey
 	//caPath and args[0] can spell the same secret differently (a leading or
-	// trailing slash); FindSigningCA compares them as raw strings and, not
-	// recognizing the alias, reads the authority as a second, separate copy.
+	// trailing slash, or an escaped caret or colon); FindSigningCA compares
+	// them as raw strings and, not recognizing the alias, reads the
+	// authority as a second, separate copy. ParsePath resolves both
+	// spellings the way the read and the write themselves resolve them,
+	// which Canonicalize alone would not: it never unescapes.
 	// Saving that copy back is then a second write to the record the
 	// reissued certificate below is about to overwrite anyway — one that
 	// carries a serial-counter increment the final write does not, since it
@@ -667,7 +670,9 @@ func (c *CLI) cmdX509Reissue(command string, args ...string) error {
 	// read-modify-write under check-and-set, signing against each
 	// attempt's freshly-parsed CA -- fresh serial, single CRL bump -- so a
 	// concurrent CA write forces a retry instead of being overwritten.
-	if vault.Canonicalize(caPath) == vault.Canonicalize(args[0]) {
+	caSecret, _, _ := vault.ParsePath(caPath)
+	certSecret, _, _ := vault.ParsePath(args[0])
+	if caSecret == certSecret {
 		err = ca.Sign(cert, ttl)
 		if err != nil {
 			return err
@@ -819,7 +824,9 @@ func (c *CLI) cmdX509Renew(command string, args ...string) error {
 	// concurrent issuance or revocation landing in between forces a
 	// retry that draws a fresh serial from the fresh counter -- never a
 	// reused parse, whose CRL number would double-bump.
-	if vault.Canonicalize(caPath) == vault.Canonicalize(args[0]) {
+	caSecret, _, _ := vault.ParsePath(caPath)
+	certSecret, _, _ := vault.ParsePath(args[0])
+	if caSecret == certSecret {
 		if err := ca.Sign(cert, ttl); err != nil {
 			return err
 		}

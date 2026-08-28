@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/cloudfoundry-community/safe/pkg/prompt"
+	"github.com/cloudfoundry-community/safe/pkg/vault"
 )
 
 // injectConcurrentV2Write returns a hook fn that appends a new version at
@@ -293,7 +294,10 @@ func TestCmdFmtRetryKeepsConcurrentKey(t *testing.T) {
 	fv.afterRequest(`^GET /v1/secret/data/x(\?.*)?$`, 1,
 		injectConcurrentV2Write(fv, "secret/x", map[string]string{"theirs": "y"}))
 
+	// Main pre-seeds the bcrypt cost before parsing flags; a test that
+	// builds the CLI itself has to do the same.
 	c := newTestCLI(t)
+	c.opt.Fmt.Cost = vault.DefaultBcryptCost
 	if err := c.cmdFmt("fmt", "base64", "secret/x", "password", "password-b64"); err != nil {
 		t.Fatalf("cmdFmt: %v", err)
 	}

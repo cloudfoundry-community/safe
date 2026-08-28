@@ -139,7 +139,7 @@ func (s *Secret) Format(oldKey, newKey, fmtType string, skipIfExists bool) error
 }
 
 func (s *Secret) DHParam(length int, skipIfExists bool) error {
-	dhparam, err := genDHParam(length)
+	dhparam, err := dhparamGen(length)
 	if err != nil {
 		return err
 	}

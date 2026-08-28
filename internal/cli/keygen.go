@@ -431,27 +431,65 @@ func (c *CLI) cmdDhparam(command string, args ...string) error {
 	}
 
 	v := connect(true)
-	//A path after the first used to be dropped without a word, so
-	// `safe dhparam secret/a secret/b' generated one set of parameters and
-	// reported the success of both.
-	for _, path := range args {
-		s, err := v.Read(path)
-		if err != nil && !vault.IsNotFound(err) {
-			return err
+	return dhparamPaths(v, args, bits, opt.SkipIfExists, opt.Quiet)
+}
+
+// dhparamPaths is cmdDhparam's target loop, extracted so tests can drive it
+// directly against a fake Vault without going through argument parsing.
+// openssl's dhparam is CPU-bound, so paths run under a lower concurrency
+// limit than gen/ssh/rsa's -- half the CPUs, floored at 2 -- to leave the
+// machine usable rather than saturating every core with openssl children.
+//
+// Paths are grouped by their canonical secret path exactly as cmdGen,
+// cmdSsh, and cmdRsa group theirs: distinct paths generate concurrently,
+// but a path named more than once stays sequential within its group, one
+// read-modify-write at a time, so a repeated argument never races itself.
+func dhparamPaths(v *vault.Vault, paths []string, bits int, skipIfExists bool, quiet bool) error {
+	type dhparamGroup struct {
+		paths   []string
+		notices []string
+	}
+	groups := map[string]*dhparamGroup{}
+	var order []string
+	for _, path := range paths {
+		p, _, _ := vault.ParsePath(path)
+		g, seen := groups[p]
+		if !seen {
+			g = &dhparamGroup{}
+			groups[p] = g
+			order = append(order, p)
 		}
-		exists := (err == nil)
-		if opt.SkipIfExists && exists && s.Has("dhparam-pem") {
-			if !opt.Quiet {
-				_, _ = fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to generate a Diffie-Hellman key exchange parameter set at} @C{%s} @R{as it is already present in Vault}\n", path)
+		g.paths = append(g.paths, path)
+	}
+
+	dhErr := parallel.EachLimit(order, max(runtime.NumCPU()/2, 2), func(_ int, p string) error {
+		g := groups[p]
+		for _, path := range g.paths {
+			s, err := v.Read(path)
+			if err != nil && !vault.IsNotFound(err) {
+				return err
 			}
-			continue
+			exists := (err == nil)
+			if skipIfExists && exists && s.Has("dhparam-pem") {
+				if !quiet {
+					g.notices = append(g.notices, renderNotice("@R{Cowardly refusing to generate a Diffie-Hellman key exchange parameter set at} @C{%s} @R{as it is already present in Vault}\n", path))
+				}
+				continue
+			}
+			if err = s.DHParam(bits, skipIfExists); err != nil {
+				return err
+			}
+			if err = v.Write(path, s); err != nil {
+				return err
+			}
 		}
-		if err = s.DHParam(bits, opt.SkipIfExists); err != nil {
-			return err
-		}
-		if err = v.Write(path, s); err != nil {
-			return err
+		return nil
+	})
+
+	for _, p := range order {
+		for _, n := range groups[p].notices {
+			_, _ = os.Stderr.WriteString(n)
 		}
 	}
-	return nil
+	return dhErr
 }

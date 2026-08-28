@@ -959,6 +959,26 @@ func (c *CLI) cmdExport(command string, args ...string) error {
 	return nil
 }
 
+// importPair is one secret from a version-2 export, paired with the path it
+// is destined for.
+type importPair struct {
+	path   string
+	secret exportSecret
+}
+
+// importPairs flattens a version-2 export's secrets into pairs sorted by
+// path. data.Data is a map, whose iteration order Go deliberately
+// randomizes; sorting here means cmdImport's processing order is a function
+// of the input alone, never of map internals (Declared Behavior Change 4).
+func importPairs(data map[string]exportSecret) []importPair {
+	pairs := make([]importPair, 0, len(data))
+	for path, secret := range data {
+		pairs = append(pairs, importPair{path: path, secret: secret})
+	}
+	sort.Slice(pairs, func(i, j int) bool { return pairs[i].path < pairs[j].path })
+	return pairs
+}
+
 func (c *CLI) cmdImport(command string, args ...string) error {
 	opt := c.opt
 	r := c.r
@@ -1032,8 +1052,12 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 		}
 
 		//Put the secrets in the places, writing the versions in the correct order and deleting/destroying secrets that
-		// need to be deleted/destroyed.
-		for path, secret := range data.Data {
+		// need to be deleted/destroyed. Distinct paths import concurrently, at
+		// the same worker count as gen/ssh/rsa.
+		pairs := importPairs(data.Data)
+
+		return parallel.EachLimit(pairs, max(runtime.NumCPU(), 4), func(_ int, pair importPair) error {
+			path, secret := pair.path, pair.secret
 			s := vault.SecretEntry{
 				Path: path,
 			}
@@ -1059,33 +1083,27 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 					}
 					state = vault.SecretStateDeleted
 				}
-				data := vault.NewSecret()
+				versionData := vault.NewSecret()
 				for k, v := range secret.Versions[i].Value {
-					_ = data.Set(k, v, false)
+					_ = versionData.Set(k, v, false)
 				}
 				// Safe conversion: i is bounded by len(secret.Versions)
 				// Check if adding i to firstVersion would overflow
 				if i < 0 || uint(i) > ^uint(0)-firstVersion {
-					_, _ = fmt.Fprintf(os.Stderr, "@R{Version number overflow detected for secret}\n")
-					return fmt.Errorf("version number overflow detected")
+					return fmt.Errorf("version number overflow detected for secret %s", path)
 				}
 				s.Versions = append(s.Versions, vault.SecretVersion{
 					Number: firstVersion + uint(i),
 					State:  state,
-					Data:   data,
+					Data:   versionData,
 				})
 			}
 
-			err := s.Copy(v, s.Path, vault.TreeCopyOpts{
+			return s.Copy(v, s.Path, vault.TreeCopyOpts{
 				Clear: true,
 				Pad:   !opt.Import.IgnoreDestroyed && !opt.Import.Shallow,
 			})
-			if err != nil {
-				return err
-			}
-		}
-
-		return nil
+		})
 	}
 
 	var fn importFunc

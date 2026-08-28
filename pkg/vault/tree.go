@@ -119,6 +119,9 @@ type secretTree struct {
 	Version      uint
 	Deleted      bool
 	Destroyed    bool
+	// fetched marks a version node whose data the walk has already read (by
+	// workGetLatest, in one request); getWorkType assigns it no further work.
+	fetched bool
 }
 
 func (v *Vault) ConstructSecrets(path string, opts TreeOpts) (s Secrets, err error) {
@@ -317,6 +320,7 @@ const (
 	opTypeGet
 	opTypeMounts
 	opTypeVersions
+	opTypeGetLatest
 )
 
 type Secrets []SecretEntry
@@ -492,14 +496,21 @@ func (t *secretTree) getWorkType(opts TreeOpts) uint16 {
 		ret = opTypeList
 	case treeTypeDirAndSecret:
 		ret = opTypeList
-		if opts.FetchKeys || !opts.SkipVersionInfo {
+		if latestOnlyKeyed(opts) && t.MountVersion == 2 {
+			ret |= opTypeGetLatest
+		} else if opts.FetchKeys || !opts.SkipVersionInfo {
 			ret |= opTypeVersions
 		}
 	case treeTypeSecret:
-		if opts.FetchKeys || !opts.SkipVersionInfo {
+		if latestOnlyKeyed(opts) && t.MountVersion == 2 {
+			ret = opTypeGetLatest
+		} else if opts.FetchKeys || !opts.SkipVersionInfo {
 			ret |= opTypeVersions
 		}
 	case treeTypeVersion:
+		if t.fetched {
+			break // data already fetched by workGetLatest
+		}
 		if opts.FetchKeys && (opts.GetDeletedVersions || !t.Deleted && !t.Destroyed) {
 			ret = opTypeGet
 		}
@@ -510,6 +521,13 @@ func (t *secretTree) getWorkType(opts TreeOpts) uint16 {
 	}
 
 	return ret
+}
+
+// latestOnlyKeyed reports whether a walk wants exactly the newest live
+// version of each secret with its keys, the case a single data GET can
+// answer without a metadata lookup.
+func latestOnlyKeyed(opts TreeOpts) bool {
+	return opts.FetchKeys && !opts.FetchAllVersions && !opts.GetDeletedVersions
 }
 
 func (s Secrets) Paths() []string {
@@ -788,6 +806,7 @@ func (w *treeWorker) work() {
 			{opTypeList, w.workList},
 			{opTypeMounts, w.workMounts},
 			{opTypeVersions, w.workVersions},
+			{opTypeGetLatest, w.workGetLatest},
 		} {
 			if order.operation&op.code == opTypeNone {
 				continue
@@ -978,6 +997,37 @@ func (w *treeWorker) workMounts(_ secretTree) ([]secretTree, error) {
 	}
 
 	return ret, nil
+}
+
+// workGetLatest reads the newest live version of a v2 secret in one
+// request. Anything but a clean read falls back to the metadata flow, so
+// what the walk reports for deleted, destroyed, empty-keyed, or
+// forbidden secrets does not change; only the all-alive common case is
+// answered in one request.
+func (w *treeWorker) workGetLatest(t secretTree) ([]secretTree, error) {
+	if t.MountVersion != 2 {
+		return w.workVersions(t)
+	}
+	s, meta, err := w.vault.readLatestWithMeta(t.Name)
+	if err != nil {
+		return w.workVersions(t)
+	}
+
+	version := secretTree{
+		Name:    t.Name,
+		Type:    treeTypeVersion,
+		Version: meta.Version,
+		fetched: true,
+	}
+	for _, key := range s.Keys() {
+		version.Branches = append(version.Branches, secretTree{
+			Name:    EncodePath(t.Name, key, 0),
+			Type:    treeTypeKey,
+			Value:   string(s.data[key]),
+			Version: meta.Version,
+		})
+	}
+	return []secretTree{version}, nil
 }
 
 func (w *treeWorker) workVersions(t secretTree) ([]secretTree, error) {

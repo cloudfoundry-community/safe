@@ -185,6 +185,36 @@ func (v *Vault) Read(path string) (secret *Secret, err error) {
 	return
 }
 
+// readLatestWithMeta reads the newest live version of a secret in one
+// request, also returning the KVVersion metadata the data endpoint
+// carries. Unlike Read it takes a LITERAL Vault path: no key or version
+// syntax, no unescaping -- but it still canonicalizes slashes, same as
+// every other path-taking method here, so a mount-root secret name (which
+// Mounts returns with a trailing slash) reads correctly. On a v1 mount the
+// returned metadata carries only Version==1 and its Deleted/Destroyed
+// fields are meaningless; callers must gate on mount version first.
+func (v *Vault) readLatestWithMeta(path string) (*Secret, vaultkv.KVVersion, error) {
+	path = Canonicalize(path)
+	secret := NewSecret()
+	raw := map[string]any{}
+	meta, err := v.client.Get(path, &raw, nil)
+	if err != nil {
+		return secret, meta, err
+	}
+	for k, val := range raw {
+		if s, ok := val.(string); ok {
+			secret.data[k] = s
+			continue
+		}
+		b, merr := json.Marshal(val)
+		if merr != nil {
+			return secret, meta, merr
+		}
+		secret.data[k] = string(b)
+	}
+	return secret, meta, nil
+}
+
 // notFoundReading turns a 404 from a read into the most specific not-found
 // error it can. A versioned read fails either because the secret is not there
 // or because that one version is not, and the two send a reader looking in

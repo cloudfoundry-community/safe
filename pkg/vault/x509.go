@@ -437,6 +437,8 @@ func (x *X509) IssuedBy(ca *X509) bool {
 	return bytes.Equal(ca.Certificate.RawSubject, x.Certificate.RawIssuer)
 }
 
+var subjectSeparator = regexp.MustCompile(" *= *")
+
 func ParseSubject(subj string) (pkix.Name, error) {
 	/* parse subject names that look like this:
 	    /cn=foo.bl/c=us/st=ny/l=buffalo/o=stark & wayne/ou=r&d
@@ -458,9 +460,8 @@ func ParseSubject(subj string) (pkix.Name, error) {
 		pairs = strings.Split(subj, ",")
 	}
 
-	kvre := regexp.MustCompile(" *= *")
 	for _, pair := range pairs {
-		kv := kvre.Split(pair, 2)
+		kv := subjectSeparator.Split(pair, 2)
 		if len(kv) != 2 {
 			return name, fmt.Errorf("malformed subject component '%s'", pair)
 		}

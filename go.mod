@@ -5,7 +5,7 @@ go 1.27.0
 require (
 	github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5
 	github.com/cloudfoundry-community/goutils v0.0.0-20230124234059-1add95a6ecd7
-	github.com/cloudfoundry-community/vaultkv v0.7.1
+	github.com/cloudfoundry-community/vaultkv v0.7.2-0.20260828211257-97ae4bd53f83
 	github.com/gofrs/flock v0.13.0
 	github.com/jhunt/go-ansi v0.0.0-20181127194324-5fd839f108b6
 	github.com/jhunt/go-cli v0.0.0-20210225050846-3732873ce073

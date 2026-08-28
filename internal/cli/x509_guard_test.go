@@ -5,7 +5,7 @@ package cli
 // Covered handlers and the pre-connect guard each exercises:
 //
 //   cmdX509Validate — zero args fires before rc.Apply; flag combos fire before rc.Apply
-//   cmdX509Issue    — arg!=1 or no --name fires after rc.Apply but before connect
+//   cmdX509Issue    — no args or no --name fires after rc.Apply but before connect
 //   cmdX509Reissue  — arg!=1 fires after rc.Apply but before connect;
 //                     --no-clobber fires at same point
 //   cmdX509Renew    — arg!=1 fires after rc.Apply but before connect;
@@ -85,12 +85,12 @@ func TestCmdX509Issue_ZeroArgs_ReturnsUsageError(t *testing.T) {
 	assertUsageError(t, err, "x509 issue")
 }
 
-// Two args (even with --name): guard fires because len(args) != 1.
-func TestCmdX509Issue_TwoArgs_ReturnsUsageError(t *testing.T) {
+// Several args but no --name: the guard fires on the missing name, not
+// the arg count — issue takes any number of destination paths.
+func TestCmdX509Issue_TwoArgsNoName_ReturnsUsageError(t *testing.T) {
 	isolateHome(t)
 	c := newX509CLI(t)
-	c.opt.X509.Issue.Name = []string{"example.com"}
-	err := c.cmdX509Issue("x509 issue", "secret/cert", "extra")
+	err := c.cmdX509Issue("x509 issue", "secret/cert", "secret/other")
 	assertUsageError(t, err, "x509 issue")
 }
 

@@ -724,20 +724,24 @@ Echo the arguments, space-separated, as a single line to the
 terminal.  This is a convenience helper for long pipelines of
 chained commands.
 
-### x509 issue \[OPTIONS\] --name cn.example.com path
+### x509 issue \[OPTIONS\] --name cn.example.com path \[more/paths ...\]
 
-Issues a new X.509 TLS/SSL certificate, and stores the new RSA
-private key and the certificate in the Vault at _path_, in PEM
-format.
+Issues one new X.509 TLS/SSL certificate per _path_ given, and
+stores each new private key and certificate in the Vault at its
+path, in PEM format.  Every certificate in a batch carries the same
+`--name` SAN set; without `--subject`, each subject defaults to a CN
+of its path's basename (a single path keeps the older default of the
+first `--name`).
 
 The default key type is RSA-4096, which costs seconds of CPU to
 generate; `--type ec` and `--type ed25519` are the fast options,
-arriving in microseconds.
+arriving in microseconds.  A batch generates its keys concurrently.
 
 `--signed-by` has to name a certificate authority, and cannot name
-_path_ itself.  Issuing writes the signing CA back, to record the
-serial number it handed out, and then writes the new certificate
-over whatever _path_ held.
+any _path_ being written.  Issuing reads and writes the signing CA
+once for the whole batch, to record the serial numbers it handed
+out, and then writes each new certificate over whatever its path
+held.
 
 Where `path:certificate` holds the issuers above the certificate as
 well as the certificate itself, they stay with it: every command

@@ -55,6 +55,9 @@ type cliFakeVault struct {
 	// one path of a recursive delete to fail for a reason --force must not
 	// swallow. See denyDelete.
 	forbidDelete map[string]bool
+	//forbidPut names paths whose write answers 403, for tests that need one
+	// write of a parallel batch to fail while its siblings land. See denyPut.
+	forbidPut map[string]bool
 
 	// gate, when non-nil, parks every request matching its pattern before
 	// dispatch. Installed by holdRequests. The pointer itself is guarded by
@@ -164,6 +167,17 @@ func (f *cliFakeVault) denyGet(path string) {
 	f.forbidGet[path] = true
 }
 
+// denyPut makes a write of path answer 403, so one write of a parallel
+// batch can fail while the writes beside it land.
+func (f *cliFakeVault) denyPut(path string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.forbidPut == nil {
+		f.forbidPut = map[string]bool{}
+	}
+	f.forbidPut[path] = true
+}
+
 // denyDelete makes a DELETE of path answer 403, so one path of a recursive
 // delete can fail for a reason other than the secret not being there.
 func (f *cliFakeVault) denyDelete(path string) {
@@ -263,6 +277,11 @@ func (f *cliFakeVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"keys": keys}})
 
 	case r.Method == http.MethodPut || r.Method == http.MethodPost:
+		if f.forbidPut[path] {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = fmt.Fprintf(w, `{"errors":["permission denied: %s"]}`, path)
+			return
+		}
 		var body map[string]string
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			w.WriteHeader(http.StatusBadRequest)

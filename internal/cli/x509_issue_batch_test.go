@@ -131,6 +131,38 @@ func TestBatchIssueRefusesADuplicateDestination(t *testing.T) {
 	}
 }
 
+// Two spellings of one path that only differ by a backslash escape must
+// still be caught: Canonicalize does not unescape, but ParsePath (and
+// therefore v.Write) does, so both spellings land on the same secret.
+func TestBatchIssueRefusesAnEscapeAliasedDuplicateDestination(t *testing.T) {
+	isolateHome(t)
+	c := batchIssueCLI(t)
+
+	err := c.cmdX509Issue("x509 issue", `secret/x/a\\b`, `secret/x/a\b`)
+	if err == nil {
+		t.Fatal("issuing to two escape-spellings of one path = nil, want a refusal")
+	}
+	if !strings.Contains(err.Error(), "same path") {
+		t.Errorf("error = %q, want the same-path refusal", err)
+	}
+}
+
+// An escape-aliased spelling of the signing authority must be refused the
+// same way a byte-identical spelling would be.
+func TestBatchIssueRefusesAnEscapeAliasedSigningAuthority(t *testing.T) {
+	isolateHome(t)
+	c := batchIssueCLI(t)
+	c.opt.X509.Issue.SignedBy = `secret/ca\\x`
+
+	err := c.cmdX509Issue("x509 issue", "secret/x/a", `secret/ca\x`)
+	if err == nil {
+		t.Fatal("issuing onto an escape-aliased CA path = nil, want a refusal")
+	}
+	if !strings.Contains(err.Error(), "signing authority") {
+		t.Errorf("error = %q, want the signing-authority refusal", err)
+	}
+}
+
 // The signing authority stays protected as a destination anywhere in the
 // batch, not just in the first position.
 func TestBatchIssueRefusesTheCAAnywhereInTheBatch(t *testing.T) {
@@ -315,6 +347,23 @@ func TestBatchIssueSubjectDefaultsToThePathBasename(t *testing.T) {
 		if len(cert.DNSNames) != 1 || cert.DNSNames[0] != "fleet.example.com" {
 			t.Errorf("%s carries SANs %v, want the shared fleet.example.com", path, cert.DNSNames)
 		}
+	}
+}
+
+// A basename default must unescape an escaped path segment, not carry a
+// stray backslash into the subject.
+func TestBatchIssueSubjectBasenameUnescapesTheStrayBackslash(t *testing.T) {
+	isolateHome(t)
+	fv := newCLIFake(t)
+	storeCert(t, fv, "secret/ca", newCA(t, "authority"))
+
+	c := batchIssueCLI(t)
+	if err := c.cmdX509Issue("x509 issue", "secret/x/alpha", `secret/x/a\^2`); err != nil {
+		t.Fatalf("batch issue: %v", err)
+	}
+
+	if cn := storedLeafCert(t, fv, "secret/x/a^2").Subject.CommonName; cn != "a^2" {
+		t.Errorf(`CN = %s, want the unescaped basename a^2`, cn)
 	}
 }
 

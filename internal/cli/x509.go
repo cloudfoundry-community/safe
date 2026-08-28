@@ -186,10 +186,13 @@ type issueTarget struct {
 	cert    *vault.X509
 }
 
-// pathBasename returns the last segment of a canonicalized secret path,
-// which is what a batch certificate's subject defaults to.
+// pathBasename returns the last segment of arg's canonical secret path --
+// the secret component ParsePath resolves it to, backslash escapes
+// unescaped and all -- which is what a batch certificate's subject
+// defaults to. Canonicalize alone would leave a stray backslash in the
+// default, since it never unescapes.
 func pathBasename(arg string) string {
-	p := vault.Canonicalize(arg)
+	p, _, _ := vault.ParsePath(arg)
 	if i := strings.LastIndex(p, "/"); i >= 0 {
 		return p[i+1:]
 	}
@@ -248,10 +251,10 @@ func (c *CLI) cmdX509Issue(command string, args ...string) error {
 	// naming the same destination twice would race one certificate's write
 	// against the other's, which distinct paths are the whole point of a
 	// batch avoiding.
-	caPath := vault.Canonicalize(opt.X509.Issue.SignedBy)
+	caPath, _, _ := vault.ParsePath(opt.X509.Issue.SignedBy)
 	seen := map[string]bool{}
 	for _, arg := range args {
-		p := vault.Canonicalize(arg)
+		p, _, _ := vault.ParsePath(arg)
 		if p == caPath {
 			return fmt.Errorf("refusing to overwrite the signing authority %s with the certificate it signs", arg)
 		}

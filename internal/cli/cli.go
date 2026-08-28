@@ -1,11 +1,14 @@
 package cli
 
 import (
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 
 	fmt "github.com/jhunt/go-ansi"
 	gocli "github.com/jhunt/go-cli"
@@ -38,10 +41,62 @@ var (
 	errNotAuthenticated = errors.New("not authenticated to a Vault")
 )
 
+// connectMu guards the process-lifetime client cache connectOrErr maintains
+// so a chained command (`safe get a -- set b`) reuses one client, cert pool,
+// and transport instead of paying for them per command.
+var (
+	connectMu     sync.Mutex
+	cachedVault   *vault.Vault
+	cachedConnKey string
+)
+
+// resetConnectCache clears the connectOrErr client cache. Tests only:
+// production code never needs to invalidate the cache within a process
+// lifetime.
+func resetConnectCache() {
+	connectMu.Lock()
+	defer connectMu.Unlock()
+	cachedVault, cachedConnKey = nil, ""
+}
+
+// connectCacheKey captures every environment input that shapes the client:
+// target, auth, TLS, namespace, and the proxy family NewProxyRouter reads.
+// VAULT_CACERT contributes a content hash, not the path: rc.Apply writes a
+// fresh temp CA file per invocation, so the path changes even when the
+// target does not, and a hash keys the cache on what the file actually says.
+func connectCacheKey() string {
+	parts := []string{
+		os.Getenv("VAULT_ADDR"), os.Getenv("VAULT_TOKEN"),
+		os.Getenv("VAULT_NAMESPACE"), os.Getenv("VAULT_SKIP_VERIFY"),
+		os.Getenv("HTTP_PROXY"), os.Getenv("http_proxy"),
+		os.Getenv("HTTPS_PROXY"), os.Getenv("https_proxy"),
+		os.Getenv("SAFE_ALL_PROXY"), os.Getenv("safe_all_proxy"),
+		os.Getenv("NO_PROXY"), os.Getenv("no_proxy"),
+		os.Getenv("SAFE_KNOWN_HOSTS_FILE"), os.Getenv("SAFE_SKIP_HOST_KEY_VALIDATION"),
+	}
+	if ca := os.Getenv("VAULT_CACERT"); ca != "" {
+		sum := ""
+		if b, err := os.ReadFile(ca); err == nil { // #nosec G703 -- standard Vault env var
+			h := sha256.Sum256(b)
+			sum = hex.EncodeToString(h[:])
+		}
+		parts = append(parts, sum)
+	}
+	return strings.Join(parts, "\x00")
+}
+
 // connectOrErr builds a Vault client from the standard VAULT_* environment.
 // It returns a sentinel error (errNoVaultTarget or errNotAuthenticated) or the
 // underlying vault.NewVault error instead of exiting, so the connection logic
 // is unit testable. The CLI wrapper connect renders guidance and exits.
+//
+// A client that matches the current environment is reused across calls
+// within the process so a chained command does not rebuild the transport
+// (and leak an SSH tunnel, proxy.go:139-142) once per sub-command. A cache
+// hit still re-validates the client's live URL against VAULT_ADDR: safe
+// unseal/seal mutate a shared client's URL via SetURL to walk cluster nodes
+// (internal/cli/server.go), so a stale hit would return a client still
+// pointed at the last node it visited.
 func connectOrErr(auth bool) (*vault.Vault, error) {
 	var caCertPool *x509.CertPool
 	if os.Getenv("VAULT_CACERT") != "" {
@@ -78,10 +133,23 @@ func connectOrErr(auth bool) (*vault.Vault, error) {
 		return nil, errNotAuthenticated
 	}
 
+	key := connectCacheKey()
+
+	connectMu.Lock()
+	defer connectMu.Unlock()
+
+	if cachedVault != nil && key == cachedConnKey {
+		if canonical, err := vault.CanonicalURL(url); err == nil &&
+			cachedVault.Client().Client.VaultURL.String() == canonical {
+			return cachedVault, nil
+		}
+	}
+
 	v, err := vault.NewVault(conf)
 	if err != nil {
 		return nil, err
 	}
+	cachedVault, cachedConnKey = v, key
 	return v, nil
 }
 

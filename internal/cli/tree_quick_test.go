@@ -75,9 +75,11 @@ func TestTreeLooksUpEveryVersionHistoryWithoutQuick(t *testing.T) {
 	}
 }
 
-// --keys needs the version history to reach the keys, so -q cannot skip the
-// lookup there. Skipping it would have printed a tree with no keys in it.
-func TestQuickTreeWithKeysStillLooksUpVersions(t *testing.T) {
+// --keys used to need the version history to reach the keys, so -q could not
+// skip the lookup there. It no longer does: a keyed walk that also does not
+// ask for every version or a deleted one reads each secret's newest version
+// in a single data GET, with no metadata lookup at all.
+func TestQuickTreeWithKeysSkipsVersionLookupsToo(t *testing.T) {
 	isolateHome(t)
 	fv := walkFixture(t)
 	c := newTestCLI(t)
@@ -87,8 +89,8 @@ func TestQuickTreeWithKeysStillLooksUpVersions(t *testing.T) {
 	fv.forgetRequests()
 	out := treeOut(t, c)
 
-	if got := versionLookups(fv); got != 3 {
-		t.Errorf("tree -q --keys looked up %d version histories, want 3:\n%s",
+	if got := versionLookups(fv); got != 0 {
+		t.Errorf("tree -q --keys looked up %d version histories, want 0:\n%s",
 			got, strings.Join(fv.requests(), "\n"))
 	}
 	for _, want := range []string{"pw", "tok"} {

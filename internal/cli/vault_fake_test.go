@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -50,6 +51,100 @@ type cliFakeVault struct {
 	// read to fail for a reason other than the secret not being there. See
 	// denyGet.
 	forbidGet map[string]bool
+
+	// gate, when non-nil, parks every request matching its pattern before
+	// dispatch. Installed by holdRequests. The pointer itself is guarded by
+	// f.mu, but parking happens on the gate's own lock -- never f.mu -- so a
+	// parked request can never deadlock the fake against itself.
+	gate *requestGate
+
+	// t is the test that built this fakeVault, captured so holdRequests can
+	// register a Cleanup that force-releases a gate nobody ever tripped.
+	t *testing.T
+}
+
+// requestGate parks the first `need` matching requests until all of them
+// have arrived, then releases every one of them at once by closing release.
+// Closing a channel wakes every blocked receiver at once, so the gate needs
+// no separate condition variable; `mu` only protects the bookkeeping
+// (arrived, tripped) around that close, independent of the cliFakeVault's
+// f.mu, so a goroutine parked in park (blocked on <-release) holds no lock
+// ServeHTTP needs elsewhere.
+type requestGate struct {
+	pattern *regexp.Regexp
+	need    int
+
+	mu      sync.Mutex
+	arrived int
+	tripped bool
+	release chan struct{}
+}
+
+// holdRequests installs a gate so requests whose logged "METHOD path[?query]"
+// line matches pattern park until n of them are concurrently in flight, then
+// releases them all and closes the returned channel.
+//
+// n <= 0 trips the gate immediately, so every match passes straight
+// through. Replacing an existing gate first force-releases any requests
+// still parked on it, so a second call never orphans a waiter.
+//
+// A test that never drives n matching requests concurrently would park its
+// handler goroutines on `release` forever, which would in turn hang
+// httptest.Server.Close() in t.Cleanup past the test's own deadline. To
+// keep that failure mode bounded, holdRequests registers its own
+// t.Cleanup that force-releases this gate if it never tripped.
+func (f *cliFakeVault) holdRequests(n int, pattern string) <-chan struct{} {
+	g := &requestGate{
+		pattern: regexp.MustCompile(pattern),
+		need:    n,
+		release: make(chan struct{}),
+	}
+	if n <= 0 {
+		g.tripped = true
+		close(g.release)
+	}
+
+	f.mu.Lock()
+	prev := f.gate
+	f.gate = g
+	f.mu.Unlock()
+
+	if prev != nil {
+		prev.forceRelease()
+	}
+	if f.t != nil {
+		f.t.Cleanup(g.forceRelease)
+	}
+
+	return g.release
+}
+
+// forceRelease closes release if the gate has not already tripped,
+// unblocking any goroutines parked in park. Safe to call more than once,
+// concurrently, and from any goroutine.
+func (g *requestGate) forceRelease() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.tripped {
+		g.tripped = true
+		close(g.release)
+	}
+}
+
+// park blocks the calling goroutine until `need` goroutines have called
+// park (tripping the gate) or forceRelease has fired, whichever comes first.
+func (g *requestGate) park() {
+	g.mu.Lock()
+	if !g.tripped {
+		g.arrived++
+		if g.arrived >= g.need {
+			g.tripped = true
+			close(g.release)
+		}
+	}
+	g.mu.Unlock()
+
+	<-g.release
 }
 
 // denyGet makes a read of path answer 403, simulating a token without read
@@ -107,6 +202,17 @@ func (f *cliFakeVault) forgetRequests() {
 
 func (f *cliFakeVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.record(r)
+
+	// Copy the gate pointer out under f.mu, then park (if it matches) on the
+	// gate's own lock. Parking never happens while holding f.mu, so a parked
+	// request cannot block any other request's dispatch or logging.
+	f.mu.Lock()
+	gate := f.gate
+	f.mu.Unlock()
+	if gate != nil && gate.pattern.MatchString(r.Method+" "+r.URL.RequestURI()) {
+		gate.park()
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	if strings.HasPrefix(r.URL.Path, "/v1/sys/internal/ui/mounts") {
 		//The client looks for the mount under data.secret; anything else
@@ -195,7 +301,7 @@ func (f *cliFakeVault) childrenOf(dir string) []string {
 // newCLIFake starts a fake Vault and points VAULT_ADDR and VAULT_TOKEN at it.
 func newCLIFake(t *testing.T) *cliFakeVault {
 	t.Helper()
-	fv := &cliFakeVault{data: map[string]map[string]string{}}
+	fv := &cliFakeVault{data: map[string]map[string]string{}, t: t}
 	srv := httptest.NewServer(fv)
 	t.Cleanup(srv.Close)
 	t.Setenv("VAULT_ADDR", srv.URL)

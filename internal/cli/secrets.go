@@ -7,6 +7,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	fmt "github.com/jhunt/go-ansi"
 	"gopkg.in/yaml.v2"
 
+	"github.com/cloudfoundry-community/safe/internal/parallel"
 	"github.com/cloudfoundry-community/safe/pkg/rc"
 	"github.com/cloudfoundry-community/safe/pkg/vault"
 )
@@ -168,13 +170,30 @@ func (c *CLI) cmdGet(command string, args ...string) error {
 		return nil
 	}
 
+	// Read every path concurrently, then aggregate sequentially so the
+	// order-sensitive output below -- the errs slice and the KeysOnly
+	// listing -- stays driven by args, not by fetch completion order.
+	type fetched struct {
+		s   *vault.Secret
+		err error
+	}
+	fetches := make([]fetched, len(args))
+	// fn always returns nil: per-path errors are aggregated by the
+	// sequential loop below exactly as before, so EachLimit's fail-fast
+	// never triggers here and the always-nil return is deliberate.
+	_ = parallel.EachLimit(args, max(runtime.NumCPU(), 4), func(i int, path string) error {
+		s, err := v.Read(path)
+		fetches[i] = fetched{s: s, err: err}
+		return nil
+	})
+
 	// Track errors, paths, keys, values
 	errs := make([]error, 0)
 	results := make(map[string]map[string]string, 0)
 	missingKeys := make(map[string][]string)
-	for _, path := range args {
+	for i, path := range args {
 		p, k, _ := vault.ParsePath(path)
-		s, err := v.Read(path)
+		s, err := fetches[i].s, fetches[i].err
 
 		// Check if the desired path[:key] is found
 		if err != nil {
@@ -371,16 +390,11 @@ func (c *CLI) cmdLs(command string, args ...string) error {
 
 		var paths []string
 		if root == "" {
-			generics, err := v.Mounts("generic")
+			var err error
+			paths, err = v.KVMounts()
 			if err != nil {
 				return err
 			}
-			kvs, err := v.Mounts("kv")
-			if err != nil {
-				return err
-			}
-
-			paths = append(generics, kvs...)
 		} else {
 			paths, err = v.List(root)
 			if err != nil {
@@ -707,7 +721,7 @@ func (c *CLI) cmdUndelete(command string, args ...string) error {
 
 			//The version list was looked up under the parsed path; the
 			// client takes literal paths, so the undelete uses it too.
-			if err = v.Client().Undelete(secret, versions); err != nil {
+			if err = v.UndeleteVersions(secret, versions); err != nil {
 				return err
 			}
 		} else {
@@ -945,6 +959,26 @@ func (c *CLI) cmdExport(command string, args ...string) error {
 	return nil
 }
 
+// importPair is one secret from a version-2 export, paired with the path it
+// is destined for.
+type importPair struct {
+	path   string
+	secret exportSecret
+}
+
+// importPairs flattens a version-2 export's secrets into pairs sorted by
+// path. data.Data is a map, whose iteration order Go deliberately
+// randomizes; sorting here means cmdImport's processing order is a function
+// of the input alone, never of map internals (Declared Behavior Change 4).
+func importPairs(data map[string]exportSecret) []importPair {
+	pairs := make([]importPair, 0, len(data))
+	for path, secret := range data {
+		pairs = append(pairs, importPair{path: path, secret: secret})
+	}
+	sort.Slice(pairs, func(i, j int) bool { return pairs[i].path < pairs[j].path })
+	return pairs
+}
+
 func (c *CLI) cmdImport(command string, args ...string) error {
 	opt := c.opt
 	r := c.r
@@ -1018,8 +1052,12 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 		}
 
 		//Put the secrets in the places, writing the versions in the correct order and deleting/destroying secrets that
-		// need to be deleted/destroyed.
-		for path, secret := range data.Data {
+		// need to be deleted/destroyed. Distinct paths import concurrently, at
+		// the same worker count as gen/ssh/rsa.
+		pairs := importPairs(data.Data)
+
+		return parallel.EachLimit(pairs, max(runtime.NumCPU(), 4), func(_ int, pair importPair) error {
+			path, secret := pair.path, pair.secret
 			s := vault.SecretEntry{
 				Path: path,
 			}
@@ -1045,33 +1083,27 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 					}
 					state = vault.SecretStateDeleted
 				}
-				data := vault.NewSecret()
+				versionData := vault.NewSecret()
 				for k, v := range secret.Versions[i].Value {
-					_ = data.Set(k, v, false)
+					_ = versionData.Set(k, v, false)
 				}
 				// Safe conversion: i is bounded by len(secret.Versions)
 				// Check if adding i to firstVersion would overflow
 				if i < 0 || uint(i) > ^uint(0)-firstVersion {
-					_, _ = fmt.Fprintf(os.Stderr, "@R{Version number overflow detected for secret}\n")
-					return fmt.Errorf("version number overflow detected")
+					return fmt.Errorf("version number overflow detected for secret %s", path)
 				}
 				s.Versions = append(s.Versions, vault.SecretVersion{
 					Number: firstVersion + uint(i),
 					State:  state,
-					Data:   data,
+					Data:   versionData,
 				})
 			}
 
-			err := s.Copy(v, s.Path, vault.TreeCopyOpts{
+			return s.Copy(v, s.Path, vault.TreeCopyOpts{
 				Clear: true,
 				Pad:   !opt.Import.IgnoreDestroyed && !opt.Import.Shallow,
 			})
-			if err != nil {
-				return err
-			}
-		}
-
-		return nil
+		})
 	}
 
 	var fn importFunc
@@ -1103,15 +1135,18 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 }
 
 // moveCopyParams captures the per-command differences between move and copy.
-// op is the underlying vault operation (v.Move or v.Copy); verb names the
-// command for messages and the recurse prompt; guardRecurseVersion enables the
-// check that forbids recursively moving or copying a versioned source.
+// op is the underlying vault operation (v.Move or v.Copy) used for the
+// non-recursive, single-secret path; move tells the recursive path whether
+// to move or copy; verb names the command for messages and the recurse
+// prompt; guardRecurseVersion enables the check that forbids recursively
+// moving or copying a versioned source.
 type moveCopyParams struct {
 	verb                string
 	recurse             bool
 	force               bool
 	deep                bool
 	guardRecurseVersion bool
+	move                bool
 	op                  func(string, string, vault.MoveCopyOpts) error
 }
 
@@ -1150,7 +1185,7 @@ func (c *CLI) moveCopy(v *vault.Vault, args []string, p moveCopyParams) error {
 		if !p.force && !recursively(p.verb, args...) {
 			return nil /* skip this command, process the next */
 		}
-		err := v.MoveCopyTree(args[0], args[1], p.op, opts)
+		err := v.MoveCopyTree(args[0], args[1], p.move, opts)
 		if err != nil && (!vault.IsNotFound(err) || !p.force) {
 			return err
 		}
@@ -1181,6 +1216,7 @@ func (c *CLI) cmdMove(command string, args ...string) error {
 		force:               opt.Move.Force,
 		deep:                opt.Move.Deep,
 		guardRecurseVersion: true,
+		move:                true,
 		op:                  v.Move,
 	})
 }
@@ -1204,6 +1240,7 @@ func (c *CLI) cmdCopy(command string, args ...string) error {
 		force:               opt.Copy.Force,
 		deep:                opt.Copy.Deep,
 		guardRecurseVersion: true,
+		move:                false,
 		op:                  v.Copy,
 	})
 }

@@ -28,6 +28,7 @@ func newCLIFakeV2(t *testing.T) *cliFakeVault {
 		data:     map[string]map[string]string{},
 		versions: map[string][]*fakeVersion{},
 		v2:       true,
+		t:        t,
 	}
 	srv := httptest.NewServer(fv)
 	t.Cleanup(srv.Close)

@@ -176,6 +176,13 @@ func (f *fakeVault) handleKVv2(w http.ResponseWriter, r *http.Request, mount, su
 			f.serveV2List(w, r, path)
 			return
 		}
+		if r.Method == http.MethodDelete {
+			// V2DestroyMetadata: permanently wipes every version and the
+			// metadata itself, the way a deep move's DestroyAll call needs.
+			delete(f.v2data, path)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		f.serveV2Metadata(w, r, path)
 	case "delete":
 		f.applyToVersions(w, r, path, func(v *fakeV2Version) {

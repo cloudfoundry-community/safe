@@ -30,6 +30,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -104,6 +105,119 @@ type fakeVault struct {
 	// cannot tell a test whether a key was ever transmitted before an abort;
 	// this can.
 	rekeyUpdateCalls int
+
+	// reqLog records one "METHOD /v1/<path>[?query]" line per request
+	// served, in arrival order. requestCount() counts regexp matches;
+	// resetRequestLog() clears it.
+	reqLog []string
+
+	// gate, when non-nil, parks every request matching its pattern before
+	// dispatch. Installed by holdRequests. The pointer itself is guarded by
+	// f.mu, but parking happens on the gate's own lock -- never f.mu -- so a
+	// parked request can never deadlock the fake against itself.
+	gate *requestGate
+
+	// t is the test that built this fakeVault, captured so holdRequests can
+	// register a Cleanup that force-releases a gate nobody ever tripped.
+	// Set once by newTestVault; never written again, so reading it from
+	// ServeHTTP's or holdRequests' goroutines needs no lock.
+	t *testing.T
+}
+
+// requestGate parks the first `need` matching requests until all of them
+// have arrived, then releases every one of them at once by closing release.
+// Closing a channel wakes every blocked receiver at once, so the gate needs
+// no separate condition variable; `mu` only protects the bookkeeping
+// (arrived, tripped) around that close, independent of the fakeVault's
+// f.mu, so a goroutine parked in park (blocked on <-release) holds no lock
+// ServeHTTP needs elsewhere.
+type requestGate struct {
+	pattern *regexp.Regexp
+	need    int
+
+	mu      sync.Mutex
+	arrived int
+	tripped bool
+	release chan struct{}
+}
+
+// holdRequests installs a gate so requests whose logged "METHOD /path[?query]"
+// line matches pattern park until n of them are concurrently in flight, then
+// releases them all and closes the returned channel.
+//
+// n <= 0 trips the gate immediately, so every match passes straight
+// through. Replacing an existing gate first force-releases any requests
+// still parked on it, so a second call never orphans a waiter.
+//
+// A test that never drives n matching requests concurrently would park
+// its handler goroutines on `release` forever, which would in turn hang
+// httptest.Server.Close() in t.Cleanup past the test's own deadline. To
+// keep that failure mode bounded, holdRequests registers its own
+// t.Cleanup that force-releases this gate if it never tripped. Cleanups
+// run in the order they were added and only after the test function
+// itself has returned, so a regressing test still hits its own timeout
+// (e.g. a t.Fatal after 5s) first; this cleanup then unblocks whatever is
+// still parked so the server can close.
+//
+// Choose pattern carefully: it must match a request that runs only after
+// mount discovery has already been cached (e.g. a data-path write during a
+// walk that already warmed the mount cache). A pattern that also matches
+// the request(s) vaultkv issues while it is still resolving a mount path
+// would park while that goroutine holds vaultkv's own mount-resolution
+// lock, and the gate could never reach n arrivals -- nothing else could
+// get past that lock to trip it.
+func (f *fakeVault) holdRequests(n int, pattern string) <-chan struct{} {
+	g := &requestGate{
+		pattern: regexp.MustCompile(pattern),
+		need:    n,
+		release: make(chan struct{}),
+	}
+	if n <= 0 {
+		g.tripped = true
+		close(g.release)
+	}
+
+	f.mu.Lock()
+	prev := f.gate
+	f.gate = g
+	f.mu.Unlock()
+
+	if prev != nil {
+		prev.forceRelease()
+	}
+	if f.t != nil {
+		f.t.Cleanup(g.forceRelease)
+	}
+
+	return g.release
+}
+
+// forceRelease closes release if the gate has not already tripped,
+// unblocking any goroutines parked in park. Safe to call more than once,
+// concurrently, and from any goroutine.
+func (g *requestGate) forceRelease() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.tripped {
+		g.tripped = true
+		close(g.release)
+	}
+}
+
+// park blocks the calling goroutine until `need` goroutines have called
+// park (tripping the gate) or forceRelease has fired, whichever comes first.
+func (g *requestGate) park() {
+	g.mu.Lock()
+	if !g.tripped {
+		g.arrived++
+		if g.arrived >= g.need {
+			g.tripped = true
+			close(g.release)
+		}
+	}
+	g.mu.Unlock()
+
+	<-g.release
 }
 
 func newFakeVault() *fakeVault {
@@ -278,6 +392,24 @@ func jsonErr(w http.ResponseWriter, status int, msg string) {
 // ServeHTTP dispatches requests to the fake Vault server.
 func (f *fakeVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p := r.URL.Path // e.g. /v1/secret/foo
+
+	line := r.Method + " " + p
+	if r.URL.RawQuery != "" {
+		line += "?" + r.URL.RawQuery
+	}
+	f.mu.Lock()
+	f.reqLog = append(f.reqLog, line)
+	f.mu.Unlock()
+
+	// Copy the gate pointer out under f.mu, then park (if it matches) on the
+	// gate's own lock. Parking never happens while holding f.mu, so a parked
+	// request cannot block any other request's dispatch or logging.
+	f.mu.RLock()
+	gate := f.gate
+	f.mu.RUnlock()
+	if gate != nil && gate.pattern.MatchString(line) {
+		gate.park()
+	}
 
 	switch {
 	case p == "/v1/sys/internal/ui/mounts" && r.Method == http.MethodGet:
@@ -699,6 +831,7 @@ func (f *fakeVault) handleGenerateRoot(w http.ResponseWriter, r *http.Request) {
 func newTestVault(t *testing.T) (*vault.Vault, *fakeVault) {
 	t.Helper()
 	fv := newFakeVault()
+	fv.t = t
 	srv := httptest.NewServer(fv)
 	t.Cleanup(srv.Close)
 
@@ -760,6 +893,27 @@ func assertKeyNotFound(t *testing.T, err error) {
 	if !vault.IsKeyNotFound(err) {
 		t.Fatalf("expected KeyNotFound error, got: %v", err)
 	}
+}
+
+// requestCount counts logged requests matching the given regexp, which is
+// matched against lines of the form "GET /v1/secret/foo?list=true".
+func (f *fakeVault) requestCount(pattern string) int {
+	re := regexp.MustCompile(pattern)
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	n := 0
+	for _, l := range f.reqLog {
+		if re.MatchString(l) {
+			n++
+		}
+	}
+	return n
+}
+
+func (f *fakeVault) resetRequestLog() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reqLog = nil
 }
 
 // suppress vaultkv import used only for type reference

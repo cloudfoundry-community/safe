@@ -8,13 +8,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/cloudfoundry-community/safe/internal/parallel"
 	"github.com/cloudfoundry-community/vaultkv"
 	"github.com/jhunt/go-ansi"
 )
@@ -22,6 +27,28 @@ import (
 type Vault struct {
 	client *vaultkv.KV
 	debug  bool
+
+	// versionsMu guards versionsCache, which memoizes Versions per literal
+	// Vault path for the life of the process. The tree walk runs NumCPU
+	// workers concurrently calling Versions, so this must be race-safe.
+	versionsMu    sync.RWMutex
+	versionsCache map[string][]vaultkv.KVVersion
+	// versionsGen counts invalidations per path, and versionsEpoch counts
+	// whole-cache flushes (Curl's non-GET/HEAD case, which cannot be
+	// resolved to one path). Versions snapshots both before its network
+	// fetch and only stores the result if neither moved while the fetch was
+	// in flight: a fetch that straddles an invalidation -- a slow reader
+	// racing a concurrent write -- would otherwise be free to store its
+	// pre-mutation snapshot into the cache AFTER the mutation's own
+	// invalidation already ran, and nothing would ever clear it again. A
+	// plain "was there a cache entry at path X" check at store time cannot
+	// catch this: an over-called invalidateVersions may have already run
+	// and left no entry to compare against, or an unrelated Curl flush may
+	// have moved the epoch without ever touching this path's gen. -race
+	// cannot see this: it is a logical race between requests, not a data
+	// race on memory, since every access here is already lock-guarded.
+	versionsGen   map[string]uint64
+	versionsEpoch uint64
 }
 
 type VaultConfig struct {
@@ -30,6 +57,28 @@ type VaultConfig struct {
 	Namespace  string
 	CACerts    *x509.CertPool
 	SkipVerify bool
+}
+
+// CanonicalURL applies the scheme-default-port normalization NewVault uses
+// when building a client's VaultURL, so callers can compare a client's live
+// URL against a raw address without duplicating that logic.
+func CanonicalURL(raw string) (string, error) {
+	u, err := url.Parse(strings.TrimSuffix(raw, "/"))
+	if err != nil {
+		return "", fmt.Errorf("could not parse Vault URL: %w", err)
+	}
+
+	//The default port for Vault is typically 8200 (which is the VaultKV default),
+	// but safe has historically ignored that and used the default http or https
+	// port, depending on which was specified as the scheme
+	if u.Port() == "" {
+		port := ":80"
+		if strings.ToLower(u.Scheme) == "https" {
+			port = ":443"
+		}
+		u.Host = u.Host + port
+	}
+	return u.String(), nil
 }
 
 // NewVault creates a new Vault object.  If an empty token is specified,
@@ -45,20 +94,13 @@ func NewVault(conf VaultConfig) (*Vault, error) {
 			return nil, fmt.Errorf("unable to retrieve system root certificate authorities: %w", err)
 		}
 	}
-	vaultURL, err := url.Parse(strings.TrimSuffix(conf.URL, "/"))
+	canonical, err := CanonicalURL(conf.URL)
+	if err != nil {
+		return nil, err
+	}
+	vaultURL, err := url.Parse(canonical)
 	if err != nil {
 		return nil, fmt.Errorf("could not parse Vault URL: %w", err)
-	}
-
-	//The default port for Vault is typically 8200 (which is the VaultKV default),
-	// but safe has historically ignored that and used the default http or https
-	// port, depending on which was specified as the scheme
-	if vaultURL.Port() == "" {
-		port := ":80"
-		if strings.ToLower(vaultURL.Scheme) == "https" {
-			port = ":443"
-		}
-		vaultURL.Host = vaultURL.Host + port
 	}
 
 	proxyRouter, err := NewProxyRouter()
@@ -79,11 +121,20 @@ func NewVault(conf VaultConfig) (*Vault, error) {
 				Timeout: 30 * time.Second,
 				Transport: &http.Transport{
 					Proxy: proxyRouter.Proxy,
+					DialContext: (&net.Dialer{
+						Timeout:   10 * time.Second,
+						KeepAlive: 30 * time.Second,
+					}).DialContext,
+					ForceAttemptHTTP2:     true,
+					TLSHandshakeTimeout:   10 * time.Second,
+					IdleConnTimeout:       90 * time.Second,
+					ExpectContinueTimeout: 1 * time.Second,
+					MaxIdleConnsPerHost:   100,
 					TLSClientConfig: &tls.Config{
 						RootCAs:            conf.CACerts,
 						InsecureSkipVerify: conf.SkipVerify, // #nosec G402 - User-controlled via config for development/testing
+						ClientSessionCache: tls.NewLRUClientSessionCache(32),
 					},
-					MaxIdleConnsPerHost: 100,
 				},
 			},
 			Trace: func() (ret io.Writer) {
@@ -93,7 +144,9 @@ func NewVault(conf VaultConfig) (*Vault, error) {
 				return ret
 			}(),
 		}).NewKV(),
-		debug: shouldDebug(),
+		debug:         shouldDebug(),
+		versionsCache: map[string][]vaultkv.KVVersion{},
+		versionsGen:   map[string]uint64{},
 	}, nil
 }
 
@@ -106,14 +159,63 @@ func (v *Vault) MountVersion(path string) (uint, error) {
 	return v.client.MountVersion(path)
 }
 
+// Versions returns the version history of the secret at path, caching the
+// result per literal Vault path for the life of the process. Every caller
+// gets its own clone, since the tree walk re-slices the result across
+// NumCPU concurrent workers. Errors are never cached: a not-found is often
+// immediately followed by a create, and caching that miss would hide it.
 func (v *Vault) Versions(path string) ([]vaultkv.KVVersion, error) {
 	path = Canonicalize(path)
+
+	v.versionsMu.RLock()
+	cached, ok := v.versionsCache[path]
+	gen := v.versionsGen[path]
+	epoch := v.versionsEpoch
+	v.versionsMu.RUnlock()
+	if ok {
+		return slices.Clone(cached), nil
+	}
+
 	ret, err := v.client.Versions(path)
 	if vaultkv.IsNotFound(err) {
 		return nil, NewSecretNotFoundError(path)
 	}
+	if err != nil {
+		return ret, err
+	}
 
-	return ret, err
+	v.versionsMu.Lock()
+	// Store only if nothing invalidated this path (or flushed the whole
+	// cache) while the fetch above was in flight. Either would mean this
+	// result was read before a concurrent mutation and must not be allowed
+	// to resurrect as the cached value after that mutation's own
+	// invalidation already ran.
+	if v.versionsGen[path] == gen && v.versionsEpoch == epoch {
+		v.versionsCache[path] = ret
+	}
+	v.versionsMu.Unlock()
+
+	return slices.Clone(ret), nil
+}
+
+// invalidateVersions drops the cached history for a literal Vault path and
+// bumps its generation, so a fetch already in flight for it will not store
+// a stale result once it completes. Canonicalize only: ParsePath would
+// truncate a literal ':' in a name. Cheap to over-call; correctness only
+// requires that every mutation path calls it.
+func (v *Vault) invalidateVersions(path string) {
+	path = Canonicalize(path)
+	v.versionsMu.Lock()
+	delete(v.versionsCache, path)
+	v.versionsGen[path]++
+	v.versionsMu.Unlock()
+}
+
+// UndeleteVersions undeletes the named versions of a secret at a literal
+// Vault path, invalidating any cached version history for it.
+func (v *Vault) UndeleteVersions(path string, versions []uint) error {
+	defer v.invalidateVersions(path)
+	return v.client.Undelete(Canonicalize(path), versions)
 }
 
 func shouldDebug() bool {
@@ -126,6 +228,14 @@ func shouldDebug() bool {
 // drop a trailing one -- were run over the whole string, query and all, so a
 // query carrying a URL was sent with its slashes collapsed, ?u=http://a/b
 // arriving as ?u=http:/a/b, and a value ending in a slash arrived without it.
+//
+// Curl's path is an arbitrary API URI, not necessarily a secret path (it can
+// address sys/, auth/, anything), so it cannot be resolved to a single cache
+// key the way every other mutating method here is. A non-GET/HEAD method is
+// assumed capable of mutating some secret's version history, and flushes the
+// whole cache rather than guessing which key. The flush runs regardless of
+// the call's outcome: a PUT that fails partway through Vault's own request
+// handling can still have applied.
 func (v *Vault) Curl(method string, path string, body []byte) (*http.Response, error) {
 	u, err := url.Parse(path)
 	if err != nil {
@@ -135,6 +245,23 @@ func (v *Vault) Curl(method string, path string, body []byte) (*http.Response, e
 	query, err := url.ParseQuery(u.RawQuery)
 	if err != nil {
 		return nil, fmt.Errorf("could not parse query: %w", err)
+	}
+
+	if !strings.EqualFold(method, "GET") && !strings.EqualFold(method, "HEAD") {
+		defer func() {
+			v.versionsMu.Lock()
+			clear(v.versionsCache)
+			// Bumped alongside the clear, not just the clear alone: a path
+			// this Curl call touched but that was never previously
+			// invalidated has no versionsGen entry yet, so its gen would
+			// still read as the same zero value before and after a bare
+			// clear -- indistinguishable from "nothing happened" to a
+			// fetch racing this call. The epoch has no such default-value
+			// collision, since every Versions call reads it fresh under
+			// the same lock this increment holds.
+			v.versionsEpoch++
+			v.versionsMu.Unlock()
+		}()
 	}
 
 	return v.client.Client.Curl(method, Canonicalize(u.Path), query, bytes.NewBuffer(body))
@@ -185,6 +312,36 @@ func (v *Vault) Read(path string) (secret *Secret, err error) {
 	return
 }
 
+// readLatestWithMeta reads the newest live version of a secret in one
+// request, also returning the KVVersion metadata the data endpoint
+// carries. Unlike Read it takes a LITERAL Vault path: no key or version
+// syntax, no unescaping -- but it still canonicalizes slashes, same as
+// every other path-taking method here, so a mount-root secret name (which
+// Mounts returns with a trailing slash) reads correctly. On a v1 mount the
+// returned metadata carries only Version==1 and its Deleted/Destroyed
+// fields are meaningless; callers must gate on mount version first.
+func (v *Vault) readLatestWithMeta(path string) (*Secret, vaultkv.KVVersion, error) {
+	path = Canonicalize(path)
+	secret := NewSecret()
+	raw := map[string]any{}
+	meta, err := v.client.Get(path, &raw, nil)
+	if err != nil {
+		return secret, meta, err
+	}
+	for k, val := range raw {
+		if s, ok := val.(string); ok {
+			secret.data[k] = s
+			continue
+		}
+		b, merr := json.Marshal(val)
+		if merr != nil {
+			return secret, meta, merr
+		}
+		secret.data[k] = string(b)
+	}
+	return secret, meta, nil
+}
+
 // notFoundReading turns a 404 from a read into the most specific not-found
 // error it can. A versioned read fails either because the secret is not there
 // or because that one version is not, and the two send a reader looking in
@@ -199,7 +356,7 @@ func (v *Vault) notFoundReading(path string, version uint64) error {
 		return NewSecretNotFoundError(path)
 	}
 
-	versions, err := v.client.Versions(path)
+	versions, err := v.Versions(path)
 	if err != nil || len(versions) == 0 {
 		//No history to consult, so the secret itself is the better answer.
 		return NewSecretNotFoundError(path)
@@ -248,7 +405,7 @@ func (v *Vault) ExplainNotFound(path string, err error) error {
 		return err
 	}
 
-	versions, verr := v.client.Versions(secret)
+	versions, verr := v.Versions(secret)
 	if verr != nil || len(versions) == 0 {
 		//Nothing to consult, so the secret really is the best answer.
 		return err
@@ -290,6 +447,8 @@ func (v *Vault) Write(path string, s *Secret) error {
 	if version != 0 {
 		return fmt.Errorf("cannot write to paths in /path^version notation")
 	}
+
+	defer v.invalidateVersions(path)
 
 	if s.Empty() {
 		return v.deleteIfPresent(EncodePath(path, "", 0), DeleteOpts{})
@@ -435,11 +594,11 @@ func (v *Vault) DeleteTree(root string, opts DeleteOpts) error {
 	if err != nil {
 		return err
 	}
-	for _, path := range secrets.Paths() {
-		err = v.deleteEntireSecret(path, opts.Destroy, opts.All)
-		if err != nil {
-			return err
-		}
+	err = parallel.EachLimit(secrets.Paths(), max(runtime.NumCPU(), 4), func(_ int, path string) error {
+		return v.deleteEntireSecret(path, opts.Destroy, opts.All)
+	})
+	if err != nil {
+		return err
 	}
 
 	mount, err := v.Client().MountPath(rawRoot)
@@ -554,6 +713,7 @@ func (v *Vault) Delete(path string, opts DeleteOpts) error {
 
 func (v *Vault) deleteEntireSecret(path string, destroy bool, all bool) error {
 	secret, _, version := ParsePath(path)
+	defer v.invalidateVersions(secret)
 
 	if destroy && all {
 		return v.client.DestroyAll(secret)
@@ -661,6 +821,7 @@ func (v *Vault) deleteSpecificKey(path string, opts DeleteOpts) error {
 // DeleteVersions marks the given versions of the given secret as deleted for
 // a v2 backend or actually deletes it for a v1 backend.
 func (v *Vault) DeleteVersions(path string, versions []uint) error {
+	defer v.invalidateVersions(path)
 	return v.client.Delete(path, &vaultkv.KVDeleteOpts{Versions: versions, V1Destroy: true})
 }
 
@@ -669,6 +830,7 @@ func (v *Vault) Undelete(path string) error {
 	if key != "" {
 		return fmt.Errorf("cannot undelete specific key (%s)", path)
 	}
+	defer v.invalidateVersions(secret)
 
 	respVersions, err := v.Versions(secret)
 	if err != nil {
@@ -884,7 +1046,7 @@ func (v *Vault) Copy(oldpath, newpath string, opts MoveCopyOpts) error {
 // MoveCopyTree will recursively copy all nodes from the root to the new location.
 // This function will get confused about 'secret:key' syntax, so don't let those
 // get routed here - they don't make sense for a recursion anyway.
-func (v *Vault) MoveCopyTree(oldRoot, newRoot string, f func(string, string, MoveCopyOpts) error, opts MoveCopyOpts) error {
+func (v *Vault) MoveCopyTree(oldRoot, newRoot string, move bool, opts MoveCopyOpts) error {
 	//Neither root can name a key or a version: the recursion drops both and
 	// relocates the whole subtree instead of the one thing that was named.
 	rawOldRoot, oldKey, oldVersion := ParsePath(oldRoot)
@@ -892,31 +1054,61 @@ func (v *Vault) MoveCopyTree(oldRoot, newRoot string, f func(string, string, Mov
 	if oldKey != "" || newKey != "" || oldVersion != 0 || newVersion != 0 {
 		return fmt.Errorf("cannot recursively copy or move a specific key or version (%s -> %s)", oldRoot, newRoot)
 	}
+	//Same guard v.Copy applies: DeletedVersions only makes sense alongside
+	// Deep, and the recursive path must refuse it rather than silently
+	// falling back to a shallow copy plus a versionless delete.
+	if opts.DeletedVersions && !opts.Deep {
+		return fmt.Errorf("DeletedVersions requires Deep to be set")
+	}
 	//The walk wants the literal Vault paths ParsePath returned. The prefix
-	// replace below and f() both work in the escaped syntax that
-	// Secrets.Paths() emits, and EscapePathSegment substitutes byte by byte,
-	// so escaping a path and escaping its root prefix agree: the replace stays
-	// exact. Re-encoding also normalizes the roots the way the walk does.
+	// replace below works in the escaped syntax that entry paths encode to,
+	// and EscapePathSegment substitutes byte by byte, so escaping a path and
+	// escaping its root prefix agree: the replace stays exact. Re-encoding
+	// also normalizes the roots the way the walk does.
 	oldRoot = EncodePath(rawOldRoot, "", 0)
 	newRoot = EncodePath(rawNewRoot, "", 0)
 
-	tree, err := v.ConstructSecrets(rawOldRoot, TreeOpts{FetchKeys: false, AllowDeletedSecrets: opts.Deep, SkipVersionInfo: true})
+	//The walk skips (rather than aborts on) any node it cannot read due to
+	// permissions, counting each skip here. Recursion treats the walk as a
+	// complete inventory and does destructive work against it -- for a
+	// move, that skip would otherwise let an entry it never actually read
+	// reach the source delete/destroy below. So a nonzero skip count
+	// refuses the whole operation up front, matching the old per-secret
+	// verifySecretState's abort-on-403 behavior.
+	var skipped atomic.Uint64
+	tree, err := v.ConstructSecrets(rawOldRoot, TreeOpts{
+		FetchKeys:           true,
+		FetchAllVersions:    opts.Deep,
+		GetDeletedVersions:  opts.Deep && opts.DeletedVersions,
+		AllowDeletedSecrets: opts.Deep,
+		SkippedForbidden:    &skipped,
+	})
 	if err != nil {
 		return err
 	}
+	if n := skipped.Load(); n > 0 {
+		verb := "copy"
+		if move {
+			verb = "move"
+		}
+		return fmt.Errorf("cannot recursively %s %s: %d secret(s) or version(s) under it could not be read (permission denied)", verb, oldRoot, n)
+	}
+
 	if opts.SkipIfExists {
 		//Writing one secret over a deleted secret isn't clobbering. Completely overwriting a set of deleted secrets would be
 		newTree, err := v.ConstructSecrets(rawNewRoot, TreeOpts{FetchKeys: false, AllowDeletedSecrets: !opts.Deep, SkipVersionInfo: true})
 		if err != nil && !IsNotFound(err) {
 			return err
 		}
+		// The keyed source walk's Paths() emits path:key entries per key, so
+		// the clobber comparison is built from entry paths on BOTH sides.
 		existing := map[string]bool{}
-		for _, path := range newTree.Paths() {
-			existing[path] = true
+		for _, entry := range newTree {
+			existing[EncodePath(entry.Path, "", 0)] = true
 		}
 		existingPaths := []string{}
-		for _, path := range tree.Paths() {
-			newPath := strings.Replace(path, oldRoot, newRoot, 1)
+		for _, entry := range tree {
+			newPath := strings.Replace(EncodePath(entry.Path, "", 0), oldRoot, newRoot, 1)
 			if existing[newPath] {
 				existingPaths = append(existingPaths, newPath)
 			}
@@ -931,16 +1123,34 @@ func (v *Vault) MoveCopyTree(oldRoot, newRoot string, f func(string, string, Mov
 			return nil
 		}
 	}
-	for _, path := range tree.Paths() {
-		newPath := strings.Replace(path, oldRoot, newRoot, 1)
-		err = f(path, newPath, opts)
-		if err != nil {
+
+	err = parallel.EachLimit(tree, max(runtime.NumCPU(), 4), func(_ int, entry SecretEntry) error {
+		newPath := strings.Replace(EncodePath(entry.Path, "", 0), oldRoot, newRoot, 1)
+		rawNewPath, _, _ := ParsePath(newPath)
+		if err := entry.Copy(v, rawNewPath, TreeCopyOpts{Clear: opts.Deep, Pad: opts.Deep}); err != nil {
 			return err
 		}
-	}
-
-	if _, err := v.Read(oldRoot); !IsNotFound(err) { // run through a copy unless we successfully got a 404 from this node
-		return f(oldRoot, newRoot, opts)
+		// An entry the walk could not actually read carries no versions.
+		// The skip check above already refuses the whole operation in that
+		// case, but guard the destructive branch independently too: never
+		// let a zero-version entry -- one entry.Copy just wrote nothing
+		// for -- reach the source delete/destroy.
+		if !move || len(entry.Versions) == 0 {
+			return nil
+		}
+		if opts.Deep && opts.DeletedVersions {
+			err := v.client.DestroyAll(entry.Path)
+			v.invalidateVersions(entry.Path)
+			return err
+		}
+		// deleteEntireSecret, not v.Delete: Delete re-runs
+		// verifySecretState (a metadata GET per secret) that the walk
+		// already answered, and canSemanticallyDelete is a no-op for the
+		// key-less, version-less paths recursion guarantees.
+		return v.deleteEntireSecret(EncodePath(entry.Path, "", 0), false, false)
+	})
+	if err != nil {
+		return err
 	}
 	return nil
 }
@@ -968,6 +1178,7 @@ func (v *Vault) Move(oldpath, newpath string, opts MoveCopyOpts) error {
 		// deep move that names a key or a version, so nothing is dropped here.
 		rawOldPath, _, _ := ParsePath(oldpath)
 		err = v.client.DestroyAll(rawOldPath)
+		v.invalidateVersions(rawOldPath)
 		if err != nil {
 			return err
 		}
@@ -995,6 +1206,25 @@ func (v *Vault) Mounts(typ string) ([]string, error) {
 	}
 
 	return ret, nil
+}
+
+// KVMounts returns every kv and generic mount in one mount-table request,
+// kv mounts first, matching the order the root walk historically used.
+func (v *Vault) KVMounts() ([]string, error) {
+	mounts, err := v.client.Client.ListMounts()
+	if err != nil {
+		return nil, err
+	}
+	var kvs, generics []string
+	for name, mountInfo := range mounts {
+		switch mountInfo.Type {
+		case "kv":
+			kvs = append(kvs, strings.TrimSuffix(name, "/")+"/")
+		case "generic":
+			generics = append(generics, strings.TrimSuffix(name, "/")+"/")
+		}
+	}
+	return append(kvs, generics...), nil
 }
 
 func DecodeErrorResponse(body []byte) error {

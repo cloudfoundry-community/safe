@@ -8,7 +8,6 @@ import (
 	"os"
 	"reflect"
 	"regexp"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -182,7 +181,7 @@ func (c *CLI) cmdGet(command string, args ...string) error {
 	// fn always returns nil: per-path errors are aggregated by the
 	// sequential loop below exactly as before, so EachLimit's fail-fast
 	// never triggers here and the always-nil return is deliberate.
-	_ = parallel.EachLimit(context.Background(), args, max(runtime.NumCPU(), 4), func(_ context.Context, i int, path string) error {
+	_ = parallel.EachLimit(context.Background(), args, parallel.IOLimit(), func(_ context.Context, i int, path string) error {
 		s, err := v.Read(path)
 		fetches[i] = fetched{s: s, err: err}
 		return nil
@@ -1034,7 +1033,7 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 		}
 		sort.Strings(paths)
 		wrote := make([]bool, len(paths))
-		err = parallel.EachLimit(context.Background(), paths, max(runtime.NumCPU(), 4), func(_ context.Context, i int, path string) error {
+		err = parallel.EachLimit(context.Background(), paths, parallel.IOLimit(), func(_ context.Context, i int, path string) error {
 			//The keys of an export are literal Vault paths; Write reads its
 			// argument as path:key syntax.
 			if err := v.Write(vault.EncodePath(path, "", 0), data[path]); err != nil {
@@ -1085,11 +1084,11 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 		}
 
 		//Put the secrets in the places, writing the versions in the correct order and deleting/destroying secrets that
-		// need to be deleted/destroyed. Distinct paths import concurrently, at
-		// the same worker count as gen/ssh/rsa.
+		// need to be deleted/destroyed. Distinct paths import concurrently at
+		// the IO width: imports are round trips, not compute.
 		pairs := importPairs(data.Data)
 
-		return parallel.EachLimit(context.Background(), pairs, max(runtime.NumCPU(), 4), func(_ context.Context, _ int, pair importPair) error {
+		return parallel.EachLimit(context.Background(), pairs, parallel.IOLimit(), func(_ context.Context, _ int, pair importPair) error {
 			path, secret := pair.path, pair.secret
 			s := vault.SecretEntry{
 				Path: path,

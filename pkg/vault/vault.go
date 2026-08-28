@@ -120,7 +120,7 @@ func NewVault(conf VaultConfig) (*Vault, error) {
 			Namespace: conf.Namespace,
 			Client: &http.Client{
 				Timeout: 30 * time.Second,
-				Transport: &http.Transport{
+				Transport: newRetryTransport(&http.Transport{
 					Proxy: proxyRouter.Proxy,
 					DialContext: (&net.Dialer{
 						Timeout:   10 * time.Second,
@@ -136,7 +136,7 @@ func NewVault(conf VaultConfig) (*Vault, error) {
 						InsecureSkipVerify: conf.SkipVerify, // #nosec G402 - User-controlled via config for development/testing
 						ClientSessionCache: tls.NewLRUClientSessionCache(32),
 					},
-				},
+				}),
 			},
 			Trace: func() (ret io.Writer) {
 				if shouldDebug() {
@@ -598,7 +598,7 @@ func (v *Vault) DeleteTree(root string, opts DeleteOpts) error {
 	// The context bounds dispatch only: the deletes themselves are vaultkv
 	// requests, which carry no context, so a failure stops new paths from
 	// starting while in-flight requests run to their client timeout.
-	err = parallel.EachLimit(context.Background(), secrets.Paths(), max(runtime.NumCPU(), 4), func(_ context.Context, _ int, path string) error {
+	err = parallel.EachLimit(context.Background(), secrets.Paths(), parallel.IOLimit(), func(_ context.Context, _ int, path string) error {
 		return v.deleteEntireSecret(path, opts.Destroy, opts.All)
 	})
 	if err != nil {
@@ -1130,7 +1130,7 @@ func (v *Vault) MoveCopyTree(oldRoot, newRoot string, move bool, opts MoveCopyOp
 
 	// As in DeleteTree, the context bounds dispatch only: entry.Copy and
 	// the source deletes are contextless vaultkv requests.
-	err = parallel.EachLimit(context.Background(), tree, max(runtime.NumCPU(), 4), func(_ context.Context, _ int, entry SecretEntry) error {
+	err = parallel.EachLimit(context.Background(), tree, parallel.IOLimit(), func(_ context.Context, _ int, entry SecretEntry) error {
 		newPath := strings.Replace(EncodePath(entry.Path, "", 0), oldRoot, newRoot, 1)
 		rawNewPath, _, _ := ParsePath(newPath)
 		if err := entry.Copy(v, rawNewPath, TreeCopyOpts{Clear: opts.Deep, Pad: opts.Deep}); err != nil {

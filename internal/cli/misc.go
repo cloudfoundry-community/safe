@@ -153,6 +153,17 @@ func (c *CLI) cmdFmt(command string, args ...string) error {
 	oldKey := args[2]
 	newKey := args[3]
 
+	//The cost is checked before the read: a bad work factor should not cost
+	// a round trip to the Vault, and it must never be weakened below the
+	// bcrypt library's own default.
+	cost := vault.DefaultBcryptCost
+	if opt.Fmt.Cost != 0 {
+		cost = opt.Fmt.Cost
+	}
+	if cost < vault.MinBcryptCost {
+		return fmt.Errorf("bcrypt cost %d is below the minimum of %d", cost, vault.MinBcryptCost)
+	}
+
 	//fmt names the keys it reads and writes separately, so a key on the path
 	// is a mistake. Left unchecked it reads as one, and the complaint that
 	// comes back is that the key does not exist rather than that it does not
@@ -172,7 +183,7 @@ func (c *CLI) cmdFmt(command string, args ...string) error {
 		}
 		return nil
 	}
-	if err = s.Format(oldKey, newKey, fmtType, opt.SkipIfExists); err != nil {
+	if err = s.FormatWithCost(oldKey, newKey, fmtType, cost, opt.SkipIfExists); err != nil {
 		if vault.IsNotFound(err) {
 			return fmt.Errorf("%s:%s does not exist, cannot create %s encoded copy at %s:%s", path, oldKey, fmtType, path, newKey)
 		}

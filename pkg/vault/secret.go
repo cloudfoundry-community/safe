@@ -81,6 +81,12 @@ func (s *Secret) Empty() bool {
 }
 
 func (s *Secret) Format(oldKey, newKey, fmtType string, skipIfExists bool) error {
+	return s.FormatWithCost(oldKey, newKey, fmtType, DefaultBcryptCost, skipIfExists)
+}
+
+// FormatWithCost is Format with a caller-chosen bcrypt work factor. cost is
+// only consulted by the bcrypt format and may not be below MinBcryptCost.
+func (s *Secret) FormatWithCost(oldKey, newKey, fmtType string, cost int, skipIfExists bool) error {
 	if !s.Has(oldKey) {
 		return NewSecretNotFoundError(oldKey)
 	}
@@ -117,7 +123,7 @@ func (s *Secret) Format(oldKey, newKey, fmtType string, skipIfExists bool) error
 		}
 
 	case "bcrypt":
-		newVal, err := cryptBcrypt(oldVal)
+		newVal, err := cryptBcrypt(oldVal, cost)
 		if err != nil {
 			return err
 		}
@@ -202,9 +208,20 @@ func cryptSHA512(pass string) (string, error) {
 	return sha, err
 }
 
-func cryptBcrypt(pass string) (string, error) {
-	// for now, use a fixed worker cost of 12
-	hashed, err := bcrypt.GenerateFromPassword([]byte(pass), 12)
+// Bcrypt work factors: DefaultBcryptCost is what Format uses; MinBcryptCost
+// is the floor callers may not go below — it is the bcrypt library's own
+// default, and a lower cost would weaken the hash past what the library
+// itself would pick.
+const (
+	DefaultBcryptCost = 12
+	MinBcryptCost     = bcrypt.DefaultCost
+)
+
+func cryptBcrypt(pass string, cost int) (string, error) {
+	if cost < MinBcryptCost {
+		return "", fmt.Errorf("bcrypt cost %d is below the minimum of %d", cost, MinBcryptCost)
+	}
+	hashed, err := bcrypt.GenerateFromPassword([]byte(pass), cost)
 	if err != nil {
 		return "", err
 	}

@@ -363,7 +363,9 @@ type Options struct {
 	DHParam struct{} `cli:"dhparam, dhparams, dh"`
 	Prompt  struct{} `cli:"prompt"`
 	Vault   struct{} `cli:"vault!"`
-	Fmt     struct{} `cli:"fmt"`
+	Fmt     struct {
+		Cost int `cli:"--cost"`
+	} `cli:"fmt"`
 
 	Curl struct {
 		DataOnly bool `cli:"--data-only"`
@@ -1195,7 +1197,7 @@ secret/vault/seal/keys, as key1, key2, ... keyN.
 
 	r.Dispatch("fmt", &Help{
 		Summary: "Reformat an existing name/value pair, into a new name",
-		Usage:   "safe fmt FORMAT PATH OLD-NAME NEW-NAME",
+		Usage:   "safe fmt [OPTIONS] FORMAT PATH OLD-NAME NEW-NAME",
 		Type:    DestructiveCommand,
 		Description: `
 Take the value stored at PATH/OLD-NAME, format it a different way, and
@@ -1210,6 +1212,13 @@ Supported formats:
     crypt-md5       Salt and hash the value, using MD5, in crypt format (legacy).
     crypt-sha256    Salt and hash the value, using SHA-256, in crypt format.
     crypt-sha512    Salt and hash the value, using SHA-512, in crypt format.
+
+The following OPTIONS are recognized:
+
+  --cost N          Work factor for the bcrypt format.  Defaults to 12; the
+                    minimum is 10, the bcrypt library's own default.  Hashing
+                    time grows ~4x for every +2, so choose with care: cost 14
+                    takes ~4x as long as the default, cost 16 ~16x.
 
 `,
 	}, c.cmdFmt)

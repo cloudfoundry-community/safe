@@ -8,7 +8,6 @@ import (
 
 	fmt "github.com/jhunt/go-ansi"
 
-	"github.com/cloudfoundry-community/safe/internal/parallel"
 	"github.com/cloudfoundry-community/safe/pkg/rc"
 	"github.com/cloudfoundry-community/safe/pkg/vault"
 
@@ -121,65 +120,29 @@ func (c *CLI) cmdGen(command string, args ...string) error {
 
 	v := connect(true)
 
-	// Targets are grouped by their canonical secret path -- not the raw
-	// argument, which readGenTargets only canonicalizes on the path:key
-	// branch -- so secret//x:a and secret/x b, say, land in the same group
-	// rather than racing each other's read-modify-write on the same secret.
-	// Distinct paths generate concurrently; multiple keys on the same path
-	// stay sequential within their group, one read-modify-write at a time,
-	// same as before parallelism was added.
-	type genGroup struct {
-		targets []genTarget
-		notices []string
-	}
-	groups := map[string]*genGroup{}
-	var order []string
-	for _, target := range targets {
-		p, _, _ := vault.ParsePath(target.path)
-		g, seen := groups[p]
-		if !seen {
-			g = &genGroup{}
-			groups[p] = g
-			order = append(order, p)
+	// Grouping runs on target.path rather than the raw argument, which
+	// readGenTargets only canonicalizes on the path:key branch; distinct
+	// paths generate concurrently, multiple keys on the same path stay
+	// sequential within their group, same as before parallelism was added.
+	order, groups := groupByCanonicalPath(targets, func(t genTarget) string { return t.path })
+	return runPathGroups(order, groups, max(runtime.NumCPU(), 4), func(target genTarget, notice func(format string, args ...any)) error {
+		path, key := target.path, target.key
+		s, err := v.Read(path)
+		if err != nil && !vault.IsNotFound(err) {
+			return err
 		}
-		g.targets = append(g.targets, target)
-	}
-
-	genErr := parallel.EachLimit(order, max(runtime.NumCPU(), 4), func(_ int, p string) error {
-		g := groups[p]
-		for _, target := range g.targets {
-			path, key := target.path, target.key
-			s, err := v.Read(path)
-			if err != nil && !vault.IsNotFound(err) {
-				return err
+		exists := (err == nil)
+		if opt.SkipIfExists && exists && s.Has(key) {
+			if !opt.Quiet {
+				notice("@R{Cowardly refusing to update} @C{%s:%s} @R{as it is already present in Vault}\n", path, key)
 			}
-			exists := (err == nil)
-			if opt.SkipIfExists && exists && s.Has(key) {
-				if !opt.Quiet {
-					g.notices = append(g.notices, renderNotice("@R{Cowardly refusing to update} @C{%s:%s} @R{as it is already present in Vault}\n", path, key))
-				}
-				continue
-			}
-			err = s.Password(key, length, opt.Gen.Policy, opt.SkipIfExists)
-			if err != nil {
-				return err
-			}
-
-			if err = v.Write(path, s); err != nil {
-				return err
-			}
+			return nil
 		}
-		return nil
+		if err = s.Password(key, length, opt.Gen.Policy, opt.SkipIfExists); err != nil {
+			return err
+		}
+		return v.Write(path, s)
 	})
-
-	// Notices print after every group finishes, in the order their paths
-	// first appeared on the command line -- not completion order.
-	for _, p := range order {
-		for _, n := range groups[p].notices {
-			_, _ = os.Stderr.WriteString(n)
-		}
-	}
-	return genErr
 }
 
 func (c *CLI) cmdUuid(command string, args ...string) error {
@@ -274,53 +237,24 @@ func (c *CLI) cmdSsh(command string, args ...string) error {
 	// grouping runs directly over the raw arguments; the canonical path
 	// from ParsePath is still what decides the group, so secret//x and
 	// secret/x land together.
-	type sshGroup struct {
-		paths   []string
-		notices []string
-	}
-	groups := map[string]*sshGroup{}
-	var order []string
-	for _, path := range args {
-		p, _, _ := vault.ParsePath(path)
-		g, seen := groups[p]
-		if !seen {
-			g = &sshGroup{}
-			groups[p] = g
-			order = append(order, p)
+	order, groups := groupByCanonicalPath(args, func(path string) string { return path })
+	return runPathGroups(order, groups, max(runtime.NumCPU(), 4), func(path string, notice func(format string, args ...any)) error {
+		s, err := v.Read(path)
+		if err != nil && !vault.IsNotFound(err) {
+			return err
 		}
-		g.paths = append(g.paths, path)
-	}
-
-	sshErr := parallel.EachLimit(order, max(runtime.NumCPU(), 4), func(_ int, p string) error {
-		g := groups[p]
-		for _, path := range g.paths {
-			s, err := v.Read(path)
-			if err != nil && !vault.IsNotFound(err) {
-				return err
+		exists := (err == nil)
+		if opt.SkipIfExists && exists && (s.Has("private") || s.Has("public") || s.Has("fingerprint")) {
+			if !opt.Quiet {
+				notice("@R{Cowardly refusing to generate an SSH key at} @C{%s} @R{as it is already present in Vault}\n", path)
 			}
-			exists := (err == nil)
-			if opt.SkipIfExists && exists && (s.Has("private") || s.Has("public") || s.Has("fingerprint")) {
-				if !opt.Quiet {
-					g.notices = append(g.notices, renderNotice("@R{Cowardly refusing to generate an SSH key at} @C{%s} @R{as it is already present in Vault}\n", path))
-				}
-				continue
-			}
-			if err = s.SSHKey(bits, opt.SkipIfExists); err != nil {
-				return err
-			}
-			if err = v.Write(path, s); err != nil {
-				return err
-			}
+			return nil
 		}
-		return nil
+		if err = s.SSHKey(bits, opt.SkipIfExists); err != nil {
+			return err
+		}
+		return v.Write(path, s)
 	})
-
-	for _, p := range order {
-		for _, n := range groups[p].notices {
-			_, _ = os.Stderr.WriteString(n)
-		}
-	}
-	return sshErr
 }
 
 func (c *CLI) cmdRsa(command string, args ...string) error {
@@ -352,53 +286,24 @@ func (c *CLI) cmdRsa(command string, args ...string) error {
 
 	// Same shape as cmdSsh: no target struct, so grouping runs over the raw
 	// arguments, keyed by ParsePath's canonical secret path.
-	type rsaGroup struct {
-		paths   []string
-		notices []string
-	}
-	groups := map[string]*rsaGroup{}
-	var order []string
-	for _, path := range args {
-		p, _, _ := vault.ParsePath(path)
-		g, seen := groups[p]
-		if !seen {
-			g = &rsaGroup{}
-			groups[p] = g
-			order = append(order, p)
+	order, groups := groupByCanonicalPath(args, func(path string) string { return path })
+	return runPathGroups(order, groups, max(runtime.NumCPU(), 4), func(path string, notice func(format string, args ...any)) error {
+		s, err := v.Read(path)
+		if err != nil && !vault.IsNotFound(err) {
+			return err
 		}
-		g.paths = append(g.paths, path)
-	}
-
-	rsaErr := parallel.EachLimit(order, max(runtime.NumCPU(), 4), func(_ int, p string) error {
-		g := groups[p]
-		for _, path := range g.paths {
-			s, err := v.Read(path)
-			if err != nil && !vault.IsNotFound(err) {
-				return err
+		exists := (err == nil)
+		if opt.SkipIfExists && exists && (s.Has("private") || s.Has("public")) {
+			if !opt.Quiet {
+				notice("@R{Cowardly refusing to generate an RSA key at} @C{%s} @R{as it is already present in Vault}\n", path)
 			}
-			exists := (err == nil)
-			if opt.SkipIfExists && exists && (s.Has("private") || s.Has("public")) {
-				if !opt.Quiet {
-					g.notices = append(g.notices, renderNotice("@R{Cowardly refusing to generate an RSA key at} @C{%s} @R{as it is already present in Vault}\n", path))
-				}
-				continue
-			}
-			if err = s.RSAKey(bits, opt.SkipIfExists); err != nil {
-				return err
-			}
-			if err = v.Write(path, s); err != nil {
-				return err
-			}
+			return nil
 		}
-		return nil
+		if err = s.RSAKey(bits, opt.SkipIfExists); err != nil {
+			return err
+		}
+		return v.Write(path, s)
 	})
-
-	for _, p := range order {
-		for _, n := range groups[p].notices {
-			_, _ = os.Stderr.WriteString(n)
-		}
-	}
-	return rsaErr
 }
 
 func (c *CLI) cmdDhparam(command string, args ...string) error {
@@ -445,51 +350,22 @@ func (c *CLI) cmdDhparam(command string, args ...string) error {
 // but a path named more than once stays sequential within its group, one
 // read-modify-write at a time, so a repeated argument never races itself.
 func dhparamPaths(v *vault.Vault, paths []string, bits int, skipIfExists bool, quiet bool) error {
-	type dhparamGroup struct {
-		paths   []string
-		notices []string
-	}
-	groups := map[string]*dhparamGroup{}
-	var order []string
-	for _, path := range paths {
-		p, _, _ := vault.ParsePath(path)
-		g, seen := groups[p]
-		if !seen {
-			g = &dhparamGroup{}
-			groups[p] = g
-			order = append(order, p)
+	order, groups := groupByCanonicalPath(paths, func(path string) string { return path })
+	return runPathGroups(order, groups, max(runtime.NumCPU()/2, 2), func(path string, notice func(format string, args ...any)) error {
+		s, err := v.Read(path)
+		if err != nil && !vault.IsNotFound(err) {
+			return err
 		}
-		g.paths = append(g.paths, path)
-	}
-
-	dhErr := parallel.EachLimit(order, max(runtime.NumCPU()/2, 2), func(_ int, p string) error {
-		g := groups[p]
-		for _, path := range g.paths {
-			s, err := v.Read(path)
-			if err != nil && !vault.IsNotFound(err) {
-				return err
+		exists := (err == nil)
+		if skipIfExists && exists && s.Has("dhparam-pem") {
+			if !quiet {
+				notice("@R{Cowardly refusing to generate a Diffie-Hellman key exchange parameter set at} @C{%s} @R{as it is already present in Vault}\n", path)
 			}
-			exists := (err == nil)
-			if skipIfExists && exists && s.Has("dhparam-pem") {
-				if !quiet {
-					g.notices = append(g.notices, renderNotice("@R{Cowardly refusing to generate a Diffie-Hellman key exchange parameter set at} @C{%s} @R{as it is already present in Vault}\n", path))
-				}
-				continue
-			}
-			if err = s.DHParam(bits, skipIfExists); err != nil {
-				return err
-			}
-			if err = v.Write(path, s); err != nil {
-				return err
-			}
+			return nil
 		}
-		return nil
+		if err = s.DHParam(bits, skipIfExists); err != nil {
+			return err
+		}
+		return v.Write(path, s)
 	})
-
-	for _, p := range order {
-		for _, n := range groups[p].notices {
-			_, _ = os.Stderr.WriteString(n)
-		}
-	}
-	return dhErr
 }

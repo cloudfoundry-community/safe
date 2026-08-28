@@ -1,19 +1,44 @@
 package cli
 
 import (
+	"context"
 	"crypto/x509"
 	"encoding/asn1"
 	"io"
 	"math/big"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
 	fmt "github.com/jhunt/go-ansi"
 
+	"github.com/cloudfoundry-community/safe/internal/parallel"
 	"github.com/cloudfoundry-community/safe/pkg/rc"
 	"github.com/cloudfoundry-community/safe/pkg/vault"
 )
+
+// prefetchReads reads every path concurrently into an index-addressed
+// slice, so an order-sensitive loop can run sequentially in argument order
+// over results that were fetched together. fn always returns nil: per-path
+// errors ride in the slice for the sequential loop to report exactly as a
+// serial read would have, so EachLimit's fail-fast never triggers. The one
+// visible consequence is that every path's read happens even when an
+// earlier path's result is going to end the loop.
+type prefetched struct {
+	s   *vault.Secret
+	err error
+}
+
+func prefetchReads(v *vault.Vault, paths []string) []prefetched {
+	fetches := make([]prefetched, len(paths))
+	_ = parallel.EachLimit(context.Background(), paths, max(runtime.NumCPU(), 4), func(_ context.Context, i int, path string) error {
+		s, err := v.Read(path)
+		fetches[i] = prefetched{s: s, err: err}
+		return nil
+	})
+	return fetches
+}
 
 // warnIfReparenting says so on standard error when the authority a
 // certificate is about to be signed under is not the one that issued it.
@@ -85,8 +110,11 @@ func (c *CLI) cmdX509Validate(command string, args ...string) error {
 		}
 	}
 
-	for _, path := range args {
-		s, err := v.Read(path)
+	// The reads are prefetched; the checks below stay sequential in
+	// argument order, so which path fails, and with what, is unchanged.
+	fetches := prefetchReads(v, args)
+	for i, path := range args {
+		s, err := fetches[i].s, fetches[i].err
 		if err != nil {
 			return err
 		}
@@ -663,11 +691,14 @@ func (c *CLI) cmdX509Show(command string, args ...string) error {
 	// for them at the end.
 	var unshown []string
 
-	for _, path := range args {
+	// The reads are prefetched; the report below stays sequential in
+	// argument order, never fetch-completion order.
+	fetches := prefetchReads(v, args)
+	for i, path := range args {
 		_, _ = fmt.Printf("%s:\n", path)
 
 		var cert *vault.X509
-		s, err := v.Read(path)
+		s, err := fetches[i].s, fetches[i].err
 		if err == nil {
 			cert, err = s.X509(false)
 		}

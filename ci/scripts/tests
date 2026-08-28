@@ -2226,14 +2226,15 @@ EOF
   cat <<'EOF' > t/home/want ; diffok
 !! When specifying more than 1 unseal key, you must also have more than one key required to unseal.
 EOF
-  now trying to rekey with a bad unseal key should error
+  now trying to rekey with no unseal key at all should error
+  # safe aborts as soon as stdin closes on the first prompt, rather than
+  # posting a partial key set and letting the server reject it. The message is
+  # safe's own, so it no longer varies with the engine version the way the
+  # old server-side rejection did.
   (run; ${SAFE_CMD} rekey </dev/null >t/home/got 2>&1); exitok $? 1
-  # the below sed is used, as earlier versions of vault had a bad error message, that later versions
-  # corrected, so we need to account for both error messages coming through
-  sed -i -e 's/must specified/must be specified/' t/home/got
   cat <<'EOF' > t/home/want ; diffok
 Vault rekey canceled successfully
-!! key submission failed: no key provided
+!! rekey aborted, unseal key 1 was never entered: EOF
 EOF
 
   now after failures to rekey, the cancel command was sent to reset the rekey

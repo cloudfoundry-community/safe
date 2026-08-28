@@ -32,6 +32,24 @@ func SetRetrySleepForTest(v *Vault, fn func(ctx context.Context, d time.Duration
 	return true
 }
 
+// SetCASSleepForTest replaces v's check-and-set retry backoff sleep so
+// tests can record requested waits instead of serving them. Call the
+// returned restore func (typically via t.Cleanup) to put the real sleep
+// back.
+func SetCASSleepForTest(v *Vault, fn func(ctx context.Context, d time.Duration) error) (restore func()) {
+	orig := v.casSleep
+	v.casSleep = fn
+	return func() { v.casSleep = orig }
+}
+
+// CASBackoffCeilingForTest exposes the upper bound the check-and-set retry
+// backoff draws under for retry pass number attempt (1-based), for tests
+// in vault_test that assert the schedule stays bounded without pinning the
+// random jitter itself.
+func CASBackoffCeilingForTest(attempt int) time.Duration {
+	return casBackoffCeiling(attempt)
+}
+
 // SetDhparamGenForTest overrides the package's DH parameter generator seam
 // for tests in vault_test, the external test package, which cannot reach
 // the unexported dhparamGen var directly. Call the returned restore func

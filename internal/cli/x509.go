@@ -799,6 +799,15 @@ func (c *CLI) cmdX509Renew(command string, args ...string) error {
 		}
 
 		cert.Certificate.SignatureAlgorithm = sigAlgo
+	} else {
+		// Re-derive the signature algorithm from the signing CA's key at
+		// signing time, rather than preserving the certificate's existing
+		// value: SignWithSerial validates a set algorithm against the CA's
+		// key instead of deriving one, so a CA reached via --signed-by (or
+		// swapped concurrently mid-retry) with a different key type would
+		// otherwise fail loudly instead of adapting -- matching reissue,
+		// which regenerates the leaf key and faces the identical choice.
+		cert.Certificate.SignatureAlgorithm = x509.UnknownSignatureAlgorithm
 	}
 
 	// Get new expiry date
@@ -843,6 +852,13 @@ func (c *CLI) cmdX509Renew(command string, args ...string) error {
 			if !fresh.IsCA() {
 				return nil, false, fmt.Errorf("%s is not a certificate authority", caPath)
 			}
+			//Sign fills an unset algorithm from the key of the CA it is
+			// handed; reset per attempt so a retry re-derives from the
+			// fresh CA's key instead of validating the previous attempt's
+			// choice against it.
+			if opt.X509.Renew.SigAlgorithm == "" {
+				cert.Certificate.SignatureAlgorithm = x509.UnknownSignatureAlgorithm
+			}
 			if err := fresh.Sign(cert, ttl); err != nil {
 				return nil, false, err
 			}
@@ -885,25 +901,34 @@ func (c *CLI) cmdX509Revoke(command string, args ...string) error {
 	}
 	v := connect(true)
 
-	/* find the Certificate -- read once, outside the CA's
-	 * read-modify-write: its serial is all the revocation needs, and it
-	 * does not change with the CA's state */
-	s, err := v.Read(args[0])
-	if err != nil {
-		return err
-	}
-	cert, err := s.X509(true)
-	if err != nil {
-		return err
-	}
-
 	//The CA's read-modify-write runs under check-and-set: a concurrent
 	// revocation or issuance landing between the read and the write
 	// conflicts and forces a retry against the fresh CA, so the other
 	// writer's revocation entries survive -- the exact lost-revocation
 	// hazard this list exists to prevent. Both checks below run per
 	// attempt, against each attempt's fresh CA, never a cached one.
-	_, err = v.Update(opt.X509.Revoke.SignedBy, func(cs *vault.Secret, exists bool) (*vault.Secret, bool, error) {
+	//
+	// The certificate named on the command line is read once, lazily,
+	// the first time an attempt gets past the checks below: its serial is
+	// all the revocation needs, and it does not change with the CA's
+	// state, so a later attempt reuses it rather than reading it again.
+	// Reading it here rather than before Update keeps the CA's own
+	// problems -- missing, or not actually a certificate authority --
+	// ahead of a bad leaf argument: those are facts about --signed-by
+	// that outlive this one invocation, where a leaf typo is a one-off
+	// the next invocation fixes.
+	var cert *vault.X509
+	//Tracked across attempts to tell apart "already revoked before this
+	// invocation started" (an ordinary repeat revoke -- still writes, see
+	// below) from "revoked by someone else while we were retrying" (the
+	// concurrent case, which does not). Keyed off what the FIRST attempt
+	// saw, not off which attempt is running, so the decision stays stable
+	// across every retry: a later attempt reusing an already-true flag
+	// keeps declining, and one that starts false never flips to declining
+	// just because a concurrent writer's own revocation is now visible.
+	attempts := 0
+	revokedBeforeUs := false
+	_, err := v.Update(opt.X509.Revoke.SignedBy, func(cs *vault.Secret, exists bool) (*vault.Secret, bool, error) {
 		if !exists {
 			p, _, _ := vault.ParsePath(opt.X509.Revoke.SignedBy)
 			return nil, false, vault.NewSecretNotFoundError(p)
@@ -916,6 +941,17 @@ func (c *CLI) cmdX509Revoke(command string, args ...string) error {
 		// certificate authority carries one.
 		if !ca.IsCA() {
 			return nil, false, fmt.Errorf("%s is not a certificate authority", opt.X509.Revoke.SignedBy)
+		}
+
+		if cert == nil {
+			s, err := v.Read(args[0])
+			if err != nil {
+				return nil, false, err
+			}
+			cert, err = s.X509(true)
+			if err != nil {
+				return nil, false, err
+			}
 		}
 
 		//A revocation list names serial numbers, and a serial number only
@@ -938,8 +974,25 @@ func (c *CLI) cmdX509Revoke(command string, args ...string) error {
 		//A concurrent writer may have revoked this same certificate
 		// already; re-publishing the list to record nothing new would be
 		// pointless churn, so the write is declined and the winner's
-		// version stands.
-		if ca.HasRevoked(cert) {
+		// version stands. That guard must fire only for that concurrent
+		// case, never for an ordinary repeat revoke of a certificate a
+		// prior, unrelated run already revoked: the plan's "Rejected and
+		// deferred" list explicitly declines to skip CRL republication
+		// for an unchanged entry list (a byte-stable CRL walks past its
+		// own NextUpdate), so a sequential re-revoke still writes, same
+		// as it always did. attempts and revokedBeforeUs key the decision
+		// off what the FIRST attempt saw, not off HasRevoked's answer on
+		// whichever attempt happens to be running: a certificate already
+		// on the list before this invocation started gets the write every
+		// time; one that lands on the list only after a retry means
+		// someone else recorded it for us, and only then is the write
+		// declined.
+		attempts++
+		already := ca.HasRevoked(cert)
+		if attempts == 1 {
+			revokedBeforeUs = already
+		}
+		if already && !revokedBeforeUs {
 			return nil, false, nil
 		}
 

@@ -90,15 +90,18 @@ func TestUpdateInterleavedWriteConverges(t *testing.T) {
 	}
 }
 
-// Two processes creating the same secret: ours reads nothing, resolves
-// cas=0 from the absent metadata, and the concurrent create lands first.
-// The cas=0 write conflicts, and the retry builds on the winner's value.
+// Two processes creating the same secret: ours reads nothing and tries an
+// optimistic cas=0 write; the concurrent create lands first, so ours
+// conflicts. The conflict sends Update to consult metadata, which by now
+// shows the winner's version alive -- our 404 was stale, not a deletion --
+// so Update re-reads instead of clobbering, and the retry builds on the
+// winner's value.
 func TestUpdateCreateRaceConverges(t *testing.T) {
 	v, fv := newTestVault(t)
 	fv.mountV2("kv2")
 
 	var observed []bool
-	fv.afterRequest(updMetaGet, 1, func() {
+	fv.afterRequest(updDataGet, 1, func() {
 		fv.setV2(updDataPath, map[string]string{"theirs": "y"})
 	})
 
@@ -120,11 +123,52 @@ func TestUpdateCreateRaceConverges(t *testing.T) {
 	if len(observed) != 2 || observed[0] || !observed[1] {
 		t.Errorf("fn observed exists=%v, want [false true]", observed)
 	}
+	if metas := fv.requestCount(updMetaGet); metas != 1 {
+		t.Errorf("metadata reads = %d, want exactly 1 (the conflict asking whether the 404 was stale or a deletion)", metas)
+	}
 }
 
-// A version that appears between the 404 and the metadata consultation is
-// alive, so the 404 is stale rather than a deletion: Update must re-read
-// and build on the live value, not write over it from an empty seed.
+// A create on a path with no history at all never consults metadata: there
+// is nothing there for resolveAbsentCAS to find, so the not-found branch
+// tries an optimistic cas=0 write directly and it lands without a
+// conflict. This is the fast path every fresh gen/ssh/rsa/set target
+// takes, and it must cost exactly what a plain create always cost: one
+// read, one write.
+func TestUpdateCreateOnVirginPathSkipsMetadataGet(t *testing.T) {
+	v, fv := newTestVault(t)
+	fv.mountV2("kv2")
+
+	version, err := v.Update(updDataPath, func(s *vault.Secret, exists bool) (*vault.Secret, bool, error) {
+		if exists {
+			t.Error("exists = true on a path with no history")
+		}
+		if err := s.Set("gen", "ours", false); err != nil {
+			return nil, false, err
+		}
+		return nil, true, nil
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if version != 1 {
+		t.Errorf("Update returned version %d, want 1", version)
+	}
+	if gets := fv.requestCount(updDataGet); gets != 1 {
+		t.Errorf("data reads = %d, want 1", gets)
+	}
+	if metas := fv.requestCount(updMetaGet); metas != 0 {
+		t.Errorf("metadata reads = %d, want 0 -- a virgin path has nothing for resolveAbsentCAS to consult", metas)
+	}
+	if puts := fv.requestCount(updDataPut); puts != 1 {
+		t.Errorf("data writes = %d, want 1", puts)
+	}
+}
+
+// A version that lands between Update's data read and its optimistic
+// cas=0 write is alive by the time the conflict sends Update to consult
+// metadata, so the 404 was stale rather than a deletion: Update must
+// re-read and build on the live value, not write over it from an empty
+// seed.
 func TestUpdateStale404RereadsInsteadOfClobbering(t *testing.T) {
 	v, fv := newTestVault(t)
 	fv.mountV2("kv2")
@@ -150,8 +194,9 @@ func TestUpdateStale404RereadsInsteadOfClobbering(t *testing.T) {
 }
 
 // A soft-deleted path answers its data read with 404 while the metadata
-// keeps current_version, and Vault rejects cas=0 there -- the write must
-// check-and-set against the metadata's version and create the next one.
+// keeps current_version, and Vault rejects cas=0 there -- the optimistic
+// write tried first conflicts, and only then does Update consult the
+// metadata and check-and-set against its version to create the next one.
 func TestUpdateWritesToSoftDeletedPath(t *testing.T) {
 	v, fv := newTestVault(t)
 	fv.mountV2("kv2")
@@ -176,15 +221,17 @@ func TestUpdateWritesToSoftDeletedPath(t *testing.T) {
 	if states := fv.v2States(updDataPath); len(states) != 2 || states[0] != "deleted" || states[1] != "alive" {
 		t.Errorf("version states = %v, want [deleted alive]", states)
 	}
-	//The metadata consultation is the one extra request this branch pays.
+	//The optimistic cas=0 guess costs one refused write on this rarer,
+	// previously-deleted path; the metadata consultation that follows it
+	// is the one extra request a virgin path never pays.
 	if gets := fv.requestCount(updDataGet); gets != 1 {
 		t.Errorf("data reads = %d, want 1", gets)
 	}
 	if metas := fv.requestCount(updMetaGet); metas != 1 {
 		t.Errorf("metadata reads = %d, want exactly 1", metas)
 	}
-	if puts := fv.requestCount(updDataPut); puts != 1 {
-		t.Errorf("data writes = %d, want 1", puts)
+	if puts := fv.requestCount(updDataPut); puts != 2 {
+		t.Errorf("data writes = %d, want 2 (one refused cas=0, one landed against the resolved version)", puts)
 	}
 }
 

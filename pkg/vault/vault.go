@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/url"
@@ -50,6 +51,11 @@ type Vault struct {
 	// race on memory, since every access here is already lock-guarded.
 	versionsGen   map[string]uint64
 	versionsEpoch uint64
+
+	// casSleep waits out the backoff between Update/UpdateSteps retry
+	// passes; a seam so tests assert requested waits instead of serving
+	// them. See sleepBeforeRetry.
+	casSleep func(ctx context.Context, d time.Duration) error
 }
 
 type VaultConfig struct {
@@ -148,6 +154,7 @@ func NewVault(conf VaultConfig) (*Vault, error) {
 		debug:         shouldDebug(),
 		versionsCache: map[string][]vaultkv.KVVersion{},
 		versionsGen:   map[string]uint64{},
+		casSleep:      sleepBackoff,
 	}, nil
 }
 
@@ -499,6 +506,50 @@ func (v *Vault) Write(path string, s *Secret) error {
 // that a genuinely contended path fails loudly instead of spinning.
 const casAttempts = 5
 
+// casBackoffBase is the first wait Update/UpdateSteps request between
+// retry passes; casBackoffCap bounds how large it grows. Small and bounded
+// on purpose: this runs synchronously inside a CLI command, not a daemon,
+// with only casAttempts passes to spend -- there is no room for the
+// GET-retry transport's coarser schedule (3.2's 100ms-per-doubling scale,
+// sized for a single throttled read, not a bounded burst of writers all
+// waiting on one path).
+const (
+	casBackoffBase = 10 * time.Millisecond
+	casBackoffCap  = 200 * time.Millisecond
+)
+
+// casBackoff returns the wait Update/UpdateSteps request before retry pass
+// number attempt (1-based): full jitter over [0, ceiling], where ceiling
+// doubles with each attempt and saturates at casBackoffCap. Full jitter,
+// rather than a fixed base plus jitter, spreads concurrent losers of the
+// same conflict across the whole window instead of clustering them near
+// its start.
+func casBackoff(attempt int) time.Duration {
+	return rand.N(casBackoffCeiling(attempt) + 1)
+}
+
+// casBackoffCeiling returns the upper bound (inclusive) casBackoff draws
+// under for retry pass number attempt (1-based).
+func casBackoffCeiling(attempt int) time.Duration {
+	d := casBackoffBase << (attempt - 1)
+	if d <= 0 || d > casBackoffCap {
+		return casBackoffCap
+	}
+	return d
+}
+
+// sleepBeforeRetry waits out a jittered backoff before Update or
+// UpdateSteps' next attempt, unless attempt -- its zero-based index --
+// was the last one: giving up is immediate, never delayed by a wait
+// nobody benefits from. The uncontended path never reaches this call at
+// all, since it returns before the loop's bottom.
+func (v *Vault) sleepBeforeRetry(attempt int) error {
+	if attempt >= casAttempts-1 {
+		return nil
+	}
+	return v.casSleep(context.Background(), casBackoff(attempt+1))
+}
+
 // writeCAS writes s at path with the given check-and-set version and
 // returns the version Vault assigned. A nil cas sends no check-and-set at
 // all -- the unconditional write, and the only kind a KV v1 mount
@@ -582,6 +633,17 @@ func (v *Vault) resolveAbsentCAS(path string) (*uint, error) {
 // write assigned. On a KV v1 mount this degrades to a plain
 // read-then-write -- no cas is ever sent, because no versioning exists to
 // check against; v1 stays last-writer-wins.
+//
+// A not-found read tries an optimistic cas=0 write first, never consulting
+// metadata: a path with no history at all -- the common case for every
+// fresh gen/ssh/rsa/set target -- has nothing there to consult, and the
+// guess lands. Only when that guess conflicts does Update ask why: the
+// very next attempt's own data read already tells apart a concurrent
+// create (data now present, handled by the ordinary observed-version
+// branch) from surviving metadata on a soft-deleted or destroyed-latest
+// path (data still absent, resolveAbsentCAS's dead-version case). The
+// metadata GET this pays is one request, charged only on that conflict,
+// never on the fast path.
 func (v *Vault) Update(path string, fn func(s *Secret, exists bool) (out *Secret, write bool, err error)) (uint, error) {
 	literal, key, version := ParsePath(path)
 	if key != "" {
@@ -624,33 +686,60 @@ func (v *Vault) Update(path string, fn func(s *Secret, exists bool) (out *Secret
 		}
 
 		//Resolved only once fn has asked for a write, so declining fns
-		// and error paths never pay the metadata request the absent
-		// branch can cost.
+		// and error paths never pay any request the absent branch can
+		// cost. A not-found path guesses cas=0 optimistically rather than
+		// consulting metadata up front -- see the doc comment above.
 		var cas *uint
+		optimistic := false
 		if mount == 2 {
 			if exists {
 				observed := ver
 				cas = &observed
 			} else {
-				cas, err = v.resolveAbsentCAS(literal)
-				if errors.Is(err, errStale404) {
-					lastConflict = err
-					continue
-				}
-				if err != nil {
-					return 0, err
-				}
+				zero := uint(0)
+				cas = &zero
+				optimistic = true
 			}
 		}
 
-		assigned, err := v.writeCAS(path, out, cas)
-		if err == nil {
+		assigned, werr := v.writeCAS(path, out, cas)
+		if werr == nil {
 			return assigned, nil
 		}
-		if !vaultkv.IsCASConflict(err) {
-			return 0, err
+		if !vaultkv.IsCASConflict(werr) {
+			return 0, werr
 		}
-		lastConflict = err
+		lastConflict = werr
+
+		if optimistic {
+			//The blind guess was wrong: metadata survives at this path.
+			// Consult it once, in this same pass, rather than paying a
+			// second full read whose answer -- still absent -- this
+			// conflict already told us.
+			resolved, rerr := v.resolveAbsentCAS(literal)
+			if errors.Is(rerr, errStale404) {
+				lastConflict = rerr
+				if serr := v.sleepBeforeRetry(attempt); serr != nil {
+					return 0, serr
+				}
+				continue
+			}
+			if rerr != nil {
+				return 0, rerr
+			}
+			assigned, werr = v.writeCAS(path, out, resolved)
+			if werr == nil {
+				return assigned, nil
+			}
+			if !vaultkv.IsCASConflict(werr) {
+				return 0, werr
+			}
+			lastConflict = werr
+		}
+
+		if serr := v.sleepBeforeRetry(attempt); serr != nil {
+			return 0, serr
+		}
 	}
 	return 0, fmt.Errorf("gave up writing %s after %d attempts against concurrent writers: %w", literal, casAttempts, lastConflict)
 }
@@ -717,40 +806,67 @@ func (v *Vault) UpdateSteps(path string, steps int, fn func(step int, s *Secret,
 				continue
 			}
 			//Resolved lazily at the pass's first write, so a chain whose
-			// steps all decline (or fail first) never pays the metadata
-			// request the absent branch can cost.
+			// steps all decline (or fail first) never pays any request
+			// the absent branch can cost. A not-found path guesses cas=0
+			// optimistically first, the same as Update -- see its doc
+			// comment for why that skips the metadata GET on the common,
+			// no-history case.
+			optimistic := false
 			if mount == 2 && !casResolved {
-				cas, err = v.resolveAbsentCAS(literal)
-				if errors.Is(err, errStale404) {
-					lastConflict = err
-					conflicted = true
-					break
-				}
-				if err != nil {
-					return err
-				}
+				zero := uint(0)
+				cas = &zero
 				casResolved = true
+				optimistic = true
 			}
-			assigned, err := v.writeCAS(path, s, cas)
-			if err == nil {
+			assigned, werr := v.writeCAS(path, s, cas)
+			if werr == nil {
 				persisted[i] = true
 				exists = true
 				if mount == 2 {
 					observed := assigned
 					cas = &observed
-					casResolved = true
 				}
 				continue
 			}
-			if !vaultkv.IsCASConflict(err) {
-				return err
+			if !vaultkv.IsCASConflict(werr) {
+				return werr
 			}
-			lastConflict = err
+			lastConflict = werr
+
+			if optimistic {
+				//The blind guess was wrong: metadata survives at this
+				// path. Consult it once, in this same pass, rather than
+				// paying a second full read whose answer -- still
+				// absent -- this conflict already told us.
+				resolved, rerr := v.resolveAbsentCAS(literal)
+				if errors.Is(rerr, errStale404) {
+					lastConflict = rerr
+					conflicted = true
+					break
+				}
+				if rerr != nil {
+					return rerr
+				}
+				assigned, werr = v.writeCAS(path, s, resolved)
+				if werr == nil {
+					persisted[i] = true
+					exists = true
+					cas = &assigned
+					continue
+				}
+				if !vaultkv.IsCASConflict(werr) {
+					return werr
+				}
+				lastConflict = werr
+			}
 			conflicted = true
 			break
 		}
 		if !conflicted {
 			return nil
+		}
+		if serr := v.sleepBeforeRetry(attempt); serr != nil {
+			return serr
 		}
 	}
 	return fmt.Errorf("gave up writing %s after %d attempts against concurrent writers: %w", literal, casAttempts, lastConflict)

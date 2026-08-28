@@ -75,17 +75,23 @@ func TestCmdGenCumulativeWritesKeepOneVersionPerKey(t *testing.T) {
 		t.Fatalf("version states = %v, want 3 (one version per generated key)", states)
 	}
 
-	var gets, puts int
+	// Every request that touches path x, data or metadata alike -- not
+	// just the data endpoint -- so a stray metadata GET on this virgin
+	// path (which has no history for it to find anything at) fails the
+	// budget instead of going unseen.
+	var gets, puts, metas int
 	for _, r := range fv.requests() {
 		switch {
 		case strings.HasPrefix(r, "GET /v1/secret/data/x"):
 			gets++
 		case strings.HasPrefix(r, "PUT /v1/secret/data/x"), strings.HasPrefix(r, "POST /v1/secret/data/x"):
 			puts++
+		case strings.HasPrefix(r, "GET /v1/secret/metadata/x"):
+			metas++
 		}
 	}
-	if gets != 1 || puts != 3 {
-		t.Errorf("secret/x data traffic = %d GETs, %d PUTs; want 1 GET, 3 PUTs\n%v", gets, puts, fv.requests())
+	if gets != 1 || puts != 3 || metas != 0 {
+		t.Errorf("secret/x traffic = %d GETs, %d PUTs, %d metadata GETs; want 1, 3, 0\n%v", gets, puts, metas, fv.requests())
 	}
 
 	// Version N holds keys 1..N: the chain accumulates, never resets.

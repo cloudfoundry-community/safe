@@ -101,6 +101,49 @@ func TestRevokeAgainstANonCARefusesInsteadOfCrashing(t *testing.T) {
 	}
 }
 
+// When both the CA and the leaf are missing, the CA's problem is reported
+// first: it is a fact about --signed-by that outlives this one invocation,
+// where a bad leaf argument is a typo the next invocation fixes.
+func TestRevokeErrorPrecedenceFavorsTheCAWhenBothPathsAreMissing(t *testing.T) {
+	isolateHome(t)
+	newCLIFake(t)
+
+	c := newX509CLI(t)
+	c.opt.X509.Revoke.SignedBy = "secret/ca"
+
+	err := c.cmdX509Revoke("x509 revoke", "secret/leaf")
+	if err == nil {
+		t.Fatal("revoke with both paths missing = nil, want an error")
+	}
+	if !strings.Contains(err.Error(), "secret/ca") {
+		t.Errorf("error = %q, want it to name secret/ca, not the leaf argument", err)
+	}
+	if strings.Contains(err.Error(), "secret/leaf") {
+		t.Errorf("error = %q, named the leaf path ahead of the CA's own problem", err)
+	}
+}
+
+// A CA path holding an ordinary certificate is refused before the leaf
+// argument is ever read, even when the leaf itself does not exist: the
+// --signed-by target being unusable is the more consequential fact.
+func TestRevokeErrorPrecedenceFavorsNotACAOverMissingLeaf(t *testing.T) {
+	isolateHome(t)
+	fv := newCLIFake(t)
+	ca := newCA(t, "real-ca")
+	storeCert(t, fv, "secret/ca", newLeaf(t, ca, "not-a-ca"))
+
+	c := newX509CLI(t)
+	c.opt.X509.Revoke.SignedBy = "secret/ca"
+
+	err := c.cmdX509Revoke("x509 revoke", "secret/missing")
+	if err == nil {
+		t.Fatal("revoke against a non-CA with a missing leaf = nil, want an error")
+	}
+	if !strings.Contains(err.Error(), "secret/ca is not a certificate authority") {
+		t.Errorf("error = %q, want the not-a-CA refusal, not the leaf's not-found error", err)
+	}
+}
+
 // The same nil revocation list is reachable through a validation run.
 func TestValidateRevokedAgainstANonCARefusesInsteadOfCrashing(t *testing.T) {
 	isolateHome(t)

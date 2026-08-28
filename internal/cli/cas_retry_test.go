@@ -57,20 +57,34 @@ func v2DataTraffic(fv *cliFakeVault, name string) (gets, puts int) {
 	return gets, puts
 }
 
-// latestV2 returns the newest version's data at a literal path.
-func latestV2(t *testing.T, fv *cliFakeVault, path string) map[string]string {
-	t.Helper()
+// latestV2Safe returns the newest version's data at a literal path, and
+// whether one exists. It never calls a Fatal-class method: safe to call
+// from the httptest server's own goroutine, which an afterRequest hook
+// runs on, where FailNow's runtime.Goexit is undefined by testing's own
+// contract (must run on the goroutine executing the test) and would
+// abandon the response mid-flight instead of failing the test.
+func latestV2Safe(fv *cliFakeVault, path string) (map[string]string, bool) {
 	fv.mu.Lock()
 	defer fv.mu.Unlock()
 	history := fv.versions[path]
 	if len(history) == 0 {
-		t.Fatalf("no versions at %s", path)
+		return nil, false
 	}
 	cp := map[string]string{}
 	for k, v := range history[len(history)-1].data {
 		cp[k] = v
 	}
-	return cp
+	return cp, true
+}
+
+// latestV2 returns the newest version's data at a literal path.
+func latestV2(t *testing.T, fv *cliFakeVault, path string) map[string]string {
+	t.Helper()
+	data, ok := latestV2Safe(fv, path)
+	if !ok {
+		t.Fatalf("no versions at %s", path)
+	}
+	return data
 }
 
 // A conflict in the middle of a gen group's write chain retries just the
@@ -109,6 +123,34 @@ func TestCmdGenChainRetriesAfterConflict(t *testing.T) {
 	}
 }
 
+// resolveAbsentCAS degrades to an unconditional write when the metadata
+// read it needs -- after the optimistic cas=0 guess conflicts against a
+// soft-deleted path's surviving version -- comes back 403: a token that
+// can write a path but was never granted read on its metadata must still
+// be able to gen onto a path that was previously deleted, not wedge
+// forever behind a check-and-set it cannot resolve.
+func TestCmdGenSucceedsWhenMetadataForbiddenOnSoftDeletedPath(t *testing.T) {
+	isolateHome(t)
+	fv := newCLIFakeV2(t)
+	fv.setV2("secret/x", map[string]string{"old": "gone"})
+	fv.deleteV2("secret/x", 1)
+	fv.denyMetadataGet("secret/x")
+
+	c := newKeygenCLI(t)
+	c.opt.Gen.Policy = defaultGenPolicy
+	if err := c.cmdGen("gen", "16", "secret/x", "a"); err != nil {
+		t.Fatalf("cmdGen: %v", err)
+	}
+
+	got := latestV2(t, fv, "secret/x")
+	if len(got["a"]) != 16 {
+		t.Errorf("secret/x[a] length = %d, want 16 (keys: %v)", len(got["a"]), keysOf(got))
+	}
+	if states := fv.versionStates("secret/x"); len(states) != 2 {
+		t.Errorf("version states = %v, want 2 (the soft-deleted seed, then the unconditional write)", states)
+	}
+}
+
 // --no-clobber re-decides on the retry: a key the conflict revealed to
 // have been written concurrently is refused, its notice emitted once, and
 // the concurrent value stands.
@@ -116,10 +158,11 @@ func TestCmdGenNoClobberRefusesKeyWrittenConcurrently(t *testing.T) {
 	isolateHome(t)
 	fv := newCLIFakeV2(t)
 
-	//The path does not exist yet, so the create consults the metadata;
-	// the concurrent create lands right after that consultation, which
-	// makes our cas=0 write conflict.
-	fv.afterRequest(`^GET /v1/secret/metadata/x$`, 1,
+	//The path does not exist yet, so the create tries an optimistic cas=0
+	// write directly, without consulting metadata; the concurrent create
+	// lands right after our own read reported 404, which makes that cas=0
+	// write conflict.
+	fv.afterRequest(`^GET /v1/secret/data/x(\?.*)?$`, 1,
 		injectConcurrentV2Write(fv, "secret/x", map[string]string{"a": "keepme"}))
 
 	c := newKeygenCLI(t)

@@ -22,6 +22,7 @@ import (
 	"math/big"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cloudfoundry-community/safe/pkg/vault"
 )
@@ -50,8 +51,13 @@ func storeCertV2(t *testing.T, fv *cliFakeVault, path string, x *vault.X509) {
 // call from an afterRequest hook: it reports failures with t.Error, which
 // unlike Fatal may be called off the test goroutine.
 func parseStoredCA(t *testing.T, fv *cliFakeVault, path string) *vault.X509 {
+	data, ok := latestV2Safe(fv, path)
+	if !ok {
+		t.Errorf("no versions at %s", path)
+		return nil
+	}
 	s := vault.NewSecret()
-	for k, v := range latestV2(t, fv, path) {
+	for k, v := range data {
 		if err := s.Set(k, v, false); err != nil {
 			t.Errorf("rebuild %s: %v", path, err)
 			return nil
@@ -63,6 +69,53 @@ func parseStoredCA(t *testing.T, fv *cliFakeVault, path string) *vault.X509 {
 		return nil
 	}
 	return ca
+}
+
+// A broken fixture -- no versions at the path parseStoredCA is asked to
+// parse -- must not hang the caller. parseStoredCA runs on the httptest
+// server's own goroutine when an afterRequest hook calls it, and calling
+// Fatal there is undefined by testing's own contract: Fatal/FailNow must
+// run on the goroutine executing the test, unlike Error/Errorf, which are
+// documented safe from any goroutine. parseStoredCA reports failures with
+// t.Error precisely to honor that contract.
+//
+// The hook is handed a standalone *testing.T rather than this test's own:
+// that keeps its (expected, deliberate) failure from propagating to this
+// test's result -- Go's runner fails an ancestor whenever any t.Run child
+// does -- while still exercising the exact reporting path (Errorf, mutex
+// and all) a real *testing.T uses. The round trip is bounded well under a
+// real client's own timeout, so a regression that reintroduces a
+// Fatal-based call here fails this test promptly instead of hanging it.
+func TestParseStoredCAReportsBrokenFixtureWithoutHanging(t *testing.T) {
+	isolateHome(t)
+	fv := newCLIFakeV2(t)
+	fv.setV2("secret/other", map[string]string{"k": strings.Repeat("x", 4096)})
+
+	sub := &testing.T{}
+	fv.afterRequest(`^GET /v1/secret/data/other(\?.*)?$`, 1, func() {
+		parseStoredCA(sub, fv, "secret/never-written")
+	})
+
+	c := newKeygenCLI(t)
+	c.opt.Gen.Policy = defaultGenPolicy
+
+	done := make(chan error, 1)
+	go func() { done <- c.cmdGen("gen", "16", "secret/other", "trigger") }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("cmdGen: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		// A hang here means the hook abandoned the response mid-flight
+		// instead of reporting through t.Error.
+		t.Fatal("cmdGen did not return within 3s: the afterRequest hook appears to have hung the response")
+	}
+
+	if !sub.Failed() {
+		t.Error("expected parseStoredCA to record the broken fixture at secret/never-written as a failure")
+	}
 }
 
 // latestCASerialV2 parses the hex serial counter of the newest CA version.
@@ -116,6 +169,21 @@ func injectConcurrentIssuance(t *testing.T, fv *cliFakeVault, caPath string) fun
 		s, err := their.Secret(false)
 		if err != nil {
 			t.Errorf("concurrent issuance at %s: %v", caPath, err)
+			return
+		}
+		fv.setV2(caPath, secretToKV(s))
+	}
+}
+
+// injectConcurrentCAKeySwap replaces the stored CA with a different
+// authority whose key is a different type, simulating a concurrent CA
+// rotation mid-retry -- the hazard a per-attempt signature-algorithm reset
+// exists to survive.
+func injectConcurrentCAKeySwap(t *testing.T, fv *cliFakeVault, caPath string, swap *vault.X509) func() {
+	return func() {
+		s, err := swap.Secret(false)
+		if err != nil {
+			t.Errorf("swap CA at %s: %v", caPath, err)
 			return
 		}
 		fv.setV2(caPath, secretToKV(s))
@@ -365,6 +433,47 @@ func TestX509RevokeOfConcurrentlyRevokedCertWritesNothing(t *testing.T) {
 	}
 }
 
+// A plain sequential re-revoke of a certificate already revoked in an
+// earlier, unrelated run is not the concurrent case: the plan's own
+// "Rejected and deferred" list declines to skip CRL churn for an
+// unchanged entry list, so this must still publish a fresh CRL -- one
+// new CA version, CRL Number advanced -- exactly as it did before
+// check-and-set landed.
+func TestX509RevokeOfAlreadyRevokedCertStillPublishesFreshCRL(t *testing.T) {
+	isolateHome(t)
+	fv := newCLIFakeV2(t)
+	ca := newCA(t, "authority")
+	leafA := newLeaf(t, ca, "a")
+	ca.Revoke(leafA)
+	storeCertV2(t, fv, "secret/ca", ca)
+	storeCertV2(t, fv, "secret/a", leafA)
+
+	beforeNumber := latestCRLV2(t, fv, "secret/ca").Number
+
+	c := newX509CLI(t)
+	c.opt.X509.Revoke.SignedBy = "secret/ca"
+	if err := c.cmdX509Revoke("x509 revoke", "secret/a"); err != nil {
+		t.Fatalf("revoke of an already-revoked certificate: %v", err)
+	}
+
+	if states := fv.versionStates("secret/ca"); len(states) != 2 {
+		t.Errorf("CA versions = %d, want 2 (the seed, then the fresh CRL publish)", len(states))
+	}
+	afterNumber := latestCRLV2(t, fv, "secret/ca").Number
+	if afterNumber.Cmp(beforeNumber) <= 0 {
+		t.Errorf("CRL number = %s, want it to have advanced past %s", afterNumber, beforeNumber)
+	}
+	count := 0
+	for _, entry := range latestCRLV2(t, fv, "secret/ca").RevokedCertificateEntries {
+		if entry.SerialNumber.Cmp(leafA.Certificate.SerialNumber) == 0 {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("the serial appears %d times on the CRL, want exactly once", count)
+	}
+}
+
 // A CA swapped for a different authority between read and write must not
 // credit the foreign CA with the revocation: the retry re-checks the
 // signature against the fresh CA and refuses.
@@ -477,6 +586,65 @@ func TestX509ReissueRetriesAgainstFreshCA(t *testing.T) {
 	}
 	if gets, puts := v2DataTraffic(fv, "ca"); gets != 3 || puts != 2 {
 		t.Errorf("CA traffic = %d GETs, %d PUTs; want 3 and 2", gets, puts)
+	}
+}
+
+// A CA swapped for a different key type mid-retry must not carry the
+// first attempt's signature-algorithm choice into the second: reissue
+// resets it to Unknown before every attempt's Sign call, so the retry
+// re-derives from the fresh (here, EC) CA's key instead of validating a
+// now-incompatible RSA-derived choice against it.
+func TestX509ReissueAdaptsSignatureAlgorithmToCAKeySwap(t *testing.T) {
+	isolateHome(t)
+	fv := newCLIFakeV2(t)
+	ca := newCA(t, "authority")
+	leafA := newLeaf(t, ca, "a")
+	storeCertV2(t, fv, "secret/ca", ca)
+	storeCertV2(t, fv, "secret/a", leafA)
+
+	ecCA := newECCA(t, "authority-ec")
+	fv.afterRequest(`^GET /v1/secret/data/ca(\?.*)?$`, 2,
+		injectConcurrentCAKeySwap(t, fv, "secret/ca", ecCA))
+
+	c := newX509CLI(t)
+	c.opt.X509.Reissue.SignedBy = "secret/ca"
+	captureStdout(t, func() {
+		if err := c.cmdX509Reissue("x509 reissue", "secret/a"); err != nil {
+			t.Fatalf("reissue after a CA key swap: %v", err)
+		}
+	})
+
+	reissued := latestLeafCertV2(t, fv, "secret/a")
+	if reissued.SignatureAlgorithm != x509.ECDSAWithSHA256 {
+		t.Errorf("reissued signature algorithm = %s, want ECDSA-with-SHA256 derived from the swapped CA's key", reissued.SignatureAlgorithm)
+	}
+}
+
+// renew resets the same way, matching reissue: the identical mid-retry
+// CA-key-swap hazard gets the identical answer in both commands.
+func TestX509RenewAdaptsSignatureAlgorithmToCAKeySwap(t *testing.T) {
+	isolateHome(t)
+	fv := newCLIFakeV2(t)
+	ca := newCA(t, "authority")
+	leafA := newLeaf(t, ca, "a")
+	storeCertV2(t, fv, "secret/ca", ca)
+	storeCertV2(t, fv, "secret/a", leafA)
+
+	ecCA := newECCA(t, "authority-ec")
+	fv.afterRequest(`^GET /v1/secret/data/ca(\?.*)?$`, 2,
+		injectConcurrentCAKeySwap(t, fv, "secret/ca", ecCA))
+
+	c := newX509CLI(t)
+	c.opt.X509.Renew.SignedBy = "secret/ca"
+	captureStdout(t, func() {
+		if err := c.cmdX509Renew("x509 renew", "secret/a"); err != nil {
+			t.Fatalf("renew after a CA key swap: %v", err)
+		}
+	})
+
+	renewed := latestLeafCertV2(t, fv, "secret/a")
+	if renewed.SignatureAlgorithm != x509.ECDSAWithSHA256 {
+		t.Errorf("renewed signature algorithm = %s, want ECDSA-with-SHA256 derived from the swapped CA's key", renewed.SignatureAlgorithm)
 	}
 }
 

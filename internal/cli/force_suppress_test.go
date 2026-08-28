@@ -109,3 +109,76 @@ func TestRecursiveForceDeleteSurfacesPermissionError(t *testing.T) {
 		t.Errorf("error %q should carry the permission failure", err)
 	}
 }
+
+// A recursive --force delete whose fan-out collects a genuine mix of
+// not-found and non-not-found siblings must still surface the
+// non-not-found one -- allNotFound's whole reason for existing, driven
+// through a real command rather than synthetic errors. A reversion of
+// allNotFound to a bare vault.IsNotFound would judge this by whichever
+// sibling happened to land first in the collected *parallel.Errors; b's
+// metadata GET is held back until a's denial has already landed, so that
+// arrival order always puts the not-found sibling first, which is
+// exactly the ordering under which a bare vault.IsNotFound is fooled.
+func TestRecursiveForceDeleteSurfacesMixedNotFoundAndDenied(t *testing.T) {
+	isolateHome(t)
+	fv := newCLIFakeV2(t)
+	fv.setV2("secret/x/a", map[string]string{"k": "1"})
+	fv.setV2("secret/x/b", map[string]string{"k": "2"})
+	fv.denyMetadataGet("secret/x/a")
+
+	//b is listed by the tree walk -- its key is present in the mount --
+	//but its version history is already empty, so its own --destroy check
+	//comes back not-found: exactly what a sibling removed by another actor
+	//between the walk and the delete would look like.
+	fv.mu.Lock()
+	fv.versions["secret/x/b"] = nil
+	fv.mu.Unlock()
+
+	fv.holdRequests(2, `^GET /v1/secret/metadata/x/a$`)
+
+	c := newTestCLI(t)
+	c.opt.Delete.Recurse = true
+	c.opt.Delete.Force = true
+	c.opt.Delete.Destroy = true
+
+	done := make(chan error, 1)
+	go func() {
+		done <- c.cmdDelete("delete", "secret/x")
+	}()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		arrived := false
+		for _, r := range fv.requests() {
+			if r == "GET /v1/secret/metadata/x/a" {
+				arrived = true
+				break
+			}
+		}
+		if arrived {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the denied metadata GET for secret/x/a never arrived")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	//By now b's unmediated round trip has had ample opportunity to finish
+	//and collect its not-found failure first; releasing a's gate lands its
+	//denial second.
+	fv.holdRequests(0, `never-matches`)
+
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("cmdDelete never returned after releasing the gate")
+	}
+
+	if err == nil {
+		t.Fatal("expected the mixed not-found/denied delete to surface despite --force, got nil")
+	}
+	if !strings.Contains(err.Error(), "permission denied") {
+		t.Errorf("error %q should carry the permission failure", err)
+	}
+}

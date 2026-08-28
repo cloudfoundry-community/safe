@@ -666,7 +666,7 @@ key`, and the two forms can be mixed.  The whole list is read
 before the first password is generated, so an argument that
 cannot be used stops the command with nothing written.
 
-### fmt format_type path oldKey newKey
+### fmt \[OPTIONS\] format_type path oldKey newKey
 
 Take the key at `path:oldKey`, reformat it according to **format_type**,
 and save it in `path:newKey`. Useful for hashing, or encoding passwords
@@ -684,6 +684,12 @@ Currently supported formats:
 safe fmt base64 secret/account password base64_password
 safe fmt crypt-sha512 secret/account password crypt_password
 ```
+
+`--cost N` sets the bcrypt work factor, and is only meaningful for the
+`bcrypt` format. It defaults to 12; the minimum is 10, the bcrypt
+library's own default, and the maximum is 31, the library's own ceiling.
+Hashing time grows about 4x for every +2, so choose with care: cost 14
+takes about 4x as long as the default, cost 16 about 16x.
 
 ### ssh \[nbits\] path \[path ...\]
 

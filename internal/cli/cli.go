@@ -1700,6 +1700,14 @@ func Main(version, buildTime, gitCommit string) {
 	opt.Init.Persist = true
 	opt.Rekey.Persist = true
 
+	//go-cli only overwrites this from a literal --cost on the command
+	// line, so pre-seeding it with the real default (rather than leaving
+	// it at the int zero value) is what makes an explicit --cost 0
+	// distinguishable from the flag never being given: 0 fails the
+	// minimum check below either way, but the unset case now reads 12
+	// rather than a value nobody asked for.
+	opt.Fmt.Cost = vault.DefaultBcryptCost
+
 	go Signals()
 
 	r := newRegisteredRunner(&opt)

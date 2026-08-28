@@ -153,23 +153,30 @@ func (c *CLI) cmdFmt(command string, args ...string) error {
 	oldKey := args[2]
 	newKey := args[3]
 
-	//The cost is checked before the read: a bad work factor should not cost
-	// a round trip to the Vault, and it must never be weakened below the
-	// bcrypt library's own default.
-	cost := vault.DefaultBcryptCost
-	if opt.Fmt.Cost != 0 {
-		cost = opt.Fmt.Cost
-	}
-	if cost < vault.MinBcryptCost {
-		return fmt.Errorf("bcrypt cost %d is below the minimum of %d", cost, vault.MinBcryptCost)
-	}
-
 	//fmt names the keys it reads and writes separately, so a key on the path
 	// is a mistake. Left unchecked it reads as one, and the complaint that
 	// comes back is that the key does not exist rather than that it does not
 	// belong there.
 	if err := assertWritablePaths(path); err != nil {
 		return err
+	}
+
+	//Both bounds are checked before the read: a bad work factor should not
+	// cost a round trip to the Vault. Main pre-seeds Fmt.Cost with
+	// DefaultBcryptCost before go-cli parses the command line, so this
+	// field already carries 12 unless --cost overwrote it -- including an
+	// explicit --cost 0, which is a real request now, not the unset
+	// default, and is judged the same as any other too-low value below.
+	// The cost must never be weakened below the bcrypt library's own
+	// default, and never raised past what the library itself will
+	// accept -- left unchecked here, a too-high cost still pays for the
+	// read before bcrypt gets the chance to refuse it.
+	cost := opt.Fmt.Cost
+	if cost < vault.MinBcryptCost {
+		return fmt.Errorf("bcrypt cost %d is below the minimum of %d", cost, vault.MinBcryptCost)
+	}
+	if cost > vault.MaxBcryptCost {
+		return fmt.Errorf("bcrypt cost %d is above the maximum of %d", cost, vault.MaxBcryptCost)
 	}
 
 	v := connect(true)

@@ -221,15 +221,21 @@ func cryptSHA512(pass string) (string, error) {
 // Bcrypt work factors: DefaultBcryptCost is what Format uses; MinBcryptCost
 // is the floor callers may not go below — it is the bcrypt library's own
 // default, and a lower cost would weaken the hash past what the library
-// itself would pick.
+// itself would pick. MaxBcryptCost is the ceiling the library itself
+// enforces; a caller who goes above it pays for a Vault read before
+// bcrypt ever gets the chance to say so.
 const (
 	DefaultBcryptCost = 12
 	MinBcryptCost     = bcrypt.DefaultCost
+	MaxBcryptCost     = bcrypt.MaxCost
 )
 
 func cryptBcrypt(pass string, cost int) (string, error) {
 	if cost < MinBcryptCost {
 		return "", fmt.Errorf("bcrypt cost %d is below the minimum of %d", cost, MinBcryptCost)
+	}
+	if cost > MaxBcryptCost {
+		return "", fmt.Errorf("bcrypt cost %d is above the maximum of %d", cost, MaxBcryptCost)
 	}
 	hashed, err := bcrypt.GenerateFromPassword([]byte(pass), cost)
 	if err != nil {

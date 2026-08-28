@@ -2,6 +2,7 @@ package vault
 
 import (
 	"bytes"
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -19,6 +20,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/cloudfoundry-community/safe/internal/parallel"
 )
 
 type X509 struct {
@@ -182,21 +185,43 @@ func generateKey(spec KeySpec) (crypto.Signer, error) {
 
 // GenerateKeyWhileFetching generates a private key per spec while fetch --
 // typically the read and parse of the signing CA -- runs on the calling
-// goroutine, and hands the key over once both are done. A fetch failure
-// returns immediately without waiting the generation out; the generation
-// goroutine delivers into a buffered channel either way, so an abandoned
-// key is collected by the garbage collector rather than leaking a parked
-// goroutine. Batch issuance will want N keys raced against one fetch, and
-// this is the N=1 shape of that.
+// goroutine, and hands the key over once both are done. It is the n=1
+// shape of GenerateKeysWhileFetching and keeps its contract: a fetch
+// failure returns immediately without waiting the generation out.
 func GenerateKeyWhileFetching(spec KeySpec, fetch func() error) (crypto.Signer, error) {
+	keys, err := GenerateKeysWhileFetching(spec, 1, 1, fetch)
+	if err != nil {
+		return nil, err
+	}
+	return keys[0], nil
+}
+
+// GenerateKeysWhileFetching generates n private keys per spec, at most
+// limit at a time, while fetch -- typically the read and parse of the
+// signing CA -- runs on the calling goroutine, and hands the keys over
+// once both are done. Every key is its own full-quality draw from
+// crypto/rand; none is shared or discarded. A fetch failure returns
+// immediately without waiting the draws out; the abandoned draws run to
+// completion and deliver into a buffered channel nobody reads, so the
+// keys are collected by the garbage collector rather than a parked
+// goroutine leaking.
+func GenerateKeysWhileFetching(spec KeySpec, n, limit int, fetch func() error) ([]crypto.Signer, error) {
 	type generated struct {
-		key crypto.Signer
-		err error
+		keys []crypto.Signer
+		err  error
 	}
 	done := make(chan generated, 1)
 	go func() {
-		key, err := generateKeyFn(spec)
-		done <- generated{key, err}
+		keys := make([]crypto.Signer, n)
+		err := parallel.EachLimit(context.Background(), keys, limit, func(_ context.Context, i int, _ crypto.Signer) error {
+			key, kerr := generateKeyFn(spec)
+			if kerr != nil {
+				return kerr
+			}
+			keys[i] = key
+			return nil
+		})
+		done <- generated{keys, err}
 	}()
 
 	if err := fetch(); err != nil {
@@ -207,7 +232,7 @@ func GenerateKeyWhileFetching(spec KeySpec, fetch func() error) (crypto.Signer, 
 	if gen.err != nil {
 		return nil, fmt.Errorf("key generation failed: %w", gen.err)
 	}
-	return gen.key, nil
+	return gen.keys, nil
 }
 
 // algoForKey returns the x509 public key algorithm and a sane default

@@ -1378,10 +1378,18 @@ The following options are recognized:
 
 	r.Dispatch("x509 issue", &Help{
 		Summary: "Issue X.509 Certificates and Certificate Authorities",
-		Usage:   "safe x509 issue [OPTIONS] --name cn.example.com path/to/certificate",
+		Usage:   "safe x509 issue [OPTIONS] --name cn.example.com path/to/certificate [more/paths ...]",
 		Type:    DestructiveCommand,
 		Description: `
-Issue a new X.509 Certificate
+Issue one or more new X.509 Certificates
+
+Each path given receives its own certificate with its own freshly
+generated key.  All of them carry the same --name SAN set, and when
+--subject is not given each certificate's subject defaults to a CN of
+its path's basename (a single path keeps the older default of the
+first --name).  With --signed-by, the signing CA is read and written
+once for the whole batch: its serial counter advances once past every
+certificate issued and its revocation list is re-signed once.
 
 The following options are recognized:
 
@@ -1391,16 +1399,19 @@ The following options are recognized:
   -s, --subject       The subject name for this certificate.
                       i.e. /cn=www.example.com/c=us/st=ny...
                       If not specified, the first '--name'
-                      will be used as a lone CN=...
+                      will be used as a lone CN=... for a single
+                      path, and each path's basename for several.
+                      Specifying it with several paths stamps the
+                      same subject on every certificate, and warns.
 
   -i, --signed-by     Path in the Vault where the CA certificate
                       (and signing key) can be found.
                       Without this option, 'x509 issue' creates
                       self-signed certificates.
                       The path must hold a certificate authority,
-                      and cannot be the path the new certificate
+                      and cannot be any path a new certificate
                       is written to: issuing writes the signing CA
-                      back, then writes the new certificate over
+                      back, then writes each new certificate over
                       whatever was there.
 
   -n, --name          Subject Alternate Name(s) for this

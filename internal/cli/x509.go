@@ -1,16 +1,19 @@
 package cli
 
 import (
+	"context"
 	"crypto/x509"
 	"encoding/asn1"
 	"io"
 	"math/big"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
 	fmt "github.com/jhunt/go-ansi"
 
+	"github.com/cloudfoundry-community/safe/internal/parallel"
 	"github.com/cloudfoundry-community/safe/pkg/rc"
 	"github.com/cloudfoundry-community/safe/pkg/vault"
 )
@@ -150,6 +153,50 @@ func (c *CLI) cmdX509Validate(command string, args ...string) error {
 	return nil
 }
 
+// issueTarget is one destination of an x509 issue batch: the path as it
+// was given on the command line, the subject its certificate will carry,
+// and — once built — the certificate itself.
+type issueTarget struct {
+	arg     string
+	subject string
+	cert    *vault.X509
+}
+
+// pathBasename returns the last segment of a canonicalized secret path,
+// which is what a batch certificate's subject defaults to.
+func pathBasename(arg string) string {
+	p := vault.Canonicalize(arg)
+	if i := strings.LastIndex(p, "/"); i >= 0 {
+		return p[i+1:]
+	}
+	return p
+}
+
+// signCertsUnderCA reserves one serial per certificate from the CA's
+// counter, signs each certificate, and produces the CA's replacement
+// secret — the counter advanced past the whole batch, the revocation list
+// re-signed exactly once. ca must be freshly parsed from the CA's stored
+// secret every time this runs: producing the secret advances the CRL
+// number through the shared CRL pointer, so a reused X509 would publish a
+// double-bumped number. The certificates' keys were generated before this
+// ran and stay outside it, so re-running against a freshly re-read CA
+// re-signs the same keys with freshly drawn serials.
+func signCertsUnderCA(ca *vault.X509, certs []*vault.X509, ttl time.Duration, skipIfExists bool) (*vault.Secret, error) {
+	//An authority that keeps no counter hands out random serials, exactly
+	// as Sign does for it; the nil entries below ask SignWithSerial for
+	// that draw.
+	serials := make([]*big.Int, len(certs))
+	if ca.Serial != nil {
+		serials = ca.ReserveSerials(len(certs))
+	}
+	for i, cert := range certs {
+		if err := ca.SignWithSerial(cert, ttl, serials[i]); err != nil {
+			return nil, err
+		}
+	}
+	return ca.Secret(skipIfExists)
+}
+
 func (c *CLI) cmdX509Issue(command string, args ...string) error {
 	opt := c.opt
 	r := c.r
@@ -158,45 +205,97 @@ func (c *CLI) cmdX509Issue(command string, args ...string) error {
 		return err
 	}
 
-	var ca *vault.X509
-
-	if len(args) != 1 || len(opt.X509.Issue.Name) == 0 {
+	if len(args) < 1 || len(opt.X509.Issue.Name) == 0 {
 		return r.Usage("x509 issue")
 	}
 
-	//Both the new certificate and the CA that signed it are written back, and
-	// checking now means the refusal arrives before a key is generated rather
-	// than after.
-	if err := assertWritablePaths(args[0], opt.X509.Issue.SignedBy); err != nil {
+	//Both the new certificates and the CA that signed them are written
+	// back, and checking now means the refusal arrives before a key is
+	// generated rather than after.
+	if err := assertWritablePaths(append(append([]string(nil), args...), opt.X509.Issue.SignedBy)...); err != nil {
 		return err
 	}
 
-	//Issuing writes the new certificate over whatever the path held. Naming
-	// the signing authority as the destination — a slip of one word on the
-	// command line — replaces the authority with the certificate it just
+	//Issuing writes each new certificate over whatever its path held.
+	// Naming the signing authority as a destination — a slip of one word on
+	// the command line — replaces the authority with a certificate it just
 	// signed, taking its private key, its serial number, and its revocation
-	// list with it, and everything it ever issued becomes unverifiable.
-	if vault.Canonicalize(args[0]) == vault.Canonicalize(opt.X509.Issue.SignedBy) {
-		return fmt.Errorf("refusing to overwrite the signing authority %s with the certificate it signs", args[0])
+	// list with it, and everything it ever issued becomes unverifiable. And
+	// naming the same destination twice would race one certificate's write
+	// against the other's, which distinct paths are the whole point of a
+	// batch avoiding.
+	caPath := vault.Canonicalize(opt.X509.Issue.SignedBy)
+	seen := map[string]bool{}
+	for _, arg := range args {
+		p := vault.Canonicalize(arg)
+		if p == caPath {
+			return fmt.Errorf("refusing to overwrite the signing authority %s with the certificate it signs", arg)
+		}
+		if seen[p] {
+			return fmt.Errorf("refusing to issue two certificates to the same path %s", p)
+		}
+		seen[p] = true
 	}
 
-	if opt.X509.Issue.Subject == "" {
-		opt.X509.Issue.Subject = fmt.Sprintf("CN=%s", opt.X509.Issue.Name[0])
+	//Every certificate in the batch carries the same SAN set from --name;
+	// the subject is the one per-path attribute. A single path keeps the
+	// old default of the first name; several default to each path's
+	// basename, which is what tells the certificates apart. An explicit
+	// --subject stamps the same subject on all of them, which defeats
+	// that, so it draws a warning rather than a refusal.
+	targets := make([]*issueTarget, len(args))
+	for i, arg := range args {
+		targets[i] = &issueTarget{arg: arg}
+	}
+	switch {
+	case opt.X509.Issue.Subject == "" && len(args) == 1:
+		targets[0].subject = fmt.Sprintf("CN=%s", opt.X509.Issue.Name[0])
+	case opt.X509.Issue.Subject == "":
+		for _, target := range targets {
+			target.subject = fmt.Sprintf("CN=%s", pathBasename(target.arg))
+		}
+	default:
+		for _, target := range targets {
+			target.subject = opt.X509.Issue.Subject
+		}
+		if len(args) > 1 {
+			_, _ = fmt.Fprintf(os.Stderr, "@Y{!!} --subject %s applies to all %d certificates; without it each would default to its path's basename\n",
+				opt.X509.Issue.Subject, len(args))
+		}
 	}
 
 	v := connect(true)
 	if opt.SkipIfExists {
-		if _, err := v.Read(args[0]); err == nil {
-			if !opt.Quiet {
-				_, _ = fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to create a new certificate in} @C{%s} @R{as it is already present in Vault}\n", args[0])
-			}
+		//One read per destination decides every skip before a key is
+		// generated: keygen-before-refusal burns seconds. The reads run
+		// concurrently and the notices replay in argument order.
+		readErrs := make([]error, len(targets))
+		_ = parallel.EachLimit(context.Background(), targets, max(runtime.NumCPU(), 4), func(_ context.Context, i int, target *issueTarget) error {
+			_, err := v.Read(target.arg)
+			readErrs[i] = err
 			return nil
-		} else if !vault.IsNotFound(err) {
-			//Reached only when the read failed, so err is not nil: a read
-			// that could not be made sense of is not the same answer as a
-			// path with nothing on it, and only the latter is permission
-			// to write.
-			return err
+		})
+		kept := targets[:0]
+		for i, target := range targets {
+			switch err := readErrs[i]; {
+			case err == nil:
+				if !opt.Quiet {
+					_, _ = fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to create a new certificate in} @C{%s} @R{as it is already present in Vault}\n", target.arg)
+				}
+			case vault.IsNotFound(err):
+				kept = append(kept, target)
+			default:
+				//A read that could not be made sense of is not the same
+				// answer as a path with nothing on it, and only the latter
+				// is permission to write.
+				return err
+			}
+		}
+		targets = kept
+		//Every path already taken leaves nothing to issue, so the CA is
+		// neither read nor written: no CRL bump, no burned serials.
+		if len(targets) == 0 {
+			return nil
 		}
 	}
 
@@ -207,21 +306,24 @@ func (c *CLI) cmdX509Issue(command string, args ...string) error {
 		}
 	}
 
-	//A bad key spec or a malformed subject is knowable from the flags alone,
-	// so both are refused before the CA read and before any key generation
-	// is paid for.
+	//A bad key spec or a malformed subject is knowable from the flags and
+	// paths alone, so both are refused before the CA read and before any
+	// key generation is paid for.
 	spec, err := vault.ResolveKeySpec(opt.X509.Issue.Type, opt.X509.Issue.Bits, opt.X509.Issue.Curve, nil)
 	if err != nil {
 		return err
 	}
-	if _, err := vault.ParseSubject(opt.X509.Issue.Subject); err != nil {
-		return err
+	for _, target := range targets {
+		if _, err := vault.ParseSubject(target.subject); err != nil {
+			return err
+		}
 	}
 
-	//The CA read is a network round trip and the key draw is pure CPU, and
-	// neither depends on the other, so they run at the same time and join
-	// here. A CA problem comes back without waiting the generation out.
-	key, err := vault.GenerateKeyWhileFetching(spec, func() error {
+	//The CA read is a network round trip and the key draws are pure CPU,
+	// and neither depends on the other, so they run at the same time and
+	// join here. A CA problem comes back without waiting the draws out.
+	var ca *vault.X509
+	keys, err := vault.GenerateKeysWhileFetching(spec, len(targets), max(runtime.NumCPU(), 4), func() error {
 		if opt.X509.Issue.SignedBy == "" {
 			return nil
 		}
@@ -248,15 +350,17 @@ func (c *CLI) cmdX509Issue(command string, args ...string) error {
 		return err
 	}
 
-	cert, err := vault.NewCertificateWithKey(opt.X509.Issue.Subject,
-		uniq(opt.X509.Issue.Name), opt.X509.Issue.KeyUsage,
-		opt.X509.Issue.SigAlgorithm, key)
-	if err != nil {
-		return err
-	}
-
-	if opt.X509.Issue.CA {
-		cert.MakeCA()
+	for i, target := range targets {
+		cert, err := vault.NewCertificateWithKey(target.subject,
+			uniq(opt.X509.Issue.Name), opt.X509.Issue.KeyUsage,
+			opt.X509.Issue.SigAlgorithm, keys[i])
+		if err != nil {
+			return err
+		}
+		if opt.X509.Issue.CA {
+			cert.MakeCA()
+		}
+		target.cert = cert
 	}
 
 	if opt.X509.Issue.TTL == "" {
@@ -270,26 +374,58 @@ func (c *CLI) cmdX509Issue(command string, args ...string) error {
 		return err
 	}
 	if ca == nil {
-		if err := cert.Sign(cert, ttl); err != nil {
-			return err
+		//Self-signed: each certificate answers for itself, and no CA
+		// read-modify-write exists to order around.
+		for _, target := range targets {
+			if err := target.cert.Sign(target.cert, ttl); err != nil {
+				return err
+			}
 		}
 	} else {
-		if err := ca.Sign(cert, ttl); err != nil {
-			return err
+		certs := make([]*vault.X509, len(targets))
+		for i, target := range targets {
+			certs[i] = target.cert
 		}
-
-		err = ca.SaveTo(v, opt.X509.Issue.SignedBy, opt.SkipIfExists)
+		caSecret, err := signCertsUnderCA(ca, certs, ttl, opt.SkipIfExists)
 		if err != nil {
 			return err
 		}
+		//The CA write lands before any certificate write: a crash between
+		// the two burns reserved serials, which is harmless, rather than
+		// leaving certificates the persisted counter does not account for.
+		if err := v.Write(opt.X509.Issue.SignedBy, caSecret); err != nil {
+			return err
+		}
 	}
 
-	err = cert.SaveTo(v, args[0], opt.SkipIfExists)
-	if err != nil {
-		return err
-	}
+	writeErrs := make([]error, len(targets))
+	_ = parallel.EachLimit(context.Background(), targets, max(runtime.NumCPU(), 4), func(_ context.Context, i int, target *issueTarget) error {
+		writeErrs[i] = target.cert.SaveTo(v, target.arg, opt.SkipIfExists)
+		return nil
+	})
 
-	return nil
+	var failures []error
+	for i, target := range targets {
+		if writeErrs[i] != nil {
+			failures = append(failures, fmt.Errorf("failed to write the certificate to %s: %s", target.arg, writeErrs[i]))
+		}
+	}
+	if len(failures) == 0 {
+		return nil
+	}
+	if len(targets) == 1 {
+		//A lone destination fails the way it always has: the bare error.
+		return writeErrs[0]
+	}
+	//The CA write already landed, so every serial that went out is
+	// accounted for and the certificates that did write stand. Say which,
+	// so a partial batch reads as partial rather than silently half-done.
+	for i, target := range targets {
+		if writeErrs[i] == nil {
+			_, _ = fmt.Fprintf(os.Stderr, "@G{wrote} @C{%s}\n", target.arg)
+		}
+	}
+	return parallel.NewErrors(failures...)
 }
 
 func (c *CLI) cmdX509Reissue(command string, args ...string) error {

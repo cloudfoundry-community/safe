@@ -60,17 +60,19 @@ func TestQuickTreeSkipsThePerSecretVersionLookups(t *testing.T) {
 	}
 }
 
-// The control: without -q the lookups are what the check is made of.
-func TestTreeLooksUpEveryVersionHistoryWithoutQuick(t *testing.T) {
+// The control: under --exact the lookups are what the check is made of. This
+// used to be the no-flag case, before the quick walk became the default.
+func TestTreeLooksUpEveryVersionHistoryWhenExact(t *testing.T) {
 	isolateHome(t)
 	fv := walkFixture(t)
 	c := newTestCLI(t)
+	c.opt.Tree.Exact = true
 
 	fv.forgetRequests()
 	treeOut(t, c)
 
 	if got := versionLookups(fv); got != 3 {
-		t.Errorf("tree looked up %d version histories, want one per secret (3):\n%s",
+		t.Errorf("tree --exact looked up %d version histories, want one per secret (3):\n%s",
 			got, strings.Join(fv.requests(), "\n"))
 	}
 }
@@ -115,17 +117,18 @@ func TestQuickTreeStillKeepsADeletedLatestSecret(t *testing.T) {
 }
 
 // And a walk that does look still drops it.
-func TestTreeStillOmitsADeletedLatestSecret(t *testing.T) {
+func TestExactTreeStillOmitsADeletedLatestSecret(t *testing.T) {
 	isolateHome(t)
 	fv := walkFixture(t)
 	fv.deleteV2("secret/app/db", 2)
 	c := newTestCLI(t)
+	c.opt.Tree.Exact = true
 
 	out := treeOut(t, c)
 	if strings.Contains(out, "db") {
-		t.Errorf("tree lists db, whose newest version is deleted:\n%s", out)
+		t.Errorf("tree --exact lists db, whose newest version is deleted:\n%s", out)
 	}
 	if !strings.Contains(out, "api") {
-		t.Errorf("tree is missing api:\n%s", out)
+		t.Errorf("tree --exact is missing api:\n%s", out)
 	}
 }

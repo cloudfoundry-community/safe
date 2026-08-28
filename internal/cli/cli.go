@@ -287,12 +287,14 @@ type Options struct {
 	Paths struct {
 		ShowKeys bool `cli:"--keys"`
 		Quick    bool `cli:"-q, --quick"`
+		Exact    bool `cli:"--exact"`
 	} `cli:"paths"`
 
 	Tree struct {
 		ShowKeys   bool `cli:"--keys"`
 		HideLeaves bool `cli:"-d, --hide-leaves"`
 		Quick      bool `cli:"-q, --quick"`
+		Exact      bool `cli:"--exact"`
 	} `cli:"tree"`
 
 	Values struct {

@@ -109,7 +109,7 @@ func NewVault(conf VaultConfig) (*Vault, error) {
 	}
 
 	if conf.SkipVerify {
-		_, _ = ansi.Fprintf(os.Stderr, "@Y{WARNING: TLS certificate verification disabled — connections to Vault are not authenticated}\n")
+		_, _ = ansi.Fprintf(os.Stderr, "@Y{WARNING: TLS certificate verification disabled — connections to Vault are insecure}\n")
 	}
 
 	return &Vault{

@@ -367,6 +367,32 @@ func TestBatchIssueSubjectBasenameUnescapesTheStrayBackslash(t *testing.T) {
 	}
 }
 
+// Two destinations that share a basename get identical subjects and SANs,
+// which defeats the reason the basename default exists: warn about it the
+// same way an explicit --subject over several paths already does.
+func TestBatchIssueWarnsWhenBasenamesCollide(t *testing.T) {
+	isolateHome(t)
+	fv := newCLIFake(t)
+	storeCert(t, fv, "secret/ca", newCA(t, "authority"))
+
+	c := batchIssueCLI(t)
+	var err error
+	stderr := captureStderr(t, func() {
+		err = c.cmdX509Issue("x509 issue", "secret/a/leaf", "secret/b/leaf")
+	})
+	if err != nil {
+		t.Fatalf("batch issue with colliding basenames: %v", err)
+	}
+	if !strings.Contains(stderr, "leaf") {
+		t.Errorf("stderr = %q, want a warning naming the shared basename leaf", stderr)
+	}
+	for _, path := range []string{"secret/a/leaf", "secret/b/leaf"} {
+		if cn := storedLeafCert(t, fv, path).Subject.CommonName; cn != "leaf" {
+			t.Errorf("%s carries CN=%s, want the shared basename leaf", path, cn)
+		}
+	}
+}
+
 // A single path keeps the old default: the first --name, not the basename.
 func TestSinglePathSubjectStillDefaultsToTheFirstName(t *testing.T) {
 	isolateHome(t)

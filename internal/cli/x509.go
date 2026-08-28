@@ -278,8 +278,23 @@ func (c *CLI) cmdX509Issue(command string, args ...string) error {
 	case opt.X509.Issue.Subject == "" && len(args) == 1:
 		targets[0].subject = fmt.Sprintf("CN=%s", opt.X509.Issue.Name[0])
 	case opt.X509.Issue.Subject == "":
-		for _, target := range targets {
-			target.subject = fmt.Sprintf("CN=%s", pathBasename(target.arg))
+		basenames := make([]string, len(targets))
+		counts := map[string]int{}
+		for i, target := range targets {
+			basenames[i] = pathBasename(target.arg)
+			target.subject = fmt.Sprintf("CN=%s", basenames[i])
+			counts[basenames[i]]++
+		}
+		//A shared basename is what tells otherwise-identical certificates
+		// apart; two paths that collide on it get the same subject and the
+		// same SAN set, which is silent unless something says so.
+		warned := map[string]bool{}
+		for _, name := range basenames {
+			if counts[name] > 1 && !warned[name] {
+				warned[name] = true
+				_, _ = fmt.Fprintf(os.Stderr, "@Y{!!} %d paths share the basename %s; those certificates will carry identical subjects and SANs\n",
+					counts[name], name)
+			}
 		}
 	default:
 		for _, target := range targets {

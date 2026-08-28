@@ -50,12 +50,18 @@ func TestGenerateKeyOverlapsTheCAFetch(t *testing.T) {
 
 	stubArrived := make(chan struct{})
 	stubRelease := make(chan struct{})
+	// stubTimedOut is closed by the stub goroutine instead of calling
+	// t.Error directly: the enclosing test may already have returned via
+	// one of its own t.Fatal calls by the time a 10 s timeout this deep
+	// fires, and logging from a goroutine after the test completes
+	// panics. The test body checks it after done resolves instead.
+	stubTimedOut := make(chan struct{})
 	restore := vault.SetGenerateKeyForTest(func(spec vault.KeySpec) (crypto.Signer, error) {
 		close(stubArrived)
 		select {
 		case <-stubRelease:
 		case <-time.After(10 * time.Second):
-			t.Error("keygen stub never released; the CA GET was never observed alongside it")
+			close(stubTimedOut)
 		}
 		return preKey, nil
 	})
@@ -107,6 +113,12 @@ func TestGenerateKeyOverlapsTheCAFetch(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("GenerateKeyWhileFetching never returned")
+	}
+
+	select {
+	case <-stubTimedOut:
+		t.Error("keygen stub never released; the CA GET was never observed alongside it")
+	default:
 	}
 }
 

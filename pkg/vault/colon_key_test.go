@@ -70,7 +70,7 @@ func TestMoveCopyTreePreservesColonKeys(t *testing.T) {
 	fv.set("secret/sub/a", map[string]string{"odd:key": "va"})
 	fv.set("secret/sub/b/c", map[string]string{"other:key": "vc"})
 
-	err := v.MoveCopyTree("secret/sub", "secret/dst", v.Copy, vault.MoveCopyOpts{Quiet: true})
+	err := v.MoveCopyTree("secret/sub", "secret/dst", false, vault.MoveCopyOpts{Quiet: true})
 	if err != nil {
 		t.Fatalf("MoveCopyTree: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestMoveCopyTreeRejectsKeyOrVersionRoot(t *testing.T) {
 			v, fv := newTestVault(t)
 			fv.set("secret/src/a", map[string]string{"k": "1"})
 
-			err := v.MoveCopyTree(root, "secret/dst", v.Copy, vault.MoveCopyOpts{Quiet: true})
+			err := v.MoveCopyTree(root, "secret/dst", false, vault.MoveCopyOpts{Quiet: true})
 			if err == nil || !strings.Contains(err.Error(), "specific key or version") {
 				t.Fatalf("MoveCopyTree(%q) = %v, want a specific-key-or-version refusal", root, err)
 			}
@@ -238,7 +238,7 @@ func TestMoveCopyTreePreservesColonPaths(t *testing.T) {
 	fv.set("secret/sub/od:d", map[string]string{"k": "v"})
 	fv.set("secret/sub/od", map[string]string{"k2": "v2"})
 
-	err := v.MoveCopyTree("secret/sub", "secret/dst", v.Copy, vault.MoveCopyOpts{Quiet: true})
+	err := v.MoveCopyTree("secret/sub", "secret/dst", false, vault.MoveCopyOpts{Quiet: true})
 	if err != nil {
 		t.Fatalf("MoveCopyTree: %v", err)
 	}
@@ -273,7 +273,7 @@ func TestMoveCopyTreeAcceptsEscapedRoots(t *testing.T) {
 	v, fv := newTestVault(t)
 	fv.set("secret/od:d/leaf", map[string]string{"k": "v"})
 
-	err := v.MoveCopyTree(`secret/od\:d`, `secret/ne\:w`, v.Copy, vault.MoveCopyOpts{Quiet: true})
+	err := v.MoveCopyTree(`secret/od\:d`, `secret/ne\:w`, false, vault.MoveCopyOpts{Quiet: true})
 	if err != nil {
 		t.Fatalf("MoveCopyTree: %v", err)
 	}
@@ -290,7 +290,7 @@ func TestMoveCopyTreeReplacesColonBearingPrefix(t *testing.T) {
 	v, fv := newTestVault(t)
 	fv.set("secret/o:d/a/b", map[string]string{"k": "v"})
 
-	err := v.MoveCopyTree(`secret/o\:d`, "secret/plain", v.Copy, vault.MoveCopyOpts{Quiet: true})
+	err := v.MoveCopyTree(`secret/o\:d`, "secret/plain", false, vault.MoveCopyOpts{Quiet: true})
 	if err != nil {
 		t.Fatalf("MoveCopyTree: %v", err)
 	}
@@ -309,7 +309,7 @@ func TestMoveCopyTreeSkipIfExistsWithColonPaths(t *testing.T) {
 	fv.set("secret/sub/o:d", map[string]string{"k": "new"})
 	fv.set("secret/dst/o:d", map[string]string{"k": "old"})
 
-	err := v.MoveCopyTree("secret/sub", "secret/dst", v.Copy,
+	err := v.MoveCopyTree("secret/sub", "secret/dst", false,
 		vault.MoveCopyOpts{Quiet: true, SkipIfExists: true})
 	if err != nil {
 		t.Fatalf("MoveCopyTree: %v", err)

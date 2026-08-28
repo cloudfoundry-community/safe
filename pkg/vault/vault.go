@@ -13,6 +13,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/cloudfoundry-community/vaultkv"
@@ -914,7 +915,7 @@ func (v *Vault) Copy(oldpath, newpath string, opts MoveCopyOpts) error {
 // MoveCopyTree will recursively copy all nodes from the root to the new location.
 // This function will get confused about 'secret:key' syntax, so don't let those
 // get routed here - they don't make sense for a recursion anyway.
-func (v *Vault) MoveCopyTree(oldRoot, newRoot string, f func(string, string, MoveCopyOpts) error, opts MoveCopyOpts) error {
+func (v *Vault) MoveCopyTree(oldRoot, newRoot string, move bool, opts MoveCopyOpts) error {
 	//Neither root can name a key or a version: the recursion drops both and
 	// relocates the whole subtree instead of the one thing that was named.
 	rawOldRoot, oldKey, oldVersion := ParsePath(oldRoot)
@@ -922,31 +923,61 @@ func (v *Vault) MoveCopyTree(oldRoot, newRoot string, f func(string, string, Mov
 	if oldKey != "" || newKey != "" || oldVersion != 0 || newVersion != 0 {
 		return fmt.Errorf("cannot recursively copy or move a specific key or version (%s -> %s)", oldRoot, newRoot)
 	}
+	//Same guard v.Copy applies: DeletedVersions only makes sense alongside
+	// Deep, and the recursive path must refuse it rather than silently
+	// falling back to a shallow copy plus a versionless delete.
+	if opts.DeletedVersions && !opts.Deep {
+		return fmt.Errorf("DeletedVersions requires Deep to be set")
+	}
 	//The walk wants the literal Vault paths ParsePath returned. The prefix
-	// replace below and f() both work in the escaped syntax that
-	// Secrets.Paths() emits, and EscapePathSegment substitutes byte by byte,
-	// so escaping a path and escaping its root prefix agree: the replace stays
-	// exact. Re-encoding also normalizes the roots the way the walk does.
+	// replace below works in the escaped syntax that entry paths encode to,
+	// and EscapePathSegment substitutes byte by byte, so escaping a path and
+	// escaping its root prefix agree: the replace stays exact. Re-encoding
+	// also normalizes the roots the way the walk does.
 	oldRoot = EncodePath(rawOldRoot, "", 0)
 	newRoot = EncodePath(rawNewRoot, "", 0)
 
-	tree, err := v.ConstructSecrets(rawOldRoot, TreeOpts{FetchKeys: false, AllowDeletedSecrets: opts.Deep, SkipVersionInfo: true})
+	//The walk skips (rather than aborts on) any node it cannot read due to
+	// permissions, counting each skip here. Recursion treats the walk as a
+	// complete inventory and does destructive work against it -- for a
+	// move, that skip would otherwise let an entry it never actually read
+	// reach the source delete/destroy below. So a nonzero skip count
+	// refuses the whole operation up front, matching the old per-secret
+	// verifySecretState's abort-on-403 behavior.
+	var skipped atomic.Uint64
+	tree, err := v.ConstructSecrets(rawOldRoot, TreeOpts{
+		FetchKeys:           true,
+		FetchAllVersions:    opts.Deep,
+		GetDeletedVersions:  opts.Deep && opts.DeletedVersions,
+		AllowDeletedSecrets: opts.Deep,
+		SkippedForbidden:    &skipped,
+	})
 	if err != nil {
 		return err
 	}
+	if n := skipped.Load(); n > 0 {
+		verb := "copy"
+		if move {
+			verb = "move"
+		}
+		return fmt.Errorf("cannot recursively %s %s: %d secret(s) or version(s) under it could not be read (permission denied)", verb, oldRoot, n)
+	}
+
 	if opts.SkipIfExists {
 		//Writing one secret over a deleted secret isn't clobbering. Completely overwriting a set of deleted secrets would be
 		newTree, err := v.ConstructSecrets(rawNewRoot, TreeOpts{FetchKeys: false, AllowDeletedSecrets: !opts.Deep, SkipVersionInfo: true})
 		if err != nil && !IsNotFound(err) {
 			return err
 		}
+		// The keyed source walk's Paths() emits path:key entries per key, so
+		// the clobber comparison is built from entry paths on BOTH sides.
 		existing := map[string]bool{}
-		for _, path := range newTree.Paths() {
-			existing[path] = true
+		for _, entry := range newTree {
+			existing[EncodePath(entry.Path, "", 0)] = true
 		}
 		existingPaths := []string{}
-		for _, path := range tree.Paths() {
-			newPath := strings.Replace(path, oldRoot, newRoot, 1)
+		for _, entry := range tree {
+			newPath := strings.Replace(EncodePath(entry.Path, "", 0), oldRoot, newRoot, 1)
 			if existing[newPath] {
 				existingPaths = append(existingPaths, newPath)
 			}
@@ -961,16 +992,34 @@ func (v *Vault) MoveCopyTree(oldRoot, newRoot string, f func(string, string, Mov
 			return nil
 		}
 	}
-	for _, path := range tree.Paths() {
-		newPath := strings.Replace(path, oldRoot, newRoot, 1)
-		err = f(path, newPath, opts)
+
+	for _, entry := range tree {
+		newPath := strings.Replace(EncodePath(entry.Path, "", 0), oldRoot, newRoot, 1)
+		rawNewPath, _, _ := ParsePath(newPath)
+		err = entry.Copy(v, rawNewPath, TreeCopyOpts{Clear: opts.Deep, Pad: opts.Deep})
 		if err != nil {
 			return err
 		}
-	}
-
-	if _, err := v.Read(oldRoot); !IsNotFound(err) { // run through a copy unless we successfully got a 404 from this node
-		return f(oldRoot, newRoot, opts)
+		// An entry the walk could not actually read carries no versions.
+		// The skip check above already refuses the whole operation in that
+		// case, but guard the destructive branch independently too: never
+		// let a zero-version entry -- one entry.Copy just wrote nothing
+		// for -- reach the source delete/destroy.
+		if move && len(entry.Versions) > 0 {
+			if opts.Deep && opts.DeletedVersions {
+				err = v.client.DestroyAll(entry.Path)
+			} else {
+				// deleteEntireSecret, not v.Delete: Delete re-runs
+				// verifySecretState (a metadata GET per secret) that the
+				// walk already answered, and canSemanticallyDelete is a
+				// no-op for the key-less, version-less paths recursion
+				// guarantees.
+				err = v.deleteEntireSecret(EncodePath(entry.Path, "", 0), false, false)
+			}
+			if err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

@@ -1098,15 +1098,18 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 }
 
 // moveCopyParams captures the per-command differences between move and copy.
-// op is the underlying vault operation (v.Move or v.Copy); verb names the
-// command for messages and the recurse prompt; guardRecurseVersion enables the
-// check that forbids recursively moving or copying a versioned source.
+// op is the underlying vault operation (v.Move or v.Copy) used for the
+// non-recursive, single-secret path; move tells the recursive path whether
+// to move or copy; verb names the command for messages and the recurse
+// prompt; guardRecurseVersion enables the check that forbids recursively
+// moving or copying a versioned source.
 type moveCopyParams struct {
 	verb                string
 	recurse             bool
 	force               bool
 	deep                bool
 	guardRecurseVersion bool
+	move                bool
 	op                  func(string, string, vault.MoveCopyOpts) error
 }
 
@@ -1145,7 +1148,7 @@ func (c *CLI) moveCopy(v *vault.Vault, args []string, p moveCopyParams) error {
 		if !p.force && !recursively(p.verb, args...) {
 			return nil /* skip this command, process the next */
 		}
-		err := v.MoveCopyTree(args[0], args[1], p.op, opts)
+		err := v.MoveCopyTree(args[0], args[1], p.move, opts)
 		if err != nil && (!vault.IsNotFound(err) || !p.force) {
 			return err
 		}
@@ -1176,6 +1179,7 @@ func (c *CLI) cmdMove(command string, args ...string) error {
 		force:               opt.Move.Force,
 		deep:                opt.Move.Deep,
 		guardRecurseVersion: true,
+		move:                true,
 		op:                  v.Move,
 	})
 }
@@ -1199,6 +1203,7 @@ func (c *CLI) cmdCopy(command string, args ...string) error {
 		force:               opt.Copy.Force,
 		deep:                opt.Copy.Deep,
 		guardRecurseVersion: true,
+		move:                false,
 		op:                  v.Copy,
 	})
 }

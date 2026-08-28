@@ -163,9 +163,7 @@ func TestMoveCopyTreeClobberRefusal(t *testing.T) {
 	err := v.MoveCopyTree(
 		"secret/from",
 		"secret/to",
-		func(src, dst string, opts vault.MoveCopyOpts) error {
-			return v.Copy(src, dst, opts)
-		},
+		false,
 		vault.MoveCopyOpts{SkipIfExists: true, Quiet: true},
 	)
 	if err != nil {

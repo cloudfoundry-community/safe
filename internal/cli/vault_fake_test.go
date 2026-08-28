@@ -51,12 +51,29 @@ type cliFakeVault struct {
 	// read to fail for a reason other than the secret not being there. See
 	// denyGet.
 	forbidGet map[string]bool
+	//forbidDelete names paths whose DELETE answers 403, for tests that need
+	// one path of a recursive delete to fail for a reason --force must not
+	// swallow. See denyDelete.
+	forbidDelete map[string]bool
+	//forbidPut names paths whose write answers 403, for tests that need one
+	// write of a parallel batch to fail while its siblings land. See denyPut.
+	forbidPut map[string]bool
 
 	// gate, when non-nil, parks every request matching its pattern before
 	// dispatch. Installed by holdRequests. The pointer itself is guarded by
 	// f.mu, but parking happens on the gate's own lock -- never f.mu -- so a
 	// parked request can never deadlock the fake against itself.
 	gate *requestGate
+
+	// hooks holds the concurrent-writer hooks installed by afterRequest,
+	// each fired after a matching request has been served. Guarded by f.mu.
+	hooks []*requestHook
+
+	// dataPuts records the data map of every version 2 data write per
+	// path, in arrival order, refused check-and-set writes included --
+	// which is what lets a test prove the retried write carried the same
+	// generated material as the refused one. Guarded by f.mu.
+	dataPuts map[string][]map[string]string
 
 	// t is the test that built this fakeVault, captured so holdRequests can
 	// register a Cleanup that force-releases a gate nobody ever tripped.
@@ -147,6 +164,57 @@ func (g *requestGate) park() {
 	<-g.release
 }
 
+// requestHook is one registration made by afterRequest: fn to run once the
+// nth request matching pattern has been served.
+type requestHook struct {
+	pattern *regexp.Regexp
+	n       int // fires when seen reaches n; n <= 0 fires on every match
+	seen    int
+	fn      func()
+}
+
+// afterRequest registers fn to run after the nth request whose logged
+// "METHOD /path[?query]" line matches pattern has been served (n counts
+// from 1; n <= 0 runs fn after every match). fn runs on the server
+// goroutine once the handler has written its response but before that
+// response reaches the client, so a state change fn makes is visible to
+// the client's next request and to nothing earlier -- which lets a test
+// play a concurrent writer at an exact point in a command's request
+// sequence, deterministically.
+func (f *cliFakeVault) afterRequest(pattern string, n int, fn func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.hooks = append(f.hooks, &requestHook{pattern: regexp.MustCompile(pattern), n: n, fn: fn})
+}
+
+// runAfterHooks fires every hook due for line. The fns run with f.mu
+// released, so they are free to use the fake's own locking helpers.
+func (f *cliFakeVault) runAfterHooks(line string) {
+	f.mu.Lock()
+	var fire []func()
+	for _, h := range f.hooks {
+		if !h.pattern.MatchString(line) {
+			continue
+		}
+		h.seen++
+		if h.n <= 0 || h.seen == h.n {
+			fire = append(fire, h.fn)
+		}
+	}
+	f.mu.Unlock()
+	for _, fn := range fire {
+		fn()
+	}
+}
+
+// putDataBodies returns the data maps of every version 2 data write made
+// to path, oldest first, refused check-and-set writes included.
+func (f *cliFakeVault) putDataBodies(path string) []map[string]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]map[string]string(nil), f.dataPuts[path]...)
+}
+
 // denyGet makes a read of path answer 403, simulating a token without read
 // capability on it. A secret that is absent and a secret that cannot be
 // looked at are different answers, and commands that treat "not there" as
@@ -158,6 +226,28 @@ func (f *cliFakeVault) denyGet(path string) {
 		f.forbidGet = map[string]bool{}
 	}
 	f.forbidGet[path] = true
+}
+
+// denyPut makes a write of path answer 403, so one write of a parallel
+// batch can fail while the writes beside it land.
+func (f *cliFakeVault) denyPut(path string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.forbidPut == nil {
+		f.forbidPut = map[string]bool{}
+	}
+	f.forbidPut[path] = true
+}
+
+// denyDelete makes a DELETE of path answer 403, so one path of a recursive
+// delete can fail for a reason other than the secret not being there.
+func (f *cliFakeVault) denyDelete(path string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.forbidDelete == nil {
+		f.forbidDelete = map[string]bool{}
+	}
+	f.forbidDelete[path] = true
 }
 
 // fakeVersion is one version of a version 2 secret. A version is alive until
@@ -213,6 +303,10 @@ func (f *cliFakeVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		gate.park()
 	}
 
+	// Registered before dispatch so it runs after the handler has finished
+	// and released f.mu, whichever branch below served the request.
+	defer f.runAfterHooks(r.Method + " " + r.URL.RequestURI())
+
 	w.Header().Set("Content-Type", "application/json")
 	if strings.HasPrefix(r.URL.Path, "/v1/sys/internal/ui/mounts") {
 		//The client looks for the mount under data.secret; anything else
@@ -248,6 +342,11 @@ func (f *cliFakeVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"keys": keys}})
 
 	case r.Method == http.MethodPut || r.Method == http.MethodPost:
+		if f.forbidPut[path] {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = fmt.Fprintf(w, `{"errors":["permission denied: %s"]}`, path)
+			return
+		}
 		var body map[string]string
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -258,13 +357,21 @@ func (f *cliFakeVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 
 	case r.Method == http.MethodDelete:
+		if f.forbidDelete[path] {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = fmt.Fprintf(w, `{"errors":["permission denied: %s"]}`, path)
+			return
+		}
 		delete(f.data, path)
 		w.WriteHeader(http.StatusNoContent)
 
 	default:
 		if f.forbidGet[path] {
+			// The denied path rides in the body so a test collecting
+			// several failures can tell them apart: vaultkv folds the
+			// body's errors array into ErrForbidden's message.
 			w.WriteHeader(http.StatusForbidden)
-			_, _ = w.Write([]byte(`{"errors":["permission denied"]}`))
+			_, _ = fmt.Fprintf(w, `{"errors":["permission denied: %s"]}`, path)
 			return
 		}
 		kv, ok := f.data[path]

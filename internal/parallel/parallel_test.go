@@ -1,6 +1,7 @@
 package parallel
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -12,7 +13,7 @@ func TestEachLimitVisitsEveryItem(t *testing.T) {
 	items := []int{10, 20, 30, 40, 50}
 	var mu sync.Mutex
 	got := map[int]int{}
-	err := EachLimit(items, 3, func(i, item int) error {
+	err := EachLimit(context.Background(), items, 3, func(_ context.Context, i, item int) error {
 		mu.Lock()
 		got[i] = item
 		mu.Unlock()
@@ -30,7 +31,7 @@ func TestEachLimitVisitsEveryItem(t *testing.T) {
 
 func TestEachLimitBoundsConcurrency(t *testing.T) {
 	var inFlight, peak atomic.Int64
-	err := EachLimit(make([]struct{}, 32), 4, func(int, struct{}) error {
+	err := EachLimit(context.Background(), make([]struct{}, 32), 4, func(context.Context, int, struct{}) error {
 		n := inFlight.Add(1)
 		defer inFlight.Add(-1)
 		for {
@@ -57,7 +58,7 @@ func TestEachLimitActuallyRunsConcurrently(t *testing.T) {
 	wg.Add(4)
 	done := make(chan error, 1)
 	go func() {
-		done <- EachLimit(make([]struct{}, 4), 4, func(int, struct{}) error {
+		done <- EachLimit(context.Background(), make([]struct{}, 4), 4, func(context.Context, int, struct{}) error {
 			wg.Done()
 			wg.Wait()
 			return nil
@@ -77,7 +78,7 @@ func TestEachLimitActuallyRunsConcurrently(t *testing.T) {
 func TestEachLimitFailsFast(t *testing.T) {
 	boom := errors.New("boom")
 	var attempted atomic.Int64
-	err := EachLimit(make([]struct{}, 100), 1, func(i int, _ struct{}) error {
+	err := EachLimit(context.Background(), make([]struct{}, 100), 1, func(_ context.Context, i int, _ struct{}) error {
 		attempted.Add(1)
 		if i == 2 {
 			return boom

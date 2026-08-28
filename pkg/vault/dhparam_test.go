@@ -4,6 +4,7 @@
 package vault
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -19,7 +20,7 @@ func TestGenDHParamInvalidBitsReturnsError(t *testing.T) {
 		bits := bits
 		t.Run("", func(t *testing.T) {
 			t.Parallel()
-			_, err := genDHParam(bits)
+			_, err := genDHParam(context.Background(), bits)
 			if err == nil {
 				t.Errorf("genDHParam(%d): expected error, got nil", bits)
 			}
@@ -32,7 +33,7 @@ func TestGenDHParamInvalidBitsReturnsError(t *testing.T) {
 func TestGenDHParamErrorMessageContainsBits(t *testing.T) {
 	t.Parallel()
 
-	_, err := genDHParam(512)
+	_, err := genDHParam(context.Background(), 512)
 	if err == nil {
 		t.Fatal("expected error for bits=512, got nil")
 	}

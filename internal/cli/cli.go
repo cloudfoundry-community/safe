@@ -369,7 +369,9 @@ type Options struct {
 	DHParam struct{} `cli:"dhparam, dhparams, dh"`
 	Prompt  struct{} `cli:"prompt"`
 	Vault   struct{} `cli:"vault!"`
-	Fmt     struct{} `cli:"fmt"`
+	Fmt     struct {
+		Cost int `cli:"--cost"`
+	} `cli:"fmt"`
 
 	Curl struct {
 		DataOnly bool `cli:"--data-only"`
@@ -1201,7 +1203,7 @@ secret/vault/seal/keys, as key1, key2, ... keyN.
 
 	r.Dispatch("fmt", &Help{
 		Summary: "Reformat an existing name/value pair, into a new name",
-		Usage:   "safe fmt FORMAT PATH OLD-NAME NEW-NAME",
+		Usage:   "safe fmt [OPTIONS] FORMAT PATH OLD-NAME NEW-NAME",
 		Type:    DestructiveCommand,
 		Description: `
 Take the value stored at PATH/OLD-NAME, format it a different way, and
@@ -1216,6 +1218,13 @@ Supported formats:
     crypt-md5       Salt and hash the value, using MD5, in crypt format (legacy).
     crypt-sha256    Salt and hash the value, using SHA-256, in crypt format.
     crypt-sha512    Salt and hash the value, using SHA-512, in crypt format.
+
+The following OPTIONS are recognized:
+
+  --cost N          Work factor for the bcrypt format.  Defaults to 12; the
+                    minimum is 10, the bcrypt library's own default.  Hashing
+                    time grows ~4x for every +2, so choose with care: cost 14
+                    takes ~4x as long as the default, cost 16 ~16x.
 
 `,
 	}, c.cmdFmt)
@@ -1375,10 +1384,18 @@ The following options are recognized:
 
 	r.Dispatch("x509 issue", &Help{
 		Summary: "Issue X.509 Certificates and Certificate Authorities",
-		Usage:   "safe x509 issue [OPTIONS] --name cn.example.com path/to/certificate",
+		Usage:   "safe x509 issue [OPTIONS] --name cn.example.com path/to/certificate [more/paths ...]",
 		Type:    DestructiveCommand,
 		Description: `
-Issue a new X.509 Certificate
+Issue one or more new X.509 Certificates
+
+Each path given receives its own certificate with its own freshly
+generated key.  All of them carry the same --name SAN set, and when
+--subject is not given each certificate's subject defaults to a CN of
+its path's basename (a single path keeps the older default of the
+first --name).  With --signed-by, the signing CA is read and written
+once for the whole batch: its serial counter advances once past every
+certificate issued and its revocation list is re-signed once.
 
 The following options are recognized:
 
@@ -1388,16 +1405,19 @@ The following options are recognized:
   -s, --subject       The subject name for this certificate.
                       i.e. /cn=www.example.com/c=us/st=ny...
                       If not specified, the first '--name'
-                      will be used as a lone CN=...
+                      will be used as a lone CN=... for a single
+                      path, and each path's basename for several.
+                      Specifying it with several paths stamps the
+                      same subject on every certificate, and warns.
 
   -i, --signed-by     Path in the Vault where the CA certificate
                       (and signing key) can be found.
                       Without this option, 'x509 issue' creates
                       self-signed certificates.
                       The path must hold a certificate authority,
-                      and cannot be the path the new certificate
+                      and cannot be any path a new certificate
                       is written to: issuing writes the signing CA
-                      back, then writes the new certificate over
+                      back, then writes each new certificate over
                       whatever was there.
 
   -n, --name          Subject Alternate Name(s) for this
@@ -1409,6 +1429,9 @@ The following options are recognized:
 
       --type          The key algorithm: 'rsa' (default), 'ec'
                       (ECDSA), or 'ed25519'.
+                      An RSA-4096 key costs seconds of CPU to
+                      generate; --type ec and --type ed25519 are
+                      the fast options, arriving in microseconds.
 
   -b, --bits N        RSA key strength, in bits.  The only valid
                       arguments are 1024 (highly discouraged),
@@ -1475,6 +1498,12 @@ The following options are recognized:
       --type          The key algorithm: 'rsa', 'ec' (ECDSA), or
                       'ed25519'.  Defaults to the existing
                       certificate's key algorithm.
+                      Reissue preserves the existing key's type and
+                      parameters unless --type/--bits/--curve
+                      override them, so an RSA-4096 certificate
+                      pays seconds of key generation on every
+                      reissue; --type ec and --type ed25519 are
+                      the fast options, arriving in microseconds.
 
   -b, --bits  N       RSA key strength, in bits.  The only valid
                       arguments are 1024 (highly discouraged),
@@ -1676,6 +1705,14 @@ func Main(version, buildTime, gitCommit string) {
 
 	opt.Init.Persist = true
 	opt.Rekey.Persist = true
+
+	//go-cli only overwrites this from a literal --cost on the command
+	// line, so pre-seeding it with the real default (rather than leaving
+	// it at the int zero value) is what makes an explicit --cost 0
+	// distinguishable from the flag never being given: 0 fails the
+	// minimum check below either way, but the unset case now reads 12
+	// rather than a value nobody asked for.
+	opt.Fmt.Cost = vault.DefaultBcryptCost
 
 	go Signals()
 

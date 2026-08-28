@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -81,6 +82,12 @@ func (s *Secret) Empty() bool {
 }
 
 func (s *Secret) Format(oldKey, newKey, fmtType string, skipIfExists bool) error {
+	return s.FormatWithCost(oldKey, newKey, fmtType, DefaultBcryptCost, skipIfExists)
+}
+
+// FormatWithCost is Format with a caller-chosen bcrypt work factor. cost is
+// only consulted by the bcrypt format and may not be below MinBcryptCost.
+func (s *Secret) FormatWithCost(oldKey, newKey, fmtType string, cost int, skipIfExists bool) error {
 	if !s.Has(oldKey) {
 		return NewSecretNotFoundError(oldKey)
 	}
@@ -117,7 +124,7 @@ func (s *Secret) Format(oldKey, newKey, fmtType string, skipIfExists bool) error
 		}
 
 	case "bcrypt":
-		newVal, err := cryptBcrypt(oldVal)
+		newVal, err := cryptBcrypt(oldVal, cost)
 		if err != nil {
 			return err
 		}
@@ -139,7 +146,16 @@ func (s *Secret) Format(oldKey, newKey, fmtType string, skipIfExists bool) error
 }
 
 func (s *Secret) DHParam(length int, skipIfExists bool) error {
-	dhparam, err := dhparamGen(length)
+	return s.DHParamContext(context.Background(), length, skipIfExists)
+}
+
+// DHParamContext is DHParam under a caller-supplied context: cancelling it
+// kills the in-flight openssl child, which is how a parallel dhparam
+// fan-out stops paying for the other paths once one of them has failed.
+// The Vault write that usually follows is not covered -- vaultkv requests
+// carry no context, so only its client timeout bounds them.
+func (s *Secret) DHParamContext(ctx context.Context, length int, skipIfExists bool) error {
+	dhparam, err := dhparamGen(ctx, length)
 	if err != nil {
 		return err
 	}
@@ -202,9 +218,26 @@ func cryptSHA512(pass string) (string, error) {
 	return sha, err
 }
 
-func cryptBcrypt(pass string) (string, error) {
-	// for now, use a fixed worker cost of 12
-	hashed, err := bcrypt.GenerateFromPassword([]byte(pass), 12)
+// Bcrypt work factors: DefaultBcryptCost is what Format uses; MinBcryptCost
+// is the floor callers may not go below — it is the bcrypt library's own
+// default, and a lower cost would weaken the hash past what the library
+// itself would pick. MaxBcryptCost is the ceiling the library itself
+// enforces; a caller who goes above it pays for a Vault read before
+// bcrypt ever gets the chance to say so.
+const (
+	DefaultBcryptCost = 12
+	MinBcryptCost     = bcrypt.DefaultCost
+	MaxBcryptCost     = bcrypt.MaxCost
+)
+
+func cryptBcrypt(pass string, cost int) (string, error) {
+	if cost < MinBcryptCost {
+		return "", fmt.Errorf("bcrypt cost %d is below the minimum of %d", cost, MinBcryptCost)
+	}
+	if cost > MaxBcryptCost {
+		return "", fmt.Errorf("bcrypt cost %d is above the maximum of %d", cost, MaxBcryptCost)
+	}
+	hashed, err := bcrypt.GenerateFromPassword([]byte(pass), cost)
 	if err != nil {
 		return "", err
 	}
@@ -242,7 +275,7 @@ func (s *Secret) RSAKey(bits int, skipIfExists bool) error {
 // SSHKey generates a new public/private keypair, and stores
 // it in the secret, under the 'public' and 'private' keys.
 func (s *Secret) SSHKey(bits int, skipIfExists bool) error {
-	private, public, fingerprint, err := sshkey(bits)
+	private, public, fingerprint, err := sshkeyGen(bits)
 	if err != nil {
 		return err
 	}

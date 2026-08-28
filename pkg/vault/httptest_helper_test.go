@@ -117,6 +117,10 @@ type fakeVault struct {
 	// parked request can never deadlock the fake against itself.
 	gate *requestGate
 
+	// hooks holds the concurrent-writer hooks installed by afterRequest,
+	// each fired after a matching request has been served. Guarded by f.mu.
+	hooks []*requestHook
+
 	// t is the test that built this fakeVault, captured so holdRequests can
 	// register a Cleanup that force-releases a gate nobody ever tripped.
 	// Set once by newTestVault; never written again, so reading it from
@@ -218,6 +222,49 @@ func (g *requestGate) park() {
 	g.mu.Unlock()
 
 	<-g.release
+}
+
+// requestHook is one registration made by afterRequest: fn to run once the
+// nth request matching pattern has been served.
+type requestHook struct {
+	pattern *regexp.Regexp
+	n       int // fires when seen reaches n; n <= 0 fires on every match
+	seen    int
+	fn      func()
+}
+
+// afterRequest registers fn to run after the nth request whose logged
+// "METHOD /path[?query]" line matches pattern has been served (n counts
+// from 1; n <= 0 runs fn after every match). fn runs on the server
+// goroutine once the handler has written its response but before that
+// response reaches the client, so a state change fn makes is visible to
+// the client's next request and to nothing earlier -- which lets a test
+// play a concurrent writer at an exact point in a command's request
+// sequence, deterministically.
+func (f *fakeVault) afterRequest(pattern string, n int, fn func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.hooks = append(f.hooks, &requestHook{pattern: regexp.MustCompile(pattern), n: n, fn: fn})
+}
+
+// runAfterHooks fires every hook due for line. The fns run with f.mu
+// released, so they are free to use the fake's own locking helpers.
+func (f *fakeVault) runAfterHooks(line string) {
+	f.mu.Lock()
+	var fire []func()
+	for _, h := range f.hooks {
+		if !h.pattern.MatchString(line) {
+			continue
+		}
+		h.seen++
+		if h.n <= 0 || h.seen == h.n {
+			fire = append(fire, h.fn)
+		}
+	}
+	f.mu.Unlock()
+	for _, fn := range fire {
+		fn()
+	}
 }
 
 func newFakeVault() *fakeVault {
@@ -410,6 +457,10 @@ func (f *fakeVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if gate != nil && gate.pattern.MatchString(line) {
 		gate.park()
 	}
+
+	// Registered before dispatch so it runs after the handler has finished
+	// and released f.mu, whichever branch below served the request.
+	defer f.runAfterHooks(line)
 
 	switch {
 	case p == "/v1/sys/internal/ui/mounts" && r.Method == http.MethodGet:

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"os"
 	"runtime"
@@ -121,65 +122,62 @@ func (c *CLI) cmdGen(command string, args ...string) error {
 
 	v := connect(true)
 
-	// Targets are grouped by their canonical secret path -- not the raw
-	// argument, which readGenTargets only canonicalizes on the path:key
-	// branch -- so secret//x:a and secret/x b, say, land in the same group
-	// rather than racing each other's read-modify-write on the same secret.
-	// Distinct paths generate concurrently; multiple keys on the same path
-	// stay sequential within their group, one read-modify-write at a time,
-	// same as before parallelism was added.
-	type genGroup struct {
-		targets []genTarget
-		notices []string
+	// Grouping runs on target.path rather than the raw argument, which
+	// readGenTargets only canonicalizes on the path:key branch; distinct
+	// paths generate concurrently, multiple keys on the same path stay
+	// sequential within their group, same as before parallelism was added.
+	order, groups := groupByCanonicalPath(targets, func(t genTarget) string { return t.path })
+	// Each group runs as one unit -- a single read serves every key on its
+	// path, so runPathGroups sees one target per group: the whole key list.
+	// N keys then cost N+1 requests instead of 2N, one write per key so the
+	// version history still gains one version per generated key.
+	wholeGroups := make(map[string][][]genTarget, len(groups))
+	for p, ts := range groups {
+		wholeGroups[p] = [][]genTarget{ts}
 	}
-	groups := map[string]*genGroup{}
-	var order []string
-	for _, target := range targets {
-		p, _, _ := vault.ParsePath(target.path)
-		g, seen := groups[p]
-		if !seen {
-			g = &genGroup{}
-			groups[p] = g
-			order = append(order, p)
+	// The group context goes unused: reads and writes are contextless
+	// vaultkv requests, and password generation is microseconds. The work
+	// is round trips, not compute, so the fan-out is IO-sized.
+	return runPathGroups(order, wholeGroups, parallel.IOLimit(), func(_ context.Context, group []genTarget, notice func(format string, args ...any)) error {
+		// UpdateSteps reads the path once and applies the keys
+		// cumulatively, one check-and-set write per key: --no-clobber
+		// checks run against the accumulated state, a skipped key's
+		// existing value rides along in the writes that follow, and a
+		// conflict with a concurrent process re-reads and re-applies only
+		// the keys that have not persisted -- the concurrent write
+		// survives instead of being overwritten. A failure at key k
+		// leaves keys 1..k-1 persisted, the same partial state the
+		// per-key read-modify-write left.
+		//
+		// skipped is per-step so a retry pass overwrites each step's
+		// last decision in place: a skip notice from before a conflict is
+		// neither erased nor duplicated by the pass that follows it, and
+		// a key persisted before the conflict never runs again to
+		// masquerade as a refusal. Notices queue only after the whole
+		// chain settles, matching the last pass's decisions.
+		skipped := make([]bool, len(group))
+		err := v.UpdateSteps(group[0].path, len(group), func(i int, s *vault.Secret, _ bool) (bool, error) {
+			target := group[i]
+			if opt.SkipIfExists && s.Has(target.key) {
+				skipped[i] = true
+				return false, nil
+			}
+			skipped[i] = false
+			if err := s.Password(target.key, length, opt.Gen.Policy, opt.SkipIfExists); err != nil {
+				return false, err
+			}
+			return true, nil
+		})
+		// The notices queue even when the chain failed partway: a skip
+		// that was decided before the failure is a fact about what was
+		// (not) written, exactly as it was when the loop ran inline.
+		for i, target := range group {
+			if skipped[i] && !opt.Quiet {
+				notice("@R{Cowardly refusing to update} @C{%s:%s} @R{as it is already present in Vault}\n", target.path, target.key)
+			}
 		}
-		g.targets = append(g.targets, target)
-	}
-
-	genErr := parallel.EachLimit(order, max(runtime.NumCPU(), 4), func(_ int, p string) error {
-		g := groups[p]
-		for _, target := range g.targets {
-			path, key := target.path, target.key
-			s, err := v.Read(path)
-			if err != nil && !vault.IsNotFound(err) {
-				return err
-			}
-			exists := (err == nil)
-			if opt.SkipIfExists && exists && s.Has(key) {
-				if !opt.Quiet {
-					g.notices = append(g.notices, renderNotice("@R{Cowardly refusing to update} @C{%s:%s} @R{as it is already present in Vault}\n", path, key))
-				}
-				continue
-			}
-			err = s.Password(key, length, opt.Gen.Policy, opt.SkipIfExists)
-			if err != nil {
-				return err
-			}
-
-			if err = v.Write(path, s); err != nil {
-				return err
-			}
-		}
-		return nil
+		return err
 	})
-
-	// Notices print after every group finishes, in the order their paths
-	// first appeared on the command line -- not completion order.
-	for _, p := range order {
-		for _, n := range groups[p].notices {
-			_, _ = os.Stderr.WriteString(n)
-		}
-	}
-	return genErr
 }
 
 func (c *CLI) cmdUuid(command string, args ...string) error {
@@ -220,24 +218,27 @@ func (c *CLI) cmdUuid(command string, args ...string) error {
 		}
 
 	}
-	s, err := v.Read(path)
-	if err != nil && !vault.IsNotFound(err) {
-		return err
-	}
-	exists := (err == nil)
-	if opt.SkipIfExists && exists && s.Has(key) {
-		if !opt.Quiet {
-			_, _ = fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to update} @C{%s:%s} @R{as it is already present in Vault}\n", path, key)
+	// The uuid was drawn above, before the read-modify-write: a
+	// check-and-set retry re-installs the same one against fresh state,
+	// and the skip check re-decides against that state -- a concurrent
+	// write of the key turns the retry into a refusal.
+	var skipped bool
+	_, err := v.Update(path, func(s *vault.Secret, exists bool) (*vault.Secret, bool, error) {
+		skipped = false
+		if opt.SkipIfExists && exists && s.Has(key) {
+			skipped = true
+			return nil, false, nil
 		}
-		return nil
-	}
-	err = s.Set(key, stringuuid, opt.SkipIfExists)
+		if err := s.Set(key, stringuuid, opt.SkipIfExists); err != nil {
+			return nil, false, err
+		}
+		return nil, true, nil
+	})
 	if err != nil {
 		return err
 	}
-
-	if err = v.Write(path, s); err != nil {
-		return err
+	if skipped && !opt.Quiet {
+		_, _ = fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to update} @C{%s:%s} @R{as it is already present in Vault}\n", path, key)
 	}
 
 	return nil
@@ -274,53 +275,48 @@ func (c *CLI) cmdSsh(command string, args ...string) error {
 	// grouping runs directly over the raw arguments; the canonical path
 	// from ParsePath is still what decides the group, so secret//x and
 	// secret/x land together.
-	type sshGroup struct {
-		paths   []string
-		notices []string
-	}
-	groups := map[string]*sshGroup{}
-	var order []string
-	for _, path := range args {
-		p, _, _ := vault.ParsePath(path)
-		g, seen := groups[p]
-		if !seen {
-			g = &sshGroup{}
-			groups[p] = g
-			order = append(order, p)
-		}
-		g.paths = append(g.paths, path)
-	}
-
-	sshErr := parallel.EachLimit(order, max(runtime.NumCPU(), 4), func(_ int, p string) error {
-		g := groups[p]
-		for _, path := range g.paths {
-			s, err := v.Read(path)
-			if err != nil && !vault.IsNotFound(err) {
-				return err
-			}
-			exists := (err == nil)
+	// The group context goes unused: SSHKey's rsa.GenerateKey cannot be
+	// interrupted mid-search, so a sibling failure only stops paths that
+	// have not started yet.
+	order, groups := groupByCanonicalPath(args, func(path string) string { return path })
+	return runPathGroups(order, groups, parallel.CPULimit(), func(_ context.Context, path string, notice func(format string, args ...any)) error {
+		// The keypair is generated at most once, on the first attempt
+		// that gets past the skip check; a check-and-set conflict retry
+		// re-installs the same material against fresh state rather than
+		// paying rsa.GenerateKey again. If the conflict reveals a
+		// concurrent keypair at this path, the skip check re-decides and
+		// the one generated keypair is discarded -- one wasted draw,
+		// never five.
+		var material *vault.Secret
+		var skipped bool
+		_, err := v.Update(path, func(s *vault.Secret, exists bool) (*vault.Secret, bool, error) {
+			skipped = false
 			if opt.SkipIfExists && exists && (s.Has("private") || s.Has("public") || s.Has("fingerprint")) {
-				if !opt.Quiet {
-					g.notices = append(g.notices, renderNotice("@R{Cowardly refusing to generate an SSH key at} @C{%s} @R{as it is already present in Vault}\n", path))
+				skipped = true
+				return nil, false, nil
+			}
+			if material == nil {
+				scratch := vault.NewSecret()
+				if err := scratch.SSHKey(bits, false); err != nil {
+					return nil, false, err
 				}
-				continue
+				material = scratch
 			}
-			if err = s.SSHKey(bits, opt.SkipIfExists); err != nil {
-				return err
+			for _, k := range material.Keys() {
+				if err := s.Set(k, material.Get(k), opt.SkipIfExists); err != nil {
+					return nil, false, err
+				}
 			}
-			if err = v.Write(path, s); err != nil {
-				return err
-			}
+			return nil, true, nil
+		})
+		if err != nil {
+			return err
+		}
+		if skipped && !opt.Quiet {
+			notice("@R{Cowardly refusing to generate an SSH key at} @C{%s} @R{as it is already present in Vault}\n", path)
 		}
 		return nil
 	})
-
-	for _, p := range order {
-		for _, n := range groups[p].notices {
-			_, _ = os.Stderr.WriteString(n)
-		}
-	}
-	return sshErr
 }
 
 func (c *CLI) cmdRsa(command string, args ...string) error {
@@ -351,54 +347,44 @@ func (c *CLI) cmdRsa(command string, args ...string) error {
 	v := connect(true)
 
 	// Same shape as cmdSsh: no target struct, so grouping runs over the raw
-	// arguments, keyed by ParsePath's canonical secret path.
-	type rsaGroup struct {
-		paths   []string
-		notices []string
-	}
-	groups := map[string]*rsaGroup{}
-	var order []string
-	for _, path := range args {
-		p, _, _ := vault.ParsePath(path)
-		g, seen := groups[p]
-		if !seen {
-			g = &rsaGroup{}
-			groups[p] = g
-			order = append(order, p)
-		}
-		g.paths = append(g.paths, path)
-	}
-
-	rsaErr := parallel.EachLimit(order, max(runtime.NumCPU(), 4), func(_ int, p string) error {
-		g := groups[p]
-		for _, path := range g.paths {
-			s, err := v.Read(path)
-			if err != nil && !vault.IsNotFound(err) {
-				return err
-			}
-			exists := (err == nil)
+	// arguments, keyed by ParsePath's canonical secret path. The group
+	// context goes unused for the same reason -- rsa.GenerateKey cannot be
+	// interrupted mid-search.
+	order, groups := groupByCanonicalPath(args, func(path string) string { return path })
+	return runPathGroups(order, groups, parallel.CPULimit(), func(_ context.Context, path string, notice func(format string, args ...any)) error {
+		// Same lazy-once shape as cmdSsh: one keypair per path however
+		// many check-and-set retries it takes, with the skip check
+		// re-deciding against each retry's fresh state.
+		var material *vault.Secret
+		var skipped bool
+		_, err := v.Update(path, func(s *vault.Secret, exists bool) (*vault.Secret, bool, error) {
+			skipped = false
 			if opt.SkipIfExists && exists && (s.Has("private") || s.Has("public")) {
-				if !opt.Quiet {
-					g.notices = append(g.notices, renderNotice("@R{Cowardly refusing to generate an RSA key at} @C{%s} @R{as it is already present in Vault}\n", path))
+				skipped = true
+				return nil, false, nil
+			}
+			if material == nil {
+				scratch := vault.NewSecret()
+				if err := scratch.RSAKey(bits, false); err != nil {
+					return nil, false, err
 				}
-				continue
+				material = scratch
 			}
-			if err = s.RSAKey(bits, opt.SkipIfExists); err != nil {
-				return err
+			for _, k := range material.Keys() {
+				if err := s.Set(k, material.Get(k), opt.SkipIfExists); err != nil {
+					return nil, false, err
+				}
 			}
-			if err = v.Write(path, s); err != nil {
-				return err
-			}
+			return nil, true, nil
+		})
+		if err != nil {
+			return err
+		}
+		if skipped && !opt.Quiet {
+			notice("@R{Cowardly refusing to generate an RSA key at} @C{%s} @R{as it is already present in Vault}\n", path)
 		}
 		return nil
 	})
-
-	for _, p := range order {
-		for _, n := range groups[p].notices {
-			_, _ = os.Stderr.WriteString(n)
-		}
-	}
-	return rsaErr
 }
 
 func (c *CLI) cmdDhparam(command string, args ...string) error {
@@ -445,51 +431,40 @@ func (c *CLI) cmdDhparam(command string, args ...string) error {
 // but a path named more than once stays sequential within its group, one
 // read-modify-write at a time, so a repeated argument never races itself.
 func dhparamPaths(v *vault.Vault, paths []string, bits int, skipIfExists bool, quiet bool) error {
-	type dhparamGroup struct {
-		paths   []string
-		notices []string
-	}
-	groups := map[string]*dhparamGroup{}
-	var order []string
-	for _, path := range paths {
-		p, _, _ := vault.ParsePath(path)
-		g, seen := groups[p]
-		if !seen {
-			g = &dhparamGroup{}
-			groups[p] = g
-			order = append(order, p)
-		}
-		g.paths = append(g.paths, path)
-	}
-
-	dhErr := parallel.EachLimit(order, max(runtime.NumCPU()/2, 2), func(_ int, p string) error {
-		g := groups[p]
-		for _, path := range g.paths {
-			s, err := v.Read(path)
-			if err != nil && !vault.IsNotFound(err) {
-				return err
-			}
-			exists := (err == nil)
+	order, groups := groupByCanonicalPath(paths, func(path string) string { return path })
+	return runPathGroups(order, groups, max(runtime.NumCPU()/2, 2), func(ctx context.Context, path string, notice func(format string, args ...any)) error {
+		// openssl runs at most once per path -- minutes at real sizes --
+		// on the first attempt that gets past the skip check; a
+		// check-and-set conflict retry re-installs the same parameter set
+		// against fresh state, and the skip check re-deciding there means
+		// a concurrently-written parameter set turns the retry into a
+		// refusal, discarding one generation rather than repeating it.
+		var material string
+		var skipped bool
+		_, err := v.Update(path, func(s *vault.Secret, exists bool) (*vault.Secret, bool, error) {
+			skipped = false
 			if skipIfExists && exists && s.Has("dhparam-pem") {
-				if !quiet {
-					g.notices = append(g.notices, renderNotice("@R{Cowardly refusing to generate a Diffie-Hellman key exchange parameter set at} @C{%s} @R{as it is already present in Vault}\n", path))
+				skipped = true
+				return nil, false, nil
+			}
+			if material == "" {
+				scratch := vault.NewSecret()
+				if err := scratch.DHParamContext(ctx, bits, false); err != nil {
+					return nil, false, err
 				}
-				continue
+				material = scratch.Get("dhparam-pem")
 			}
-			if err = s.DHParam(bits, skipIfExists); err != nil {
-				return err
+			if err := s.Set("dhparam-pem", material, skipIfExists); err != nil {
+				return nil, false, err
 			}
-			if err = v.Write(path, s); err != nil {
-				return err
-			}
+			return nil, true, nil
+		})
+		if err != nil {
+			return err
+		}
+		if skipped && !quiet {
+			notice("@R{Cowardly refusing to generate a Diffie-Hellman key exchange parameter set at} @C{%s} @R{as it is already present in Vault}\n", path)
 		}
 		return nil
 	})
-
-	for _, p := range order {
-		for _, n := range groups[p].notices {
-			_, _ = os.Stderr.WriteString(n)
-		}
-	}
-	return dhErr
 }

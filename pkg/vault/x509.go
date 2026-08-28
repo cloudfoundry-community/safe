@@ -2,6 +2,7 @@ package vault
 
 import (
 	"bytes"
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -17,9 +18,10 @@ import (
 	"net"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/cloudfoundry-community/safe/internal/parallel"
 )
 
 type X509 struct {
@@ -156,8 +158,19 @@ func ResolveKeySpec(keyType string, bits int, curve string, existing crypto.Sign
 	return KeySpec{}, fmt.Errorf("unrecognized key type %q; use rsa, ec, or ed25519", keyType)
 }
 
+// generateKeyFn is generateKey behind a package-level variable, so tests can
+// park key generation on a barrier and prove it overlaps the CA fetch in
+// GenerateKeyWhileFetching without paying for real RSA arithmetic -- see the
+// SetGenerateKeyForTest hook in export_test.go, which mirrors the
+// dhparamGen seam in dhparam.go.
+var generateKeyFn = generateKey
+
 // GenerateKey produces a new private key (as a crypto.Signer) per the spec.
 func GenerateKey(spec KeySpec) (crypto.Signer, error) {
+	return generateKeyFn(spec)
+}
+
+func generateKey(spec KeySpec) (crypto.Signer, error) {
 	switch spec.Algorithm {
 	case "rsa":
 		return rsa.GenerateKey(rand.Reader, spec.Bits)
@@ -168,6 +181,58 @@ func GenerateKey(spec KeySpec) (crypto.Signer, error) {
 		return priv, err
 	}
 	return nil, fmt.Errorf("unrecognized key algorithm %q", spec.Algorithm)
+}
+
+// GenerateKeyWhileFetching generates a private key per spec while fetch --
+// typically the read and parse of the signing CA -- runs on the calling
+// goroutine, and hands the key over once both are done. It is the n=1
+// shape of GenerateKeysWhileFetching and keeps its contract: a fetch
+// failure returns immediately without waiting the generation out.
+func GenerateKeyWhileFetching(spec KeySpec, fetch func() error) (crypto.Signer, error) {
+	keys, err := GenerateKeysWhileFetching(spec, 1, 1, fetch)
+	if err != nil {
+		return nil, err
+	}
+	return keys[0], nil
+}
+
+// GenerateKeysWhileFetching generates n private keys per spec, at most
+// limit at a time, while fetch -- typically the read and parse of the
+// signing CA -- runs on the calling goroutine, and hands the keys over
+// once both are done. Every key is its own full-quality draw from
+// crypto/rand; none is shared or discarded. A fetch failure returns
+// immediately without waiting the draws out; the abandoned draws run to
+// completion and deliver into a buffered channel nobody reads, so the
+// keys are collected by the garbage collector rather than a parked
+// goroutine leaking.
+func GenerateKeysWhileFetching(spec KeySpec, n, limit int, fetch func() error) ([]crypto.Signer, error) {
+	type generated struct {
+		keys []crypto.Signer
+		err  error
+	}
+	done := make(chan generated, 1)
+	go func() {
+		keys := make([]crypto.Signer, n)
+		err := parallel.EachLimit(context.Background(), keys, limit, func(_ context.Context, i int, _ crypto.Signer) error {
+			key, kerr := generateKeyFn(spec)
+			if kerr != nil {
+				return kerr
+			}
+			keys[i] = key
+			return nil
+		})
+		done <- generated{keys, err}
+	}()
+
+	if err := fetch(); err != nil {
+		return nil, err
+	}
+
+	gen := <-done
+	if gen.err != nil {
+		return nil, fmt.Errorf("key generation failed: %w", gen.err)
+	}
+	return gen.keys, nil
 }
 
 // algoForKey returns the x509 public key algorithm and a sane default
@@ -359,11 +424,14 @@ func (s Secret) X509(requireKey bool) (*X509, error) {
 
 	if s.Has("serial") {
 		v := s.Get("serial")
-		i, err := strconv.ParseInt(v, 16, 64)
-		if err != nil {
+		//The counter runs up to 2^159, so the stored hex has to come back
+		// through a big integer: a 64-bit parse refuses any counter that
+		// has passed 2^63, and the CA stops parsing mid-life.
+		serial, ok := new(big.Int).SetString(v, 16)
+		if !ok {
 			return nil, fmt.Errorf("not a valid CA certificate (serial '%s' is malformed)", v)
 		}
-		o.Serial = big.NewInt(i)
+		o.Serial = serial
 	}
 
 	if s.Has("crl") {
@@ -437,6 +505,8 @@ func (x *X509) IssuedBy(ca *X509) bool {
 	return bytes.Equal(ca.Certificate.RawSubject, x.Certificate.RawIssuer)
 }
 
+var subjectSeparator = regexp.MustCompile(" *= *")
+
 func ParseSubject(subj string) (pkix.Name, error) {
 	/* parse subject names that look like this:
 	    /cn=foo.bl/c=us/st=ny/l=buffalo/o=stark & wayne/ou=r&d
@@ -458,9 +528,8 @@ func ParseSubject(subj string) (pkix.Name, error) {
 		pairs = strings.Split(subj, ",")
 	}
 
-	kvre := regexp.MustCompile(" *= *")
 	for _, pair := range pairs {
-		kv := kvre.Split(pair, 2)
+		kv := subjectSeparator.Split(pair, 2)
 		if len(kv) != 2 {
 			return name, fmt.Errorf("malformed subject component '%s'", pair)
 		}
@@ -677,17 +746,30 @@ func TranslateSignatureAlgorithm(signatureAlgorithm string) (sigAlgo x509.Signat
 }
 
 func NewCertificate(subj string, names, keyUsage []string, signatureAlgorithm string, spec KeySpec) (*X509, error) {
+	//The subject parse stays ahead of the key draw, so a malformed subject
+	// is refused before seconds of RSA generation are spent on it.
+	if _, err := ParseSubject(subj); err != nil {
+		return nil, err
+	}
+
+	key, err := GenerateKey(spec)
+	if err != nil {
+		return nil, fmt.Errorf("key generation failed: %w", err)
+	}
+
+	return NewCertificateWithKey(subj, names, keyUsage, signatureAlgorithm, key)
+}
+
+// NewCertificateWithKey builds the certificate around a private key the
+// caller already holds -- one generated while the signing CA was being
+// fetched, rather than by NewCertificate above.
+func NewCertificateWithKey(subj string, names, keyUsage []string, signatureAlgorithm string, key crypto.Signer) (*X509, error) {
 	name, err := ParseSubject(subj)
 	if err != nil {
 		return nil, err
 	}
 
 	ips, domains, emails := CategorizeSANs(names)
-
-	key, err := GenerateKey(spec)
-	if err != nil {
-		return nil, fmt.Errorf("key generation failed: %w", err)
-	}
 
 	ku, eku, err := HandleJointKeyUsages(keyUsage)
 	if err != nil {
@@ -970,22 +1052,65 @@ func (ca *X509) SaveTo(v *Vault, path string, skipIfExists bool) error {
 
 var maxSerial = big.NewInt(0).Exp(big.NewInt(2), big.NewInt(159), nil)
 
+// nextSerial advances the CA's issuance counter one serial, wrapping at
+// maxSerial. A wrap that lands on zero advances once more: RFC 5280 does
+// not allow a zero serial, and a revocation entry could never name a
+// certificate carrying one. The counter must be non-nil; Sign and
+// ReserveSerials' callers route counterless authorities to random serials
+// instead.
+func (ca *X509) nextSerial() *big.Int {
+	ca.Serial.Add(ca.Serial, big.NewInt(1))
+	ca.Serial.Mod(ca.Serial, maxSerial)
+	if ca.Serial.Sign() == 0 {
+		ca.Serial.SetInt64(1)
+	}
+	//Take a copy rather than hand out the counter. Revoke records the
+	// number it is handed by reference, and a certificate holding the
+	// counter itself would see its serial move every time the CA issued
+	// anything else.
+	return new(big.Int).Set(ca.Serial)
+}
+
+// ReserveSerials draws n serials from the CA's counter, one increment at
+// a time, and leaves the counter on the last one drawn. Drawing ahead of
+// signing lets a batch persist the advanced counter once, before any
+// certificate carrying a reserved number is written: a crash after that
+// one write burns unused numbers, which is harmless, rather than leaving
+// certificates the counter does not account for. The numbers are handed
+// to SignWithSerial, one per certificate.
+func (ca *X509) ReserveSerials(n int) []*big.Int {
+	serials := make([]*big.Int, n)
+	for i := range serials {
+		serials[i] = ca.nextSerial()
+	}
+	return serials
+}
+
 func (ca *X509) Sign(x *X509, ttl time.Duration) error {
-	if ca.Serial == nil || ca == x {
-		serial, err := rand.Int(rand.Reader, maxSerial)
+	//A certificate signing itself, and an authority that keeps no counter,
+	// take a random serial rather than a counted one.
+	var serial *big.Int
+	if ca.Serial != nil && ca != x {
+		serial = ca.nextSerial()
+	}
+	return ca.SignWithSerial(x, ttl, serial)
+}
+
+// SignWithSerial signs x under ca with a serial the caller already drew
+// via ReserveSerials, leaving the counter alone -- the draw happened at
+// reservation. A nil serial draws a random one instead, which is how Sign
+// serves a self-signed certificate or a counterless authority.
+func (ca *X509) SignWithSerial(x *X509, ttl time.Duration, serial *big.Int) error {
+	if serial == nil {
+		random, err := rand.Int(rand.Reader, maxSerial)
 		if err != nil {
 			return err
 		}
-		x.Certificate.SerialNumber = serial
-	} else {
-		ca.Serial.Add(ca.Serial, big.NewInt(1))
-		ca.Serial.Mod(ca.Serial, maxSerial)
-		//Take a copy rather than share the CA's counter. Revoke records the
-		// number it is handed by reference, and a certificate holding the
-		// counter itself would see its serial move every time the CA issued
-		// anything else.
-		x.Certificate.SerialNumber = new(big.Int).Set(ca.Serial)
+		serial = random
 	}
+	//A copy, not the caller's number: the reservation slice stays the
+	// caller's to reuse, and the certificate's serial must not move with it.
+	x.Certificate.SerialNumber = new(big.Int).Set(serial)
 
 	x.Certificate.NotBefore = time.Now()
 	x.Certificate.NotAfter = time.Now().Add(ttl)

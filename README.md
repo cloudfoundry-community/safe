@@ -670,7 +670,7 @@ key`, and the two forms can be mixed.  The whole list is read
 before the first password is generated, so an argument that
 cannot be used stops the command with nothing written.
 
-### fmt format_type path oldKey newKey
+### fmt \[OPTIONS\] format_type path oldKey newKey
 
 Take the key at `path:oldKey`, reformat it according to **format_type**,
 and save it in `path:newKey`. Useful for hashing, or encoding passwords
@@ -688,6 +688,12 @@ Currently supported formats:
 safe fmt base64 secret/account password base64_password
 safe fmt crypt-sha512 secret/account password crypt_password
 ```
+
+`--cost N` sets the bcrypt work factor, and is only meaningful for the
+`bcrypt` format. It defaults to 12; the minimum is 10, the bcrypt
+library's own default, and the maximum is 31, the library's own ceiling.
+Hashing time grows about 4x for every +2, so choose with care: cost 14
+takes about 4x as long as the default, cost 16 about 16x.
 
 ### ssh \[nbits\] path \[path ...\]
 
@@ -728,16 +734,24 @@ Echo the arguments, space-separated, as a single line to the
 terminal.  This is a convenience helper for long pipelines of
 chained commands.
 
-### x509 issue \[OPTIONS\] --name cn.example.com path
+### x509 issue \[OPTIONS\] --name cn.example.com path \[more/paths ...\]
 
-Issues a new X.509 TLS/SSL certificate, and stores the new RSA
-private key and the certificate in the Vault at _path_, in PEM
-format.
+Issues one new X.509 TLS/SSL certificate per _path_ given, and
+stores each new private key and certificate in the Vault at its
+path, in PEM format.  Every certificate in a batch carries the same
+`--name` SAN set; without `--subject`, each subject defaults to a CN
+of its path's basename (a single path keeps the older default of the
+first `--name`).
+
+The default key type is RSA-4096, which costs seconds of CPU to
+generate; `--type ec` and `--type ed25519` are the fast options,
+arriving in microseconds.  A batch generates its keys concurrently.
 
 `--signed-by` has to name a certificate authority, and cannot name
-_path_ itself.  Issuing writes the signing CA back, to record the
-serial number it handed out, and then writes the new certificate
-over whatever _path_ held.
+any _path_ being written.  Issuing reads and writes the signing CA
+once for the whole batch, to record the serial numbers it handed
+out, and then writes each new certificate over whatever its path
+held.
 
 Where `path:certificate` holds the issuers above the certificate as
 well as the certificate itself, they stay with it: every command
@@ -748,6 +762,11 @@ that writes a certificate back keeps the whole chain.
 Reissues the certificate at _path_ with a freshly generated key,
 keeping its subject, its names, and the rest of its details unless
 options ask for something else.
+
+Reissue preserves the existing key's type and parameters unless
+`--type`, `--bits`, or `--curve` override them, so an RSA-4096
+certificate pays seconds of key generation on every reissue;
+`--type ec` and `--type ed25519` are the fast options.
 
 The signing authority comes from `--signed-by`, which has to name a
 certificate authority.  Naming one moves the certificate to it, so

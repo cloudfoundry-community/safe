@@ -12,6 +12,13 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+// sshkeyGen is sshkey behind a package-level variable, mirroring
+// dhparamGen: tests substitute a counting stub to prove a check-and-set
+// conflict retry re-installs the first attempt's keypair rather than
+// paying rsa.GenerateKey again -- see SetSSHKeyGenForTest in
+// export_test.go.
+var sshkeyGen = sshkey
+
 func sshkey(bits int) (string, string, string, error) {
 	key, err := rsa.GenerateKey(rand.Reader, bits)
 	if err != nil {

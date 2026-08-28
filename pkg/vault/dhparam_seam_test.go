@@ -7,6 +7,7 @@
 package vault_test
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -29,7 +30,7 @@ func TestDhparamGenSeamRunsConcurrently(t *testing.T) {
 	release := make(chan struct{})
 	var tripped bool
 
-	restore := vault.SetDhparamGenForTest(func(bits int) (string, error) {
+	restore := vault.SetDhparamGenForTest(func(_ context.Context, bits int) (string, error) {
 		mu.Lock()
 		arrived++
 		if arrived >= n && !tripped {
@@ -87,7 +88,7 @@ func TestDhparamGenSeamRunsConcurrently(t *testing.T) {
 // restore func actually puts the real generator back, so a stub installed
 // by one test cannot leak into another that runs after it.
 func TestDhparamGenSeamRestoresAfterCleanup(t *testing.T) {
-	restore := vault.SetDhparamGenForTest(func(bits int) (string, error) {
+	restore := vault.SetDhparamGenForTest(func(_ context.Context, bits int) (string, error) {
 		return "stubbed", nil
 	})
 

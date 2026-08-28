@@ -95,6 +95,56 @@ func TestSecretFormat_BcryptVerifiable(t *testing.T) {
 	}
 }
 
+func TestSecretFormat_BcryptDefaultCost(t *testing.T) {
+	t.Parallel()
+
+	s := buildFormatSecret(t, "hunter2")
+	if err := s.Format("src", "dst", "bcrypt", false); err != nil {
+		t.Fatalf("Format bcrypt: %v", err)
+	}
+
+	// The cost is embedded in the hash, so the default is pinned here: a
+	// change to it shows up as a different prefix.
+	hash := s.Get("dst")
+	if !strings.HasPrefix(hash, "$2a$12$") {
+		t.Errorf("bcrypt hash cost prefix = %q, want $2a$12$", hash)
+	}
+}
+
+func TestSecretFormat_BcryptChosenCost(t *testing.T) {
+	t.Parallel()
+
+	const password = "hunter2"
+	s := buildFormatSecret(t, password)
+	if err := s.FormatWithCost("src", "dst", "bcrypt", 10, false); err != nil {
+		t.Fatalf("FormatWithCost bcrypt cost 10: %v", err)
+	}
+
+	hash := s.Get("dst")
+	if !strings.HasPrefix(hash, "$2a$10$") {
+		t.Errorf("bcrypt hash cost prefix = %q, want $2a$10$", hash)
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)); err != nil {
+		t.Errorf("bcrypt.CompareHashAndPassword failed: %v (hash=%q)", err, hash)
+	}
+}
+
+func TestSecretFormat_BcryptCostBelowMinimumError(t *testing.T) {
+	t.Parallel()
+
+	s := buildFormatSecret(t, "hunter2")
+	err := s.FormatWithCost("src", "dst", "bcrypt", 9, false)
+	if err == nil {
+		t.Fatal("FormatWithCost bcrypt cost 9: expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "10") {
+		t.Errorf("error %q does not name the minimum cost of 10", err)
+	}
+	if s.Has("dst") {
+		t.Errorf("dst was written despite the cost error: %q", s.Get("dst"))
+	}
+}
+
 func TestSecretFormat_BcryptSkipIfExists(t *testing.T) {
 	t.Parallel()
 

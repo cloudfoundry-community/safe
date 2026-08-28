@@ -1,13 +1,13 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"reflect"
 	"regexp"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -53,44 +53,65 @@ func (c *CLI) writeHelper(prompt bool, insecure bool, command string, args ...st
 		return err
 	}
 	v := connect(true)
-	s, err := v.Read(path)
-	if err != nil && !vault.IsNotFound(err) {
-		return err
+
+	// Arguments are parsed and the operator prompted at most once each,
+	// however many check-and-set attempts the write takes: parsing echoes
+	// to stderr and may consume stdin or read files, and a prompt answered
+	// twice for one command would read as a confirmation loop. A retry
+	// re-applies the already-collected values against fresh state, with
+	// the clobber check re-deciding there -- so a key some concurrent
+	// process wrote in between turns the retry into the refusal it would
+	// have been had it existed all along.
+	type collectedArg struct {
+		key, val string
+		missing  bool // still needs a prompt
 	}
-	exists := (err == nil)
-	clobberKeys := []string{}
-	for _, arg := range args {
-		k, v, missing, err := parseKeyVal(arg, opt.Quiet)
-		if err != nil {
-			return err
-		}
-		if opt.SkipIfExists && exists && s.Has(k) {
-			clobberKeys = append(clobberKeys, k)
-			// Once a clobber key is found, only collect further clobbers; s.Set is not called.
-			continue
-		}
-		if len(clobberKeys) > 0 {
-			continue
-		}
-		if missing {
-			v, err = pr(k, prompt, insecure)
-			if err != nil {
-				return err
+	collected := make([]*collectedArg, len(args))
+	var clobberKeys []string
+	_, err := v.Update(path, func(s *vault.Secret, exists bool) (*vault.Secret, bool, error) {
+		clobberKeys = nil
+		for i, arg := range args {
+			ca := collected[i]
+			if ca == nil {
+				k, v, missing, err := parseKeyVal(arg, opt.Quiet)
+				if err != nil {
+					return nil, false, err
+				}
+				ca = &collectedArg{key: k, val: v, missing: missing}
+				collected[i] = ca
+			}
+			if opt.SkipIfExists && exists && s.Has(ca.key) {
+				clobberKeys = append(clobberKeys, ca.key)
+				// Once a clobber key is found, only collect further clobbers; s.Set is not called.
+				continue
+			}
+			if len(clobberKeys) > 0 {
+				continue
+			}
+			if ca.missing {
+				val, err := pr(ca.key, prompt, insecure)
+				if err != nil {
+					return nil, false, err
+				}
+				ca.val, ca.missing = val, false
+			}
+			if err := s.Set(ca.key, ca.val, opt.SkipIfExists); err != nil {
+				return nil, false, err
 			}
 		}
-		err = s.Set(k, v, opt.SkipIfExists)
-		if err != nil {
-			return err
+		if len(clobberKeys) > 0 {
+			return nil, false, nil
 		}
+		return nil, true, nil
+	})
+	if err != nil {
+		return err
 	}
-	if len(clobberKeys) > 0 {
-		if !opt.Quiet {
-			_, _ = fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to update} @C{%s}@R{, as the following keys would be clobbered:} @C{%s}\n",
-				path, strings.Join(clobberKeys, ", "))
-		}
-		return nil
+	if len(clobberKeys) > 0 && !opt.Quiet {
+		_, _ = fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to update} @C{%s}@R{, as the following keys would be clobbered:} @C{%s}\n",
+			path, strings.Join(clobberKeys, ", "))
 	}
-	return v.Write(path, s)
+	return nil
 }
 
 func (c *CLI) cmdAsk(command string, args ...string) error {
@@ -181,7 +202,7 @@ func (c *CLI) cmdGet(command string, args ...string) error {
 	// fn always returns nil: per-path errors are aggregated by the
 	// sequential loop below exactly as before, so EachLimit's fail-fast
 	// never triggers here and the always-nil return is deliberate.
-	_ = parallel.EachLimit(args, max(runtime.NumCPU(), 4), func(i int, path string) error {
+	_ = parallel.EachLimit(context.Background(), args, parallel.IOLimit(), func(_ context.Context, i int, path string) error {
 		s, err := v.Read(path)
 		fetches[i] = fetched{s: s, err: err}
 		return nil
@@ -639,6 +660,21 @@ func checkDeletePath(path, verb string, opt *Options) error {
 	})
 }
 
+// allNotFound reports whether every failure err carries is a not-found, the
+// only kind --force may swallow. DeleteTree and MoveCopyTree are fan-outs,
+// so err may be a *parallel.Errors holding several siblings; whichever
+// failure won the arrival race says nothing about the others, so each one
+// must answer to IsNotFound before the whole error is suppressible. A bare
+// error -- a single failure, or one raised before any fan-out -- is judged
+// directly, as before.
+func allNotFound(err error) bool {
+	var errs *parallel.Errors
+	if errors.As(err, &errs) {
+		return errs.All(vault.IsNotFound)
+	}
+	return vault.IsNotFound(err)
+}
+
 func (c *CLI) cmdDelete(command string, args ...string) error {
 	opt := c.opt
 	r := c.r
@@ -675,14 +711,14 @@ func (c *CLI) cmdDelete(command string, args ...string) error {
 			if err := v.DeleteTree(path, vault.DeleteOpts{
 				Destroy: opt.Delete.Destroy,
 				All:     opt.Delete.All,
-			}); err != nil && (!vault.IsNotFound(err) || !opt.Delete.Force) {
+			}); err != nil && (!allNotFound(err) || !opt.Delete.Force) {
 				return err
 			}
 		} else {
 			if err := v.Delete(path, vault.DeleteOpts{
 				Destroy: opt.Delete.Destroy,
 				All:     opt.Delete.All,
-			}); err != nil && (!vault.IsNotFound(err) || !opt.Delete.Force) {
+			}); err != nil && (!allNotFound(err) || !opt.Delete.Force) {
 				return err
 			}
 		}
@@ -1011,16 +1047,40 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 		if err != nil {
 			return err
 		}
-		for path, s := range data {
+		// Sorting first means processing order is a function of the input
+		// alone, never of Go's randomized map iteration, exactly as the
+		// version-2 loop's importPairs arranges. Distinct paths then write
+		// concurrently; each `wrote` line is buffered by its path's slot
+		// and replayed after the fan-out, so stderr comes out in sorted
+		// order rather than completion order -- which also means nothing
+		// prints until the whole import finishes, where a sequential loop
+		// would have streamed a line per write as it happened. And a
+		// failure only halts dispatch of paths not yet started: writes
+		// already in flight when one fails still complete, so a failed
+		// import can leave sorted paths past the failure point written,
+		// the same fail-fast semantics the version-2 loop below already
+		// has.
+		paths := make([]string, 0, len(data))
+		for path := range data {
+			paths = append(paths, path)
+		}
+		sort.Strings(paths)
+		wrote := make([]bool, len(paths))
+		err = parallel.EachLimit(context.Background(), paths, parallel.IOLimit(), func(_ context.Context, i int, path string) error {
 			//The keys of an export are literal Vault paths; Write reads its
 			// argument as path:key syntax.
-			err = v.Write(vault.EncodePath(path, "", 0), s)
-			if err != nil {
+			if err := v.Write(vault.EncodePath(path, "", 0), data[path]); err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintf(os.Stderr, "wrote %s\n", path)
+			wrote[i] = true
+			return nil
+		})
+		for i, path := range paths {
+			if wrote[i] {
+				_, _ = fmt.Fprintf(os.Stderr, "wrote %s\n", path)
+			}
 		}
-		return nil
+		return err
 	}
 
 	v2Import := func(input []byte) error {
@@ -1057,11 +1117,11 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 		}
 
 		//Put the secrets in the places, writing the versions in the correct order and deleting/destroying secrets that
-		// need to be deleted/destroyed. Distinct paths import concurrently, at
-		// the same worker count as gen/ssh/rsa.
+		// need to be deleted/destroyed. Distinct paths import concurrently at
+		// the IO width: imports are round trips, not compute.
 		pairs := importPairs(data.Data)
 
-		return parallel.EachLimit(pairs, max(runtime.NumCPU(), 4), func(_ int, pair importPair) error {
+		return parallel.EachLimit(context.Background(), pairs, parallel.IOLimit(), func(_ context.Context, _ int, pair importPair) error {
 			path, secret := pair.path, pair.secret
 			s := vault.SecretEntry{
 				Path: path,
@@ -1191,12 +1251,12 @@ func (c *CLI) moveCopy(v *vault.Vault, args []string, p moveCopyParams) error {
 			return nil /* skip this command, process the next */
 		}
 		err := v.MoveCopyTree(args[0], args[1], p.move, opts)
-		if err != nil && (!vault.IsNotFound(err) || !p.force) {
+		if err != nil && (!allNotFound(err) || !p.force) {
 			return err
 		}
 	} else {
 		err := p.op(args[0], args[1], opts)
-		if err != nil && (!vault.IsNotFound(err) || !p.force) {
+		if err != nil && (!allNotFound(err) || !p.force) {
 			return err
 		}
 	}

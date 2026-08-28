@@ -2,12 +2,14 @@ package vault
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/url"
@@ -49,6 +51,11 @@ type Vault struct {
 	// race on memory, since every access here is already lock-guarded.
 	versionsGen   map[string]uint64
 	versionsEpoch uint64
+
+	// casSleep waits out the backoff between Update/UpdateSteps retry
+	// passes; a seam so tests assert requested waits instead of serving
+	// them. See sleepBeforeRetry.
+	casSleep func(ctx context.Context, d time.Duration) error
 }
 
 type VaultConfig struct {
@@ -119,7 +126,7 @@ func NewVault(conf VaultConfig) (*Vault, error) {
 			Namespace: conf.Namespace,
 			Client: &http.Client{
 				Timeout: 30 * time.Second,
-				Transport: &http.Transport{
+				Transport: newRetryTransport(&http.Transport{
 					Proxy: proxyRouter.Proxy,
 					DialContext: (&net.Dialer{
 						Timeout:   10 * time.Second,
@@ -135,7 +142,7 @@ func NewVault(conf VaultConfig) (*Vault, error) {
 						InsecureSkipVerify: conf.SkipVerify, // #nosec G402 - User-controlled via config for development/testing
 						ClientSessionCache: tls.NewLRUClientSessionCache(32),
 					},
-				},
+				}),
 			},
 			Trace: func() (ret io.Writer) {
 				if shouldDebug() {
@@ -147,6 +154,7 @@ func NewVault(conf VaultConfig) (*Vault, error) {
 		debug:         shouldDebug(),
 		versionsCache: map[string][]vaultkv.KVVersion{},
 		versionsGen:   map[string]uint64{},
+		casSleep:      sleepBackoff,
 	}, nil
 }
 
@@ -286,30 +294,60 @@ func (v *Vault) Read(path string) (secret *Secret, err error) {
 		return
 	}
 
+	err = fillSecretFromRaw(secret, raw, path, key)
+	return
+}
+
+// fillSecretFromRaw copies a raw data map into secret, re-marshalling any
+// non-string values back to JSON. A non-empty key keeps only that key, and
+// reports a KeyNotFoundError when the map does not hold it.
+func fillSecretFromRaw(secret *Secret, raw map[string]any, path, key string) error {
 	if key != "" {
 		val, found := raw[key]
 		if !found {
-			return secret, NewKeyNotFoundError(path, key)
+			return NewKeyNotFoundError(path, key)
 		}
 		raw = map[string]any{key: val}
 	}
 
 	for k, v := range raw {
-		if (key != "" && k == key) || key == "" {
-			if s, ok := v.(string); ok {
-				secret.data[k] = s
-			} else {
-				var b []byte
-				b, err = json.Marshal(v)
-				if err != nil {
-					return
-				}
-				secret.data[k] = string(b)
+		if s, ok := v.(string); ok {
+			secret.data[k] = s
+		} else {
+			b, err := json.Marshal(v)
+			if err != nil {
+				return err
 			}
+			secret.data[k] = string(b)
 		}
 	}
 
-	return
+	return nil
+}
+
+// readWithVersion is Read for a read-modify-write: the same path parsing,
+// the same not-found translation, but it also returns the KV version the
+// data endpoint reported alongside the data -- which is what a
+// check-and-set write needs to name. On a v1 mount the version is
+// meaningless (vaultkv reports 1) and callers must not send it anywhere.
+func (v *Vault) readWithVersion(path string) (secret *Secret, version uint, err error) {
+	path, key, ver := ParsePath(path)
+
+	secret = NewSecret()
+
+	raw := map[string]any{}
+	meta, err := v.client.Get(path, &raw, &vaultkv.KVGetOpts{Version: uint(ver)})
+	if err != nil {
+		if vaultkv.IsNotFound(err) {
+			err = v.notFoundReading(path, ver)
+		}
+		return secret, 0, err
+	}
+
+	if err := fillSecretFromRaw(secret, raw, path, key); err != nil {
+		return secret, 0, err
+	}
+	return secret, meta.Version, nil
 }
 
 // readLatestWithMeta reads the newest live version of a secret in one
@@ -462,6 +500,378 @@ func (v *Vault) Write(path string, s *Secret) error {
 	return err
 }
 
+// casAttempts is how many read-apply-write rounds Update makes against
+// check-and-set conflicts before giving up: enough that a retry always
+// converges against a bounded burst of concurrent writers, small enough
+// that a genuinely contended path fails loudly instead of spinning.
+const casAttempts = 5
+
+// casBackoffBase is the first wait Update/UpdateSteps request between
+// retry passes; casBackoffCap bounds how large it grows. Small and bounded
+// on purpose: this runs synchronously inside a CLI command, not a daemon,
+// with only casAttempts passes to spend -- there is no room for the
+// GET-retry transport's coarser schedule (3.2's 100ms-per-doubling scale,
+// sized for a single throttled read, not a bounded burst of writers all
+// waiting on one path).
+const (
+	casBackoffBase = 10 * time.Millisecond
+	casBackoffCap  = 200 * time.Millisecond
+)
+
+// casBackoff returns the wait Update/UpdateSteps request before retry pass
+// number attempt (1-based): full jitter over [0, ceiling], where ceiling
+// doubles with each attempt and saturates at casBackoffCap. Full jitter,
+// rather than a fixed base plus jitter, spreads concurrent losers of the
+// same conflict across the whole window instead of clustering them near
+// its start.
+func casBackoff(attempt int) time.Duration {
+	return rand.N(casBackoffCeiling(attempt) + 1)
+}
+
+// casBackoffCeiling returns the upper bound (inclusive) casBackoff draws
+// under for retry pass number attempt (1-based).
+func casBackoffCeiling(attempt int) time.Duration {
+	d := casBackoffBase << (attempt - 1)
+	if d <= 0 || d > casBackoffCap {
+		return casBackoffCap
+	}
+	return d
+}
+
+// sleepBeforeRetry waits out a jittered backoff before Update or
+// UpdateSteps' next attempt, unless attempt -- its zero-based index --
+// was the last one: giving up is immediate, never delayed by a wait
+// nobody benefits from. The uncontended path never reaches this call at
+// all, since it returns before the loop's bottom.
+func (v *Vault) sleepBeforeRetry(attempt int) error {
+	if attempt >= casAttempts-1 {
+		return nil
+	}
+	return v.casSleep(context.Background(), casBackoff(attempt+1))
+}
+
+// writeCAS writes s at path with the given check-and-set version and
+// returns the version Vault assigned. A nil cas sends no check-and-set at
+// all -- the unconditional write, and the only kind a KV v1 mount
+// understands (v1 ignores the option entirely). cas 0 writes only if the
+// path has no version history; cas n writes only if the current version
+// is n, and a mismatch comes back as an error vaultkv.IsCASConflict
+// recognizes. Deletes are not this function's business: the empty-secret
+// degrade-to-delete lives in Write, and deletes take no CAS.
+func (v *Vault) writeCAS(path string, s *Secret, cas *uint) (uint, error) {
+	path, key, version := ParsePath(path)
+	if key != "" {
+		return 0, fmt.Errorf("cannot write to paths in /path:key notation")
+	}
+
+	if version != 0 {
+		return 0, fmt.Errorf("cannot write to paths in /path^version notation")
+	}
+
+	defer v.invalidateVersions(path)
+
+	meta, err := v.client.Set(path, s.data, &vaultkv.KVSetOpts{CAS: cas})
+	if vaultkv.IsNotFound(err) {
+		err = NewSecretNotFoundError(path)
+	}
+	if err != nil {
+		return 0, err
+	}
+	return meta.Version, nil
+}
+
+// errStale404 says a data read answered 404 while the version metadata
+// showed a live current version: the read raced a concurrent create, and
+// the right response is a fresh read, never a write over a value that was
+// not seen.
+var errStale404 = errors.New("the secret appeared between its read and its metadata")
+
+// resolveAbsentCAS resolves the check-and-set version for a write to a
+// path whose data read answered 404. That answer alone does not mean the
+// path is free: a soft-deleted or destroyed-latest secret 404s its data
+// read while its metadata keeps current_version, and Vault rejects cas=0
+// whenever any metadata survives -- assuming "create only" would wedge
+// every write to a previously-deleted path. Verified against a live
+// Vault. So: no metadata means cas=0 (create only); metadata whose
+// current version is dead means CAS against that version; metadata whose
+// current version is alive means the 404 itself was stale (a concurrent
+// create landed) and the caller must re-read, reported as errStale404. A
+// metadata read the token is not allowed (or otherwise fails) degrades to
+// nil -- the unconditional write every one of these paths made before
+// check-and-set existed.
+func (v *Vault) resolveAbsentCAS(path string) (*uint, error) {
+	versions, err := v.Versions(path)
+	if err != nil || len(versions) == 0 {
+		if err != nil && !IsNotFound(err) {
+			return nil, nil
+		}
+		zero := uint(0)
+		return &zero, nil
+	}
+	current := versions[len(versions)-1]
+	if current.Alive() {
+		//The consulted history may itself have been cached before the
+		// concurrent create; drop it so the retry consults fresh state.
+		v.invalidateVersions(path)
+		return nil, errStale404
+	}
+	cas := current.Version
+	return &cas, nil
+}
+
+// Update runs one read-modify-write against path under check-and-set: it
+// reads the live version, hands the fresh state to fn, and writes fn's
+// result back naming the version the read observed, so a write landing in
+// between conflicts instead of being overwritten; on a conflict it
+// re-reads and re-applies fn, up to casAttempts times, then gives up
+// naming the path. fn hears exists == false for a path with no live data
+// (missing, soft-deleted, or destroyed-latest -- the write still lands in
+// every one of those cases), may mutate s in place and return a nil out,
+// or return a replacement secret; write == false skips the write, and fn
+// must be safe to re-run against fresh state, keeping non-repeatable work
+// (generation, prompting) outside. Returns the version the successful
+// write assigned. On a KV v1 mount this degrades to a plain
+// read-then-write -- no cas is ever sent, because no versioning exists to
+// check against; v1 stays last-writer-wins.
+//
+// A not-found read tries an optimistic cas=0 write first, never consulting
+// metadata: a path with no history at all -- the common case for every
+// fresh gen/ssh/rsa/set target -- has nothing there to consult, and the
+// guess lands. Only when that guess conflicts does Update ask why: the
+// very next attempt's own data read already tells apart a concurrent
+// create (data now present, handled by the ordinary observed-version
+// branch) from surviving metadata on a soft-deleted or destroyed-latest
+// path (data still absent, resolveAbsentCAS's dead-version case). The
+// metadata GET this pays is one request, charged only on that conflict,
+// never on the fast path.
+func (v *Vault) Update(path string, fn func(s *Secret, exists bool) (out *Secret, write bool, err error)) (uint, error) {
+	literal, key, version := ParsePath(path)
+	if key != "" {
+		return 0, fmt.Errorf("cannot write to paths in /path:key notation")
+	}
+
+	if version != 0 {
+		return 0, fmt.Errorf("cannot write to paths in /path^version notation")
+	}
+
+	//The mount table is fetched once per process and cached in the
+	// client, so this costs no request beyond the one every command
+	// already pays.
+	mount, err := v.MountVersion(literal)
+	if err != nil {
+		return 0, err
+	}
+
+	var lastConflict error
+	for attempt := 0; attempt < casAttempts; attempt++ {
+		//The caller's path goes down unre-parsed: readWithVersion and
+		// writeCAS run the same ParsePath themselves, and handing them
+		// the already-unescaped literal would split any escaped colon or
+		// caret in the secret's own name a second time.
+		s, ver, err := v.readWithVersion(path)
+		exists := err == nil
+		if err != nil && !IsNotFound(err) {
+			return 0, err
+		}
+
+		out, write, err := fn(s, exists)
+		if err != nil {
+			return 0, err
+		}
+		if !write {
+			return 0, nil
+		}
+		if out == nil {
+			out = s
+		}
+
+		//Resolved only once fn has asked for a write, so declining fns
+		// and error paths never pay any request the absent branch can
+		// cost. A not-found path guesses cas=0 optimistically rather than
+		// consulting metadata up front -- see the doc comment above.
+		var cas *uint
+		optimistic := false
+		if mount == 2 {
+			if exists {
+				observed := ver
+				cas = &observed
+			} else {
+				zero := uint(0)
+				cas = &zero
+				optimistic = true
+			}
+		}
+
+		assigned, werr := v.writeCAS(path, out, cas)
+		if werr == nil {
+			return assigned, nil
+		}
+		if !vaultkv.IsCASConflict(werr) {
+			return 0, werr
+		}
+		lastConflict = werr
+
+		if optimistic {
+			//The blind guess was wrong: metadata survives at this path.
+			// Consult it once, in this same pass, rather than paying a
+			// second full read whose answer -- still absent -- this
+			// conflict already told us.
+			resolved, rerr := v.resolveAbsentCAS(literal)
+			if errors.Is(rerr, errStale404) {
+				lastConflict = rerr
+				if serr := v.sleepBeforeRetry(attempt); serr != nil {
+					return 0, serr
+				}
+				continue
+			}
+			if rerr != nil {
+				return 0, rerr
+			}
+			assigned, werr = v.writeCAS(path, out, resolved)
+			if werr == nil {
+				return assigned, nil
+			}
+			if !vaultkv.IsCASConflict(werr) {
+				return 0, werr
+			}
+			lastConflict = werr
+		}
+
+		if serr := v.sleepBeforeRetry(attempt); serr != nil {
+			return 0, serr
+		}
+	}
+	return 0, fmt.Errorf("gave up writing %s after %d attempts against concurrent writers: %w", literal, casAttempts, lastConflict)
+}
+
+// UpdateSteps is Update's chained form, for a group of writes that build
+// on one read: fn runs once per step against the accumulated secret,
+// mutating it in place, and every step that asks for a write persists the
+// whole accumulated state as its own version, check-and-set against the
+// version the previous write assigned (the first, against what the read
+// observed). N steps cost one read plus one write per step. On a conflict
+// the chain re-reads and re-applies only the steps whose writes have not
+// landed -- a persisted step never runs again, its keys already riding
+// along in the fresh read -- while a step that declined its write
+// re-evaluates every pass, which is what lets a skip predicate re-decide
+// against a concurrent writer's state. The whole chain shares one budget
+// of casAttempts read passes, then gives up naming the path. exists
+// reports whether the path held live data as of the current pass's read,
+// flipping to true once any write lands. On a KV v1 mount this degrades
+// to one read and plain writes; v1 stays last-writer-wins.
+func (v *Vault) UpdateSteps(path string, steps int, fn func(step int, s *Secret, exists bool) (write bool, err error)) error {
+	literal, key, version := ParsePath(path)
+	if key != "" {
+		return fmt.Errorf("cannot write to paths in /path:key notation")
+	}
+
+	if version != 0 {
+		return fmt.Errorf("cannot write to paths in /path^version notation")
+	}
+
+	//Cached in the client after the first fetch, same as in Update.
+	mount, err := v.MountVersion(literal)
+	if err != nil {
+		return err
+	}
+
+	persisted := make([]bool, steps)
+	var lastConflict error
+	for attempt := 0; attempt < casAttempts; attempt++ {
+		//Same as in Update: the caller's path goes down unre-parsed.
+		s, ver, err := v.readWithVersion(path)
+		exists := err == nil
+		if err != nil && !IsNotFound(err) {
+			return err
+		}
+
+		var cas *uint
+		casResolved := false
+		if mount == 2 && exists {
+			observed := ver
+			cas = &observed
+			casResolved = true
+		}
+
+		conflicted := false
+		for i := 0; i < steps; i++ {
+			if persisted[i] {
+				continue
+			}
+			write, err := fn(i, s, exists)
+			if err != nil {
+				return err
+			}
+			if !write {
+				continue
+			}
+			//Resolved lazily at the pass's first write, so a chain whose
+			// steps all decline (or fail first) never pays any request
+			// the absent branch can cost. A not-found path guesses cas=0
+			// optimistically first, the same as Update -- see its doc
+			// comment for why that skips the metadata GET on the common,
+			// no-history case.
+			optimistic := false
+			if mount == 2 && !casResolved {
+				zero := uint(0)
+				cas = &zero
+				casResolved = true
+				optimistic = true
+			}
+			assigned, werr := v.writeCAS(path, s, cas)
+			if werr == nil {
+				persisted[i] = true
+				exists = true
+				if mount == 2 {
+					observed := assigned
+					cas = &observed
+				}
+				continue
+			}
+			if !vaultkv.IsCASConflict(werr) {
+				return werr
+			}
+			lastConflict = werr
+
+			if optimistic {
+				//The blind guess was wrong: metadata survives at this
+				// path. Consult it once, in this same pass, rather than
+				// paying a second full read whose answer -- still
+				// absent -- this conflict already told us.
+				resolved, rerr := v.resolveAbsentCAS(literal)
+				if errors.Is(rerr, errStale404) {
+					lastConflict = rerr
+					conflicted = true
+					break
+				}
+				if rerr != nil {
+					return rerr
+				}
+				assigned, werr = v.writeCAS(path, s, resolved)
+				if werr == nil {
+					persisted[i] = true
+					exists = true
+					cas = &assigned
+					continue
+				}
+				if !vaultkv.IsCASConflict(werr) {
+					return werr
+				}
+				lastConflict = werr
+			}
+			conflicted = true
+			break
+		}
+		if !conflicted {
+			return nil
+		}
+		if serr := v.sleepBeforeRetry(attempt); serr != nil {
+			return serr
+		}
+	}
+	return fmt.Errorf("gave up writing %s after %d attempts against concurrent writers: %w", literal, casAttempts, lastConflict)
+}
+
 // errIfFolder returns an error with your provided message if the given path is a folder.
 // Can also throw an error if contacting the backend failed, in which case that error
 // is returned.
@@ -594,7 +1004,10 @@ func (v *Vault) DeleteTree(root string, opts DeleteOpts) error {
 	if err != nil {
 		return err
 	}
-	err = parallel.EachLimit(secrets.Paths(), max(runtime.NumCPU(), 4), func(_ int, path string) error {
+	// The context bounds dispatch only: the deletes themselves are vaultkv
+	// requests, which carry no context, so a failure stops new paths from
+	// starting while in-flight requests run to their client timeout.
+	err = parallel.EachLimit(context.Background(), secrets.Paths(), parallel.IOLimit(), func(_ context.Context, _ int, path string) error {
 		return v.deleteEntireSecret(path, opts.Destroy, opts.All)
 	})
 	if err != nil {
@@ -1124,7 +1537,9 @@ func (v *Vault) MoveCopyTree(oldRoot, newRoot string, move bool, opts MoveCopyOp
 		}
 	}
 
-	err = parallel.EachLimit(tree, max(runtime.NumCPU(), 4), func(_ int, entry SecretEntry) error {
+	// As in DeleteTree, the context bounds dispatch only: entry.Copy and
+	// the source deletes are contextless vaultkv requests.
+	err = parallel.EachLimit(context.Background(), tree, parallel.IOLimit(), func(_ context.Context, _ int, entry SecretEntry) error {
 		newPath := strings.Replace(EncodePath(entry.Path, "", 0), oldRoot, newRoot, 1)
 		rawNewPath, _, _ := ParsePath(newPath)
 		if err := entry.Copy(v, rawNewPath, TreeCopyOpts{Clear: opts.Deep, Pad: opts.Deep}); err != nil {

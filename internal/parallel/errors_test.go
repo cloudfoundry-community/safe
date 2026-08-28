@@ -6,6 +6,7 @@ package parallel
 // so single-failure output is byte-identical to what it was.
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"sync"
@@ -21,7 +22,7 @@ func TestEachLimitCollectsConcurrentSiblingErrors(t *testing.T) {
 	// failure can be dodged by fail-fast dispatch.
 	var barrier sync.WaitGroup
 	barrier.Add(2)
-	err := EachLimit([]int{0, 1}, 2, func(i, _ int) error {
+	err := EachLimit(context.Background(), []int{0, 1}, 2, func(_ context.Context, i, _ int) error {
 		barrier.Done()
 		barrier.Wait()
 		return fails[i]

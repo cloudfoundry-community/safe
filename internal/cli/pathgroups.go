@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"os"
 
 	"github.com/cloudfoundry-community/safe/internal/parallel"
@@ -32,18 +33,22 @@ func groupByCanonicalPath[T any](targets []T, pathOf func(T) string) (order []st
 // time, so a repeated argument never races itself.
 //
 // run handles a single target; returning an error abandons the rest of
-// that target's group and fails the whole fan-out. notice renders a stderr
-// line through renderNotice and buffers it with its group. Notices print
-// after every group finishes, in the order their paths first appeared on
-// the command line -- not completion order.
-func runPathGroups[T any](order []string, groups map[string][]T, limit int, run func(target T, notice func(format string, args ...any)) error) error {
+// that target's group and fails the whole fan-out. The ctx run receives is
+// cancelled once any group has failed, so a generator that can stop early
+// -- an openssl child under DHParamContext -- stops; what cannot be
+// interrupted (rsa.GenerateKey mid-search, contextless vaultkv requests)
+// still runs out. notice renders a stderr line through renderNotice and
+// buffers it with its group. Notices print after every group finishes, in
+// the order their paths first appeared on the command line -- not
+// completion order.
+func runPathGroups[T any](order []string, groups map[string][]T, limit int, run func(ctx context.Context, target T, notice func(format string, args ...any)) error) error {
 	notices := make([][]string, len(order))
-	err := parallel.EachLimit(order, limit, func(i int, p string) error {
+	err := parallel.EachLimit(context.Background(), order, limit, func(ctx context.Context, i int, p string) error {
 		notice := func(format string, args ...any) {
 			notices[i] = append(notices[i], renderNotice(format, args...))
 		}
 		for _, target := range groups[p] {
-			if err := run(target, notice); err != nil {
+			if err := run(ctx, target, notice); err != nil {
 				return err
 			}
 		}

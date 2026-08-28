@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -139,7 +140,16 @@ func (s *Secret) Format(oldKey, newKey, fmtType string, skipIfExists bool) error
 }
 
 func (s *Secret) DHParam(length int, skipIfExists bool) error {
-	dhparam, err := dhparamGen(length)
+	return s.DHParamContext(context.Background(), length, skipIfExists)
+}
+
+// DHParamContext is DHParam under a caller-supplied context: cancelling it
+// kills the in-flight openssl child, which is how a parallel dhparam
+// fan-out stops paying for the other paths once one of them has failed.
+// The Vault write that usually follows is not covered -- vaultkv requests
+// carry no context, so only its client timeout bounds them.
+func (s *Secret) DHParamContext(ctx context.Context, length int, skipIfExists bool) error {
+	dhparam, err := dhparamGen(ctx, length)
 	if err != nil {
 		return err
 	}

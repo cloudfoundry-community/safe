@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"os"
 	"runtime"
@@ -125,7 +126,9 @@ func (c *CLI) cmdGen(command string, args ...string) error {
 	// paths generate concurrently, multiple keys on the same path stay
 	// sequential within their group, same as before parallelism was added.
 	order, groups := groupByCanonicalPath(targets, func(t genTarget) string { return t.path })
-	return runPathGroups(order, groups, max(runtime.NumCPU(), 4), func(target genTarget, notice func(format string, args ...any)) error {
+	// The group context goes unused: reads and writes are contextless
+	// vaultkv requests, and password generation is microseconds.
+	return runPathGroups(order, groups, max(runtime.NumCPU(), 4), func(_ context.Context, target genTarget, notice func(format string, args ...any)) error {
 		path, key := target.path, target.key
 		s, err := v.Read(path)
 		if err != nil && !vault.IsNotFound(err) {
@@ -237,8 +240,11 @@ func (c *CLI) cmdSsh(command string, args ...string) error {
 	// grouping runs directly over the raw arguments; the canonical path
 	// from ParsePath is still what decides the group, so secret//x and
 	// secret/x land together.
+	// The group context goes unused: SSHKey's rsa.GenerateKey cannot be
+	// interrupted mid-search, so a sibling failure only stops paths that
+	// have not started yet.
 	order, groups := groupByCanonicalPath(args, func(path string) string { return path })
-	return runPathGroups(order, groups, max(runtime.NumCPU(), 4), func(path string, notice func(format string, args ...any)) error {
+	return runPathGroups(order, groups, max(runtime.NumCPU(), 4), func(_ context.Context, path string, notice func(format string, args ...any)) error {
 		s, err := v.Read(path)
 		if err != nil && !vault.IsNotFound(err) {
 			return err
@@ -285,9 +291,11 @@ func (c *CLI) cmdRsa(command string, args ...string) error {
 	v := connect(true)
 
 	// Same shape as cmdSsh: no target struct, so grouping runs over the raw
-	// arguments, keyed by ParsePath's canonical secret path.
+	// arguments, keyed by ParsePath's canonical secret path. The group
+	// context goes unused for the same reason -- rsa.GenerateKey cannot be
+	// interrupted mid-search.
 	order, groups := groupByCanonicalPath(args, func(path string) string { return path })
-	return runPathGroups(order, groups, max(runtime.NumCPU(), 4), func(path string, notice func(format string, args ...any)) error {
+	return runPathGroups(order, groups, max(runtime.NumCPU(), 4), func(_ context.Context, path string, notice func(format string, args ...any)) error {
 		s, err := v.Read(path)
 		if err != nil && !vault.IsNotFound(err) {
 			return err
@@ -351,7 +359,7 @@ func (c *CLI) cmdDhparam(command string, args ...string) error {
 // read-modify-write at a time, so a repeated argument never races itself.
 func dhparamPaths(v *vault.Vault, paths []string, bits int, skipIfExists bool, quiet bool) error {
 	order, groups := groupByCanonicalPath(paths, func(path string) string { return path })
-	return runPathGroups(order, groups, max(runtime.NumCPU()/2, 2), func(path string, notice func(format string, args ...any)) error {
+	return runPathGroups(order, groups, max(runtime.NumCPU()/2, 2), func(ctx context.Context, path string, notice func(format string, args ...any)) error {
 		s, err := v.Read(path)
 		if err != nil && !vault.IsNotFound(err) {
 			return err
@@ -363,7 +371,7 @@ func dhparamPaths(v *vault.Vault, paths []string, bits int, skipIfExists bool, q
 			}
 			return nil
 		}
-		if err = s.DHParam(bits, skipIfExists); err != nil {
+		if err = s.DHParamContext(ctx, bits, skipIfExists); err != nil {
 			return err
 		}
 		return v.Write(path, s)

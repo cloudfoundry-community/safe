@@ -2,6 +2,7 @@ package vault
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -594,7 +595,10 @@ func (v *Vault) DeleteTree(root string, opts DeleteOpts) error {
 	if err != nil {
 		return err
 	}
-	err = parallel.EachLimit(secrets.Paths(), max(runtime.NumCPU(), 4), func(_ int, path string) error {
+	// The context bounds dispatch only: the deletes themselves are vaultkv
+	// requests, which carry no context, so a failure stops new paths from
+	// starting while in-flight requests run to their client timeout.
+	err = parallel.EachLimit(context.Background(), secrets.Paths(), max(runtime.NumCPU(), 4), func(_ context.Context, _ int, path string) error {
 		return v.deleteEntireSecret(path, opts.Destroy, opts.All)
 	})
 	if err != nil {
@@ -1124,7 +1128,9 @@ func (v *Vault) MoveCopyTree(oldRoot, newRoot string, move bool, opts MoveCopyOp
 		}
 	}
 
-	err = parallel.EachLimit(tree, max(runtime.NumCPU(), 4), func(_ int, entry SecretEntry) error {
+	// As in DeleteTree, the context bounds dispatch only: entry.Copy and
+	// the source deletes are contextless vaultkv requests.
+	err = parallel.EachLimit(context.Background(), tree, max(runtime.NumCPU(), 4), func(_ context.Context, _ int, entry SecretEntry) error {
 		newPath := strings.Replace(EncodePath(entry.Path, "", 0), oldRoot, newRoot, 1)
 		rawNewPath, _, _ := ParsePath(newPath)
 		if err := entry.Copy(v, rawNewPath, TreeCopyOpts{Clear: opts.Deep, Pad: opts.Deep}); err != nil {

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -181,7 +182,7 @@ func (c *CLI) cmdGet(command string, args ...string) error {
 	// fn always returns nil: per-path errors are aggregated by the
 	// sequential loop below exactly as before, so EachLimit's fail-fast
 	// never triggers here and the always-nil return is deliberate.
-	_ = parallel.EachLimit(args, max(runtime.NumCPU(), 4), func(i int, path string) error {
+	_ = parallel.EachLimit(context.Background(), args, max(runtime.NumCPU(), 4), func(_ context.Context, i int, path string) error {
 		s, err := v.Read(path)
 		fetches[i] = fetched{s: s, err: err}
 		return nil
@@ -1071,7 +1072,7 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 		// the same worker count as gen/ssh/rsa.
 		pairs := importPairs(data.Data)
 
-		return parallel.EachLimit(pairs, max(runtime.NumCPU(), 4), func(_ int, pair importPair) error {
+		return parallel.EachLimit(context.Background(), pairs, max(runtime.NumCPU(), 4), func(_ context.Context, _ int, pair importPair) error {
 			path, secret := pair.path, pair.secret
 			s := vault.SecretEntry{
 				Path: path,

@@ -4,6 +4,7 @@
 package parallel
 
 import (
+	"context"
 	"strings"
 	"sync"
 )
@@ -59,23 +60,42 @@ func (e *Errors) All(pred func(error) bool) bool {
 }
 
 // EachLimit runs fn over items with at most limit concurrent calls.
-// Fail-fast: after the first non-nil error no new item is dispatched and
-// in-flight calls complete. Every failure is collected; a single failure
-// is returned unwrapped so errors.As/Is classification behaves as in a
+// Fail-fast: after the first non-nil error no new item is dispatched,
+// in-flight calls see their context cancelled, and the fan-out returns
+// once they complete. Every failure is collected; a single failure is
+// returned unwrapped so errors.As/Is classification behaves as in a
 // sequential loop, and several come back as an *Errors that classifies by
-// the first arrival only.
-func EachLimit[T any](items []T, limit int, fn func(i int, item T) error) error {
+// the first arrival only. A ctx the caller cancels stops dispatch the
+// same way and is returned when no call failed on its own.
+//
+// Cancellation bounds what fn lets it bound: an exec.CommandContext child
+// is killed, but vaultkv requests carry no context (the client's 30 s
+// timeout is their only cap) and rsa.GenerateKey cannot be interrupted
+// mid-search, so those in-flight calls still run to completion.
+func EachLimit[T any](ctx context.Context, items []T, limit int, fn func(ctx context.Context, i int, item T) error) error {
 	if limit < 1 {
 		limit = 1
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	var (
 		wg   sync.WaitGroup
 		mu   sync.Mutex
 		errs []error
 	)
 	sem := make(chan struct{}, limit)
+dispatch:
 	for i := range items {
-		sem <- struct{}{}
+		// The explicit Err check comes first: with ctx already done, the
+		// select below could still win its sem case at random.
+		if ctx.Err() != nil {
+			break
+		}
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			break dispatch
+		}
 		mu.Lock()
 		stop := len(errs) > 0
 		mu.Unlock()
@@ -87,13 +107,20 @@ func EachLimit[T any](items []T, limit int, fn func(i int, item T) error) error 
 		go func(i int) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			if err := fn(i, items[i]); err != nil {
+			if err := fn(ctx, i, items[i]); err != nil {
 				mu.Lock()
 				errs = append(errs, err)
 				mu.Unlock()
+				cancel()
 			}
 		}(i)
 	}
 	wg.Wait()
+	if len(errs) == 0 {
+		// Dispatch can only have stopped early via the caller's own
+		// context here: the internal cancel fires on failure alone, and
+		// failures land in errs before it does.
+		return ctx.Err()
+	}
 	return NewErrors(errs...)
 }

@@ -1026,7 +1026,14 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 		// version-2 loop's importPairs arranges. Distinct paths then write
 		// concurrently; each `wrote` line is buffered by its path's slot
 		// and replayed after the fan-out, so stderr comes out in sorted
-		// order rather than completion order.
+		// order rather than completion order -- which also means nothing
+		// prints until the whole import finishes, where a sequential loop
+		// would have streamed a line per write as it happened. And a
+		// failure only halts dispatch of paths not yet started: writes
+		// already in flight when one fails still complete, so a failed
+		// import can leave sorted paths past the failure point written,
+		// the same fail-fast semantics the version-2 loop below already
+		// has.
 		paths := make([]string, 0, len(data))
 		for path := range data {
 			paths = append(paths, path)

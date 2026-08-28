@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"crypto"
 	"crypto/x509"
 	"encoding/asn1"
 	"io"
@@ -361,81 +362,129 @@ func (c *CLI) cmdX509Issue(command string, args ...string) error {
 		}
 	}
 
-	//The CA read is a network round trip and the key draws are pure CPU,
-	// and neither depends on the other, so they run at the same time and
-	// join here. A CA problem comes back without waiting the draws out.
-	var ca *vault.X509
-	keys, err := vault.GenerateKeysWhileFetching(spec, len(targets), parallel.CPULimit(), func() error {
-		if opt.X509.Issue.SignedBy == "" {
-			return nil
-		}
-		secret, rerr := v.Read(opt.X509.Issue.SignedBy)
-		if rerr != nil {
-			return rerr
-		}
-
-		signer, xerr := secret.X509(true)
-		if xerr != nil {
-			return xerr
-		}
-
-		//Signing with a certificate that is not an authority produces one no
-		// relying party will accept, and nothing further along says so: the
-		// certificate is written, looks ordinary, and fails at the far end.
-		if !signer.IsCA() {
-			return fmt.Errorf("%s is not a certificate authority", opt.X509.Issue.SignedBy)
-		}
-		ca = signer
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-
-	for i, target := range targets {
-		cert, err := vault.NewCertificateWithKey(target.subject,
-			uniq(opt.X509.Issue.Name), opt.X509.Issue.KeyUsage,
-			opt.X509.Issue.SigAlgorithm, keys[i])
-		if err != nil {
-			return err
-		}
-		if opt.X509.Issue.CA {
-			cert.MakeCA()
-		}
-		target.cert = cert
-	}
-
 	if opt.X509.Issue.TTL == "" {
 		opt.X509.Issue.TTL = "2y"
 		if opt.X509.Issue.CA {
 			opt.X509.Issue.TTL = "10y"
 		}
 	}
-	ttl, err := duration(opt.X509.Issue.TTL)
-	if err != nil {
-		return err
+
+	// buildCerts assembles the batch's certificate templates around
+	// already-drawn keys. Under a CA it runs once per read-modify-write
+	// attempt: rebuilding from the flags gives every attempt fresh
+	// template state -- in particular a SignatureAlgorithm that re-derives
+	// from that attempt's CA key rather than carrying what a previous
+	// attempt's signing filled in.
+	buildCerts := func(keys []crypto.Signer) ([]*vault.X509, error) {
+		certs := make([]*vault.X509, len(targets))
+		for i, target := range targets {
+			cert, err := vault.NewCertificateWithKey(target.subject,
+				uniq(opt.X509.Issue.Name), opt.X509.Issue.KeyUsage,
+				opt.X509.Issue.SigAlgorithm, keys[i])
+			if err != nil {
+				return nil, err
+			}
+			if opt.X509.Issue.CA {
+				cert.MakeCA()
+			}
+			target.cert = cert
+			certs[i] = cert
+		}
+		return certs, nil
 	}
-	if ca == nil {
+
+	if opt.X509.Issue.SignedBy == "" {
 		//Self-signed: each certificate answers for itself, and no CA
 		// read-modify-write exists to order around.
+		keys, err := vault.GenerateKeysWhileFetching(spec, len(targets), parallel.CPULimit(), func() error { return nil })
+		if err != nil {
+			return err
+		}
+		if _, err := buildCerts(keys); err != nil {
+			return err
+		}
+		ttl, err := duration(opt.X509.Issue.TTL)
+		if err != nil {
+			return err
+		}
 		for _, target := range targets {
 			if err := target.cert.Sign(target.cert, ttl); err != nil {
 				return err
 			}
 		}
 	} else {
-		certs := make([]*vault.X509, len(targets))
-		for i, target := range targets {
-			certs[i] = target.cert
+		//The CA read is a network round trip and the key draws are pure
+		// CPU, and neither depends on the other, so the draws start now
+		// and the read-modify-write below joins them only once the CA has
+		// been read and verified -- a CA problem comes back without
+		// waiting the draws out, exactly as before, with the abandoned
+		// draws finishing into the buffered channel for the collector.
+		type drawnKeys struct {
+			keys []crypto.Signer
+			err  error
 		}
-		caSecret, err := signCertsUnderCA(ca, certs, ttl, opt.SkipIfExists)
+		keysCh := make(chan drawnKeys, 1)
+		go func() {
+			keys, err := vault.GenerateKeysWhileFetching(spec, len(targets), parallel.CPULimit(), func() error { return nil })
+			keysCh <- drawnKeys{keys: keys, err: err}
+		}()
+		var (
+			keys   []crypto.Signer
+			joined bool
+		)
+
+		//The read-modify-write: the read that used to live in the keygen
+		// overlap is now Update's own, so the version it observes is the
+		// version the CA write names. Everything per-attempt parses from
+		// that attempt's fresh read -- the X509 is never reused across
+		// attempts, because producing its secret advances the CRL number
+		// through the shared CRL pointer, and a reused object would
+		// double-bump; conflicting means fresh CA state, fresh serials,
+		// and freshly re-signed leaves, so no stale-serial certificate
+		// can survive a retry. The keys alone carry over, drawn once.
+		_, err := v.Update(opt.X509.Issue.SignedBy, func(s *vault.Secret, exists bool) (*vault.Secret, bool, error) {
+			if !exists {
+				p, _, _ := vault.ParsePath(opt.X509.Issue.SignedBy)
+				return nil, false, vault.NewSecretNotFoundError(p)
+			}
+			ca, err := s.X509(true)
+			if err != nil {
+				return nil, false, err
+			}
+			//Signing with a certificate that is not an authority produces
+			// one no relying party will accept, and nothing further along
+			// says so: the certificate is written, looks ordinary, and
+			// fails at the far end. Re-checked per attempt -- the path's
+			// content may have changed under a conflict.
+			if !ca.IsCA() {
+				return nil, false, fmt.Errorf("%s is not a certificate authority", opt.X509.Issue.SignedBy)
+			}
+			if !joined {
+				drawn := <-keysCh
+				if drawn.err != nil {
+					return nil, false, drawn.err
+				}
+				keys, joined = drawn.keys, true
+			}
+			certs, err := buildCerts(keys)
+			if err != nil {
+				return nil, false, err
+			}
+			ttl, err := duration(opt.X509.Issue.TTL)
+			if err != nil {
+				return nil, false, err
+			}
+			caSecret, err := signCertsUnderCA(ca, certs, ttl, opt.SkipIfExists)
+			if err != nil {
+				return nil, false, err
+			}
+			//The CA write -- Update's own -- lands before any certificate
+			// write: a crash between the two burns reserved serials, which
+			// is harmless, rather than leaving certificates the persisted
+			// counter does not account for.
+			return caSecret, true, nil
+		})
 		if err != nil {
-			return err
-		}
-		//The CA write lands before any certificate write: a crash between
-		// the two burns reserved serials, which is harmless, rather than
-		// leaving certificates the persisted counter does not account for.
-		if err := v.Write(opt.X509.Issue.SignedBy, caSecret); err != nil {
 			return err
 		}
 	}
@@ -605,10 +654,6 @@ func (c *CLI) cmdX509Reissue(command string, args ...string) error {
 	}
 
 	cert.PrivateKey = newKey
-	err = ca.Sign(cert, ttl)
-	if err != nil {
-		return err
-	}
 	//caPath and args[0] can spell the same secret differently (a leading or
 	// trailing slash); FindSigningCA compares them as raw strings and, not
 	// recognizing the alias, reads the authority as a second, separate copy.
@@ -616,8 +661,46 @@ func (c *CLI) cmdX509Reissue(command string, args ...string) error {
 	// reissued certificate below is about to overwrite anyway — one that
 	// carries a serial-counter increment the final write does not, since it
 	// lands on a copy that is discarded rather than the one that is saved.
-	if vault.Canonicalize(caPath) != vault.Canonicalize(args[0]) {
-		err = ca.SaveTo(v, caPath, false)
+	// When they are the same record, the certificate IS the authority (by
+	// pointer identity through FindSigningCA): the self-sign happens here
+	// and the one write below carries it. Otherwise the CA save is a
+	// read-modify-write under check-and-set, signing against each
+	// attempt's freshly-parsed CA -- fresh serial, single CRL bump -- so a
+	// concurrent CA write forces a retry instead of being overwritten.
+	if vault.Canonicalize(caPath) == vault.Canonicalize(args[0]) {
+		err = ca.Sign(cert, ttl)
+		if err != nil {
+			return err
+		}
+	} else {
+		_, err = v.Update(caPath, func(s *vault.Secret, exists bool) (*vault.Secret, bool, error) {
+			if !exists {
+				p, _, _ := vault.ParsePath(caPath)
+				return nil, false, vault.NewSecretNotFoundError(p)
+			}
+			fresh, err := s.X509(true)
+			if err != nil {
+				return nil, false, err
+			}
+			if !fresh.IsCA() {
+				return nil, false, fmt.Errorf("%s is not a certificate authority", caPath)
+			}
+			//Sign fills an unset algorithm from the key of the CA it is
+			// handed; reset per attempt so a retry re-derives from the
+			// fresh CA's key instead of validating the previous attempt's
+			// choice against it.
+			if opt.X509.Reissue.SigAlgorithm == "" {
+				cert.Certificate.SignatureAlgorithm = x509.UnknownSignatureAlgorithm
+			}
+			if err := fresh.Sign(cert, ttl); err != nil {
+				return nil, false, err
+			}
+			out, err := fresh.Secret(false)
+			if err != nil {
+				return nil, false, err
+			}
+			return out, true, nil
+		})
 		if err != nil {
 			return err
 		}
@@ -724,15 +807,44 @@ func (c *CLI) cmdX509Renew(command string, args ...string) error {
 		}
 	}
 
-	err = ca.Sign(cert, ttl)
-	if err != nil {
-		return err
-	}
-	//See the matching comment in cmdX509Reissue: caPath and args[0] can
-	// spell the same secret differently, and the raw comparison here has to
-	// see through that or write the same record twice.
-	if vault.Canonicalize(caPath) != vault.Canonicalize(args[0]) {
-		err = ca.SaveTo(v, caPath, false)
+	//caPath and args[0] can spell the same secret differently (a leading
+	// or trailing slash); FindSigningCA compares them as raw strings and,
+	// not recognizing the alias, reads the authority as a second, separate
+	// copy. When they are the same record, the certificate IS the
+	// authority (by pointer identity through FindSigningCA) and there is
+	// no separate CA record to guard -- the self-sign happens here and the
+	// one write below carries it. Otherwise the CA save is a
+	// read-modify-write under check-and-set: the signing and the CRL
+	// re-sign run against each attempt's freshly-parsed CA, so a
+	// concurrent issuance or revocation landing in between forces a
+	// retry that draws a fresh serial from the fresh counter -- never a
+	// reused parse, whose CRL number would double-bump.
+	if vault.Canonicalize(caPath) == vault.Canonicalize(args[0]) {
+		if err := ca.Sign(cert, ttl); err != nil {
+			return err
+		}
+	} else {
+		_, err = v.Update(caPath, func(s *vault.Secret, exists bool) (*vault.Secret, bool, error) {
+			if !exists {
+				p, _, _ := vault.ParsePath(caPath)
+				return nil, false, vault.NewSecretNotFoundError(p)
+			}
+			fresh, err := s.X509(true)
+			if err != nil {
+				return nil, false, err
+			}
+			if !fresh.IsCA() {
+				return nil, false, fmt.Errorf("%s is not a certificate authority", caPath)
+			}
+			if err := fresh.Sign(cert, ttl); err != nil {
+				return nil, false, err
+			}
+			out, err := fresh.Secret(false)
+			if err != nil {
+				return nil, false, err
+			}
+			return out, true, nil
+		})
 		if err != nil {
 			return err
 		}
@@ -766,23 +878,10 @@ func (c *CLI) cmdX509Revoke(command string, args ...string) error {
 	}
 	v := connect(true)
 
-	/* find the CA */
-	s, err := v.Read(opt.X509.Revoke.SignedBy)
-	if err != nil {
-		return err
-	}
-	ca, err := s.X509(true)
-	if err != nil {
-		return err
-	}
-	//Revocation is recorded on the CA's revocation list, and only a
-	// certificate authority carries one.
-	if !ca.IsCA() {
-		return fmt.Errorf("%s is not a certificate authority", opt.X509.Revoke.SignedBy)
-	}
-
-	/* find the Certificate */
-	s, err = v.Read(args[0])
+	/* find the Certificate -- read once, outside the CA's
+	 * read-modify-write: its serial is all the revocation needs, and it
+	 * does not change with the CA's state */
+	s, err := v.Read(args[0])
 	if err != nil {
 		return err
 	}
@@ -791,33 +890,61 @@ func (c *CLI) cmdX509Revoke(command string, args ...string) error {
 		return err
 	}
 
-	//A revocation list names serial numbers, and a serial number only
-	// identifies a certificate within the authority that issued it. safe
-	// numbers the certificates each of its CAs issues from one, so a serial
-	// borrowed from another CA is very likely to be one this CA handed out
-	// itself: revoking a foreign certificate would revoke an unrelated one
-	// of the CA's own, and say nothing about the certificate named here.
-	if err := ca.Certificate.CheckSignature(
-		cert.Certificate.SignatureAlgorithm,
-		cert.Certificate.RawTBSCertificate,
-		cert.Certificate.Signature,
-	); err != nil {
-		return fmt.Errorf("%s was not signed by %s", args[0], opt.X509.Revoke.SignedBy)
-	}
+	//The CA's read-modify-write runs under check-and-set: a concurrent
+	// revocation or issuance landing between the read and the write
+	// conflicts and forces a retry against the fresh CA, so the other
+	// writer's revocation entries survive -- the exact lost-revocation
+	// hazard this list exists to prevent. Both checks below run per
+	// attempt, against each attempt's fresh CA, never a cached one.
+	_, err = v.Update(opt.X509.Revoke.SignedBy, func(cs *vault.Secret, exists bool) (*vault.Secret, bool, error) {
+		if !exists {
+			p, _, _ := vault.ParsePath(opt.X509.Revoke.SignedBy)
+			return nil, false, vault.NewSecretNotFoundError(p)
+		}
+		ca, err := cs.X509(true)
+		if err != nil {
+			return nil, false, err
+		}
+		//Revocation is recorded on the CA's revocation list, and only a
+		// certificate authority carries one.
+		if !ca.IsCA() {
+			return nil, false, fmt.Errorf("%s is not a certificate authority", opt.X509.Revoke.SignedBy)
+		}
 
-	/* revoke the Certificate */
-	ca.Revoke(cert)
-	s, err = ca.Secret(false) // SkipIfExists doesnt make sense in the context of revoke
-	if err != nil {
-		return err
-	}
+		//A revocation list names serial numbers, and a serial number only
+		// identifies a certificate within the authority that issued it.
+		// safe numbers the certificates each of its CAs issues from one,
+		// so a serial borrowed from another CA is very likely to be one
+		// this CA handed out itself: revoking a foreign certificate would
+		// revoke an unrelated one of the CA's own, and say nothing about
+		// the certificate named here. Re-checked per attempt: a CA swapped
+		// for a different authority mid-retry must be refused, not
+		// credited with a foreign serial.
+		if err := ca.Certificate.CheckSignature(
+			cert.Certificate.SignatureAlgorithm,
+			cert.Certificate.RawTBSCertificate,
+			cert.Certificate.Signature,
+		); err != nil {
+			return nil, false, fmt.Errorf("%s was not signed by %s", args[0], opt.X509.Revoke.SignedBy)
+		}
 
-	err = v.Write(opt.X509.Revoke.SignedBy, s)
-	if err != nil {
-		return err
-	}
+		//A concurrent writer may have revoked this same certificate
+		// already; re-publishing the list to record nothing new would be
+		// pointless churn, so the write is declined and the winner's
+		// version stands.
+		if ca.HasRevoked(cert) {
+			return nil, false, nil
+		}
 
-	return nil
+		/* revoke the Certificate */
+		ca.Revoke(cert)
+		out, err := ca.Secret(false) // SkipIfExists doesnt make sense in the context of revoke
+		if err != nil {
+			return nil, false, err
+		}
+		return out, true, nil
+	})
+	return err
 }
 
 func (c *CLI) cmdX509Show(command string, args ...string) error {
@@ -1105,28 +1232,31 @@ func (c *CLI) cmdX509Crl(command string, args ...string) error {
 	}
 	v := connect(true)
 
-	s, err := v.Read(args[0])
-	if err != nil {
-		return err
-	}
-	ca, err := s.X509(true)
-	if err != nil {
-		return err
-	}
+	//A read-modify-write under check-and-set, like every other CA save: a
+	// revocation some concurrent process records between this read and
+	// this write must survive into the regenerated list, so a conflict
+	// re-parses the fresh CA -- never a reused object, whose CRL number
+	// would double-bump -- and re-signs from that.
+	_, err := v.Update(args[0], func(s *vault.Secret, exists bool) (*vault.Secret, bool, error) {
+		if !exists {
+			p, _, _ := vault.ParsePath(args[0])
+			return nil, false, vault.NewSecretNotFoundError(p)
+		}
+		ca, err := s.X509(true)
+		if err != nil {
+			return nil, false, err
+		}
 
-	if !ca.IsCA() {
-		return fmt.Errorf("%s is not a certificate authority", args[0])
-	}
+		if !ca.IsCA() {
+			return nil, false, fmt.Errorf("%s is not a certificate authority", args[0])
+		}
 
-	/* simply re-saving the CA X509 object regens the CRL */
-	s, err = ca.Secret(false) // SkipIfExists doesn't make sense in the context of crl regeneration
-	if err != nil {
-		return err
-	}
-	err = v.Write(args[0], s)
-	if err != nil {
-		return err
-	}
-
-	return nil
+		/* simply re-saving the CA X509 object regens the CRL */
+		out, err := ca.Secret(false) // SkipIfExists doesn't make sense in the context of crl regeneration
+		if err != nil {
+			return nil, false, err
+		}
+		return out, true, nil
+	})
+	return err
 }

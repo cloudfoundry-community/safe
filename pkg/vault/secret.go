@@ -275,7 +275,7 @@ func (s *Secret) RSAKey(bits int, skipIfExists bool) error {
 // SSHKey generates a new public/private keypair, and stores
 // it in the secret, under the 'public' and 'private' keys.
 func (s *Secret) SSHKey(bits int, skipIfExists bool) error {
-	private, public, fingerprint, err := sshkey(bits)
+	private, public, fingerprint, err := sshkeyGen(bits)
 	if err != nil {
 		return err
 	}

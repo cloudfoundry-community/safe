@@ -180,24 +180,38 @@ func (c *CLI) cmdFmt(command string, args ...string) error {
 	}
 
 	v := connect(true)
-	s, err := v.Read(path)
+	// The encoding re-derives from each attempt's fresh state: on a
+	// check-and-set conflict the retry re-reads and re-encodes whatever
+	// the concurrent writer left at oldKey, so the stored copy always
+	// matches the value beside it. Re-running the format costs at most a
+	// bcrypt round per retry, which is cents next to writing a hash of a
+	// value that is no longer there.
+	var skipped bool
+	_, err := v.Update(path, func(s *vault.Secret, exists bool) (*vault.Secret, bool, error) {
+		skipped = false
+		if !exists {
+			p, _, _ := vault.ParsePath(path)
+			return nil, false, vault.NewSecretNotFoundError(p)
+		}
+		if opt.SkipIfExists && s.Has(newKey) {
+			skipped = true
+			return nil, false, nil
+		}
+		if err := s.FormatWithCost(oldKey, newKey, fmtType, cost, opt.SkipIfExists); err != nil {
+			if vault.IsNotFound(err) {
+				return nil, false, fmt.Errorf("%s:%s does not exist, cannot create %s encoded copy at %s:%s", path, oldKey, fmtType, path, newKey)
+			}
+			return nil, false, fmt.Errorf("Error encoding %s:%s as %s: %s", path, oldKey, fmtType, err)
+		}
+		return nil, true, nil
+	})
 	if err != nil {
 		return err
 	}
-	if opt.SkipIfExists && s.Has(newKey) {
-		if !opt.Quiet {
-			_, _ = fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to reformat} @C{%s:%s} @R{to} @C{%s} @R{as it is already present in Vault}\n", path, oldKey, newKey)
-		}
-		return nil
+	if skipped && !opt.Quiet {
+		_, _ = fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to reformat} @C{%s:%s} @R{to} @C{%s} @R{as it is already present in Vault}\n", path, oldKey, newKey)
 	}
-	if err = s.FormatWithCost(oldKey, newKey, fmtType, cost, opt.SkipIfExists); err != nil {
-		if vault.IsNotFound(err) {
-			return fmt.Errorf("%s:%s does not exist, cannot create %s encoded copy at %s:%s", path, oldKey, fmtType, path, newKey)
-		}
-		return fmt.Errorf("Error encoding %s:%s as %s: %s", path, oldKey, fmtType, err)
-	}
-
-	return v.Write(path, s)
+	return nil
 }
 
 // curlMethods are the methods safe curl will send. LIST is Vault's own; the

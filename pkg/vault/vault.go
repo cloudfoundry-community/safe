@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -105,11 +106,20 @@ func NewVault(conf VaultConfig) (*Vault, error) {
 				Timeout: 30 * time.Second,
 				Transport: &http.Transport{
 					Proxy: proxyRouter.Proxy,
+					DialContext: (&net.Dialer{
+						Timeout:   10 * time.Second,
+						KeepAlive: 30 * time.Second,
+					}).DialContext,
+					ForceAttemptHTTP2:     true,
+					TLSHandshakeTimeout:   10 * time.Second,
+					IdleConnTimeout:       90 * time.Second,
+					ExpectContinueTimeout: 1 * time.Second,
+					MaxIdleConnsPerHost:   100,
 					TLSClientConfig: &tls.Config{
 						RootCAs:            conf.CACerts,
 						InsecureSkipVerify: conf.SkipVerify, // #nosec G402 - User-controlled via config for development/testing
+						ClientSessionCache: tls.NewLRUClientSessionCache(32),
 					},
-					MaxIdleConnsPerHost: 100,
 				},
 			},
 			Trace: func() (ret io.Writer) {

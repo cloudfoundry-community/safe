@@ -27,10 +27,16 @@ var isTerminal = isatty.IsTerminal
 
 type ProxyRouter struct {
 	ProxyConf httpproxy.Config
+
+	// proxyFunc is ProxyConf.ProxyFunc(), computed once at construction time.
+	// ProxyFunc() re-parses the proxy URLs and recompiles the NoProxy matcher
+	// on every call, and Proxy runs on every outbound HTTP request, so
+	// caching it here turns per-request parsing into a one-time cost.
+	proxyFunc func(*url.URL) (*url.URL, error)
 }
 
 func (n ProxyRouter) Proxy(req *http.Request) (*url.URL, error) {
-	return n.ProxyConf.ProxyFunc()(req.URL)
+	return n.proxyFunc(req.URL)
 }
 
 func NewProxyRouter() (*ProxyRouter, error) {
@@ -78,12 +84,15 @@ func NewProxyRouter() (*ProxyRouter, error) {
 		}
 	}
 
+	proxyConf := httpproxy.Config{
+		HTTPProxy:  httpProxy,
+		HTTPSProxy: httpsProxy,
+		NoProxy:    noProxy,
+	}
+
 	return &ProxyRouter{
-		ProxyConf: httpproxy.Config{
-			HTTPProxy:  httpProxy,
-			HTTPSProxy: httpsProxy,
-			NoProxy:    noProxy,
-		},
+		ProxyConf: proxyConf,
+		proxyFunc: proxyConf.ProxyFunc(),
 	}, nil
 }
 

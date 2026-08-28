@@ -2,6 +2,7 @@ package vault
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -14,12 +15,15 @@ import (
 // directly since neither this var nor genDHParam is exported.
 var dhparamGen = genDHParam
 
-func genDHParam(bits int) (string, error) {
+func genDHParam(ctx context.Context, bits int) (string, error) {
 	// Validate bits parameter
 	if bits != 1024 && bits != 2048 && bits != 4096 {
 		return "", fmt.Errorf("invalid DH parameter bits: %d (must be 1024, 2048, or 4096)", bits)
 	}
-	cmd := exec.Command("openssl", "dhparam", fmt.Sprintf("%d", bits)) // #nosec G204 - bits parameter is validated
+	// CommandContext is what makes fan-out cancellation worth anything
+	// here: dhparam at 4096 bits runs for minutes, and when a sibling
+	// path fails there is no reason to let this child finish.
+	cmd := exec.CommandContext(ctx, "openssl", "dhparam", fmt.Sprintf("%d", bits)) // #nosec G204 - bits parameter is validated
 	// Several of these may now run at once under cmdDhparam's parallel
 	// grouping; openssl writes its progress dots straight to stderr, and
 	// several of those streams interleaved on safe's own stderr would be

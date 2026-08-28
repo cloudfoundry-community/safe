@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -181,7 +182,7 @@ func (c *CLI) cmdGet(command string, args ...string) error {
 	// fn always returns nil: per-path errors are aggregated by the
 	// sequential loop below exactly as before, so EachLimit's fail-fast
 	// never triggers here and the always-nil return is deliberate.
-	_ = parallel.EachLimit(args, max(runtime.NumCPU(), 4), func(i int, path string) error {
+	_ = parallel.EachLimit(context.Background(), args, max(runtime.NumCPU(), 4), func(_ context.Context, i int, path string) error {
 		s, err := v.Read(path)
 		fetches[i] = fetched{s: s, err: err}
 		return nil
@@ -634,6 +635,21 @@ func checkDeletePath(path, verb string, opt *Options) error {
 	})
 }
 
+// allNotFound reports whether every failure err carries is a not-found, the
+// only kind --force may swallow. DeleteTree and MoveCopyTree are fan-outs,
+// so err may be a *parallel.Errors holding several siblings; whichever
+// failure won the arrival race says nothing about the others, so each one
+// must answer to IsNotFound before the whole error is suppressible. A bare
+// error -- a single failure, or one raised before any fan-out -- is judged
+// directly, as before.
+func allNotFound(err error) bool {
+	var errs *parallel.Errors
+	if errors.As(err, &errs) {
+		return errs.All(vault.IsNotFound)
+	}
+	return vault.IsNotFound(err)
+}
+
 func (c *CLI) cmdDelete(command string, args ...string) error {
 	opt := c.opt
 	r := c.r
@@ -670,14 +686,14 @@ func (c *CLI) cmdDelete(command string, args ...string) error {
 			if err := v.DeleteTree(path, vault.DeleteOpts{
 				Destroy: opt.Delete.Destroy,
 				All:     opt.Delete.All,
-			}); err != nil && (!vault.IsNotFound(err) || !opt.Delete.Force) {
+			}); err != nil && (!allNotFound(err) || !opt.Delete.Force) {
 				return err
 			}
 		} else {
 			if err := v.Delete(path, vault.DeleteOpts{
 				Destroy: opt.Delete.Destroy,
 				All:     opt.Delete.All,
-			}); err != nil && (!vault.IsNotFound(err) || !opt.Delete.Force) {
+			}); err != nil && (!allNotFound(err) || !opt.Delete.Force) {
 				return err
 			}
 		}
@@ -1056,7 +1072,7 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 		// the same worker count as gen/ssh/rsa.
 		pairs := importPairs(data.Data)
 
-		return parallel.EachLimit(pairs, max(runtime.NumCPU(), 4), func(_ int, pair importPair) error {
+		return parallel.EachLimit(context.Background(), pairs, max(runtime.NumCPU(), 4), func(_ context.Context, _ int, pair importPair) error {
 			path, secret := pair.path, pair.secret
 			s := vault.SecretEntry{
 				Path: path,
@@ -1186,12 +1202,12 @@ func (c *CLI) moveCopy(v *vault.Vault, args []string, p moveCopyParams) error {
 			return nil /* skip this command, process the next */
 		}
 		err := v.MoveCopyTree(args[0], args[1], p.move, opts)
-		if err != nil && (!vault.IsNotFound(err) || !p.force) {
+		if err != nil && (!allNotFound(err) || !p.force) {
 			return err
 		}
 	} else {
 		err := p.op(args[0], args[1], opts)
-		if err != nil && (!vault.IsNotFound(err) || !p.force) {
+		if err != nil && (!allNotFound(err) || !p.force) {
 			return err
 		}
 	}

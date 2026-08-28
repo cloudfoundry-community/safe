@@ -51,6 +51,10 @@ type cliFakeVault struct {
 	// read to fail for a reason other than the secret not being there. See
 	// denyGet.
 	forbidGet map[string]bool
+	//forbidDelete names paths whose DELETE answers 403, for tests that need
+	// one path of a recursive delete to fail for a reason --force must not
+	// swallow. See denyDelete.
+	forbidDelete map[string]bool
 
 	// gate, when non-nil, parks every request matching its pattern before
 	// dispatch. Installed by holdRequests. The pointer itself is guarded by
@@ -160,6 +164,17 @@ func (f *cliFakeVault) denyGet(path string) {
 	f.forbidGet[path] = true
 }
 
+// denyDelete makes a DELETE of path answer 403, so one path of a recursive
+// delete can fail for a reason other than the secret not being there.
+func (f *cliFakeVault) denyDelete(path string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.forbidDelete == nil {
+		f.forbidDelete = map[string]bool{}
+	}
+	f.forbidDelete[path] = true
+}
+
 // fakeVersion is one version of a version 2 secret. A version is alive until
 // it is deleted, which is reversible, or destroyed, which is not.
 type fakeVersion struct {
@@ -258,13 +273,21 @@ func (f *cliFakeVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 
 	case r.Method == http.MethodDelete:
+		if f.forbidDelete[path] {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = fmt.Fprintf(w, `{"errors":["permission denied: %s"]}`, path)
+			return
+		}
 		delete(f.data, path)
 		w.WriteHeader(http.StatusNoContent)
 
 	default:
 		if f.forbidGet[path] {
+			// The denied path rides in the body so a test collecting
+			// several failures can tell them apart: vaultkv folds the
+			// body's errors array into ErrForbidden's message.
 			w.WriteHeader(http.StatusForbidden)
-			_, _ = w.Write([]byte(`{"errors":["permission denied"]}`))
+			_, _ = fmt.Fprintf(w, `{"errors":["permission denied: %s"]}`, path)
 			return
 		}
 		kv, ok := f.data[path]

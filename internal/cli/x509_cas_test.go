@@ -122,6 +122,21 @@ func injectConcurrentIssuance(t *testing.T, fv *cliFakeVault, caPath string) fun
 	}
 }
 
+// injectConcurrentCAKeySwap replaces the stored CA with a different
+// authority whose key is a different type, simulating a concurrent CA
+// rotation mid-retry -- the hazard a per-attempt signature-algorithm reset
+// exists to survive.
+func injectConcurrentCAKeySwap(t *testing.T, fv *cliFakeVault, caPath string, swap *vault.X509) func() {
+	return func() {
+		s, err := swap.Secret(false)
+		if err != nil {
+			t.Errorf("swap CA at %s: %v", caPath, err)
+			return
+		}
+		fv.setV2(caPath, secretToKV(s))
+	}
+}
+
 // injectConcurrentRevocation plays a process that revoked leaf under the
 // stored CA.
 func injectConcurrentRevocation(t *testing.T, fv *cliFakeVault, caPath string, leaf *vault.X509) func() {
@@ -477,6 +492,65 @@ func TestX509ReissueRetriesAgainstFreshCA(t *testing.T) {
 	}
 	if gets, puts := v2DataTraffic(fv, "ca"); gets != 3 || puts != 2 {
 		t.Errorf("CA traffic = %d GETs, %d PUTs; want 3 and 2", gets, puts)
+	}
+}
+
+// A CA swapped for a different key type mid-retry must not carry the
+// first attempt's signature-algorithm choice into the second: reissue
+// resets it to Unknown before every attempt's Sign call, so the retry
+// re-derives from the fresh (here, EC) CA's key instead of validating a
+// now-incompatible RSA-derived choice against it.
+func TestX509ReissueAdaptsSignatureAlgorithmToCAKeySwap(t *testing.T) {
+	isolateHome(t)
+	fv := newCLIFakeV2(t)
+	ca := newCA(t, "authority")
+	leafA := newLeaf(t, ca, "a")
+	storeCertV2(t, fv, "secret/ca", ca)
+	storeCertV2(t, fv, "secret/a", leafA)
+
+	ecCA := newECCA(t, "authority-ec")
+	fv.afterRequest(`^GET /v1/secret/data/ca(\?.*)?$`, 2,
+		injectConcurrentCAKeySwap(t, fv, "secret/ca", ecCA))
+
+	c := newX509CLI(t)
+	c.opt.X509.Reissue.SignedBy = "secret/ca"
+	captureStdout(t, func() {
+		if err := c.cmdX509Reissue("x509 reissue", "secret/a"); err != nil {
+			t.Fatalf("reissue after a CA key swap: %v", err)
+		}
+	})
+
+	reissued := latestLeafCertV2(t, fv, "secret/a")
+	if reissued.SignatureAlgorithm != x509.ECDSAWithSHA256 {
+		t.Errorf("reissued signature algorithm = %s, want ECDSA-with-SHA256 derived from the swapped CA's key", reissued.SignatureAlgorithm)
+	}
+}
+
+// renew resets the same way, matching reissue: the identical mid-retry
+// CA-key-swap hazard gets the identical answer in both commands.
+func TestX509RenewAdaptsSignatureAlgorithmToCAKeySwap(t *testing.T) {
+	isolateHome(t)
+	fv := newCLIFakeV2(t)
+	ca := newCA(t, "authority")
+	leafA := newLeaf(t, ca, "a")
+	storeCertV2(t, fv, "secret/ca", ca)
+	storeCertV2(t, fv, "secret/a", leafA)
+
+	ecCA := newECCA(t, "authority-ec")
+	fv.afterRequest(`^GET /v1/secret/data/ca(\?.*)?$`, 2,
+		injectConcurrentCAKeySwap(t, fv, "secret/ca", ecCA))
+
+	c := newX509CLI(t)
+	c.opt.X509.Renew.SignedBy = "secret/ca"
+	captureStdout(t, func() {
+		if err := c.cmdX509Renew("x509 renew", "secret/a"); err != nil {
+			t.Fatalf("renew after a CA key swap: %v", err)
+		}
+	})
+
+	renewed := latestLeafCertV2(t, fv, "secret/a")
+	if renewed.SignatureAlgorithm != x509.ECDSAWithSHA256 {
+		t.Errorf("renewed signature algorithm = %s, want ECDSA-with-SHA256 derived from the swapped CA's key", renewed.SignatureAlgorithm)
 	}
 }
 

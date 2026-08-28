@@ -799,6 +799,15 @@ func (c *CLI) cmdX509Renew(command string, args ...string) error {
 		}
 
 		cert.Certificate.SignatureAlgorithm = sigAlgo
+	} else {
+		// Re-derive the signature algorithm from the signing CA's key at
+		// signing time, rather than preserving the certificate's existing
+		// value: SignWithSerial validates a set algorithm against the CA's
+		// key instead of deriving one, so a CA reached via --signed-by (or
+		// swapped concurrently mid-retry) with a different key type would
+		// otherwise fail loudly instead of adapting -- matching reissue,
+		// which regenerates the leaf key and faces the identical choice.
+		cert.Certificate.SignatureAlgorithm = x509.UnknownSignatureAlgorithm
 	}
 
 	// Get new expiry date
@@ -842,6 +851,13 @@ func (c *CLI) cmdX509Renew(command string, args ...string) error {
 			}
 			if !fresh.IsCA() {
 				return nil, false, fmt.Errorf("%s is not a certificate authority", caPath)
+			}
+			//Sign fills an unset algorithm from the key of the CA it is
+			// handed; reset per attempt so a retry re-derives from the
+			// fresh CA's key instead of validating the previous attempt's
+			// choice against it.
+			if opt.X509.Renew.SigAlgorithm == "" {
+				cert.Certificate.SignatureAlgorithm = x509.UnknownSignatureAlgorithm
 			}
 			if err := fresh.Sign(cert, ttl); err != nil {
 				return nil, false, err

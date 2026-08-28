@@ -141,6 +141,10 @@ func connectOrErr(auth bool) (*vault.Vault, error) {
 	if cachedVault != nil && key == cachedConnKey {
 		if canonical, err := vault.CanonicalURL(url); err == nil &&
 			cachedVault.Client().Client.VaultURL.String() == canonical {
+			// cmdAuth blanks the shared client's token via SetAuthToken("")
+			// (internal/cli/target.go) without changing any cache-key input,
+			// so re-sync the token the same way the URL is re-validated above.
+			cachedVault.Client().Client.SetAuthToken(conf.Token)
 			return cachedVault, nil
 		}
 	}

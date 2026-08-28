@@ -53,44 +53,65 @@ func (c *CLI) writeHelper(prompt bool, insecure bool, command string, args ...st
 		return err
 	}
 	v := connect(true)
-	s, err := v.Read(path)
-	if err != nil && !vault.IsNotFound(err) {
-		return err
+
+	// Arguments are parsed and the operator prompted at most once each,
+	// however many check-and-set attempts the write takes: parsing echoes
+	// to stderr and may consume stdin or read files, and a prompt answered
+	// twice for one command would read as a confirmation loop. A retry
+	// re-applies the already-collected values against fresh state, with
+	// the clobber check re-deciding there -- so a key some concurrent
+	// process wrote in between turns the retry into the refusal it would
+	// have been had it existed all along.
+	type collectedArg struct {
+		key, val string
+		missing  bool // still needs a prompt
 	}
-	exists := (err == nil)
-	clobberKeys := []string{}
-	for _, arg := range args {
-		k, v, missing, err := parseKeyVal(arg, opt.Quiet)
-		if err != nil {
-			return err
-		}
-		if opt.SkipIfExists && exists && s.Has(k) {
-			clobberKeys = append(clobberKeys, k)
-			// Once a clobber key is found, only collect further clobbers; s.Set is not called.
-			continue
-		}
-		if len(clobberKeys) > 0 {
-			continue
-		}
-		if missing {
-			v, err = pr(k, prompt, insecure)
-			if err != nil {
-				return err
+	collected := make([]*collectedArg, len(args))
+	var clobberKeys []string
+	_, err := v.Update(path, func(s *vault.Secret, exists bool) (*vault.Secret, bool, error) {
+		clobberKeys = nil
+		for i, arg := range args {
+			ca := collected[i]
+			if ca == nil {
+				k, v, missing, err := parseKeyVal(arg, opt.Quiet)
+				if err != nil {
+					return nil, false, err
+				}
+				ca = &collectedArg{key: k, val: v, missing: missing}
+				collected[i] = ca
+			}
+			if opt.SkipIfExists && exists && s.Has(ca.key) {
+				clobberKeys = append(clobberKeys, ca.key)
+				// Once a clobber key is found, only collect further clobbers; s.Set is not called.
+				continue
+			}
+			if len(clobberKeys) > 0 {
+				continue
+			}
+			if ca.missing {
+				val, err := pr(ca.key, prompt, insecure)
+				if err != nil {
+					return nil, false, err
+				}
+				ca.val, ca.missing = val, false
+			}
+			if err := s.Set(ca.key, ca.val, opt.SkipIfExists); err != nil {
+				return nil, false, err
 			}
 		}
-		err = s.Set(k, v, opt.SkipIfExists)
-		if err != nil {
-			return err
+		if len(clobberKeys) > 0 {
+			return nil, false, nil
 		}
+		return nil, true, nil
+	})
+	if err != nil {
+		return err
 	}
-	if len(clobberKeys) > 0 {
-		if !opt.Quiet {
-			_, _ = fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to update} @C{%s}@R{, as the following keys would be clobbered:} @C{%s}\n",
-				path, strings.Join(clobberKeys, ", "))
-		}
-		return nil
+	if len(clobberKeys) > 0 && !opt.Quiet {
+		_, _ = fmt.Fprintf(os.Stderr, "@R{Cowardly refusing to update} @C{%s}@R{, as the following keys would be clobbered:} @C{%s}\n",
+			path, strings.Join(clobberKeys, ", "))
 	}
-	return v.Write(path, s)
+	return nil
 }
 
 func (c *CLI) cmdAsk(command string, args ...string) error {

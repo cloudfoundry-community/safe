@@ -42,6 +42,16 @@ func SetDhparamGenForTest(fn func(ctx context.Context, bits int) (string, error)
 	return func() { dhparamGen = orig }
 }
 
+// SetSSHKeyGenForTest overrides the package's SSH keypair generator seam
+// for tests in vault_test, the external test package, which cannot reach
+// the unexported sshkeyGen var directly. Call the returned restore func
+// (typically via t.Cleanup) to put the real generator back.
+func SetSSHKeyGenForTest(fn func(bits int) (private, public, fingerprint string, err error)) (restore func()) {
+	orig := sshkeyGen
+	sshkeyGen = fn
+	return func() { sshkeyGen = orig }
+}
+
 // SetGenerateKeyForTest overrides the package's key generator seam for
 // tests in vault_test, the external test package, which cannot reach the
 // unexported generateKeyFn var directly. Call the returned restore func

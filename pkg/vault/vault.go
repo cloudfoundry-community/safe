@@ -602,12 +602,30 @@ func (v *Vault) Update(path string, fn func(s *Secret, exists bool) (out *Secret
 
 	var lastConflict error
 	for attempt := 0; attempt < casAttempts; attempt++ {
-		s, ver, err := v.readWithVersion(literal)
+		//The caller's path goes down unre-parsed: readWithVersion and
+		// writeCAS run the same ParsePath themselves, and handing them
+		// the already-unescaped literal would split any escaped colon or
+		// caret in the secret's own name a second time.
+		s, ver, err := v.readWithVersion(path)
 		exists := err == nil
 		if err != nil && !IsNotFound(err) {
 			return 0, err
 		}
 
+		out, write, err := fn(s, exists)
+		if err != nil {
+			return 0, err
+		}
+		if !write {
+			return 0, nil
+		}
+		if out == nil {
+			out = s
+		}
+
+		//Resolved only once fn has asked for a write, so declining fns
+		// and error paths never pay the metadata request the absent
+		// branch can cost.
 		var cas *uint
 		if mount == 2 {
 			if exists {
@@ -625,18 +643,7 @@ func (v *Vault) Update(path string, fn func(s *Secret, exists bool) (out *Secret
 			}
 		}
 
-		out, write, err := fn(s, exists)
-		if err != nil {
-			return 0, err
-		}
-		if !write {
-			return 0, nil
-		}
-		if out == nil {
-			out = s
-		}
-
-		assigned, err := v.writeCAS(literal, out, cas)
+		assigned, err := v.writeCAS(path, out, cas)
 		if err == nil {
 			return assigned, nil
 		}
@@ -646,6 +653,107 @@ func (v *Vault) Update(path string, fn func(s *Secret, exists bool) (out *Secret
 		lastConflict = err
 	}
 	return 0, fmt.Errorf("gave up writing %s after %d attempts against concurrent writers: %w", literal, casAttempts, lastConflict)
+}
+
+// UpdateSteps is Update's chained form, for a group of writes that build
+// on one read: fn runs once per step against the accumulated secret,
+// mutating it in place, and every step that asks for a write persists the
+// whole accumulated state as its own version, check-and-set against the
+// version the previous write assigned (the first, against what the read
+// observed). N steps cost one read plus one write per step. On a conflict
+// the chain re-reads and re-applies only the steps whose writes have not
+// landed -- a persisted step never runs again, its keys already riding
+// along in the fresh read -- while a step that declined its write
+// re-evaluates every pass, which is what lets a skip predicate re-decide
+// against a concurrent writer's state. The whole chain shares one budget
+// of casAttempts read passes, then gives up naming the path. exists
+// reports whether the path held live data as of the current pass's read,
+// flipping to true once any write lands. On a KV v1 mount this degrades
+// to one read and plain writes; v1 stays last-writer-wins.
+func (v *Vault) UpdateSteps(path string, steps int, fn func(step int, s *Secret, exists bool) (write bool, err error)) error {
+	literal, key, version := ParsePath(path)
+	if key != "" {
+		return fmt.Errorf("cannot write to paths in /path:key notation")
+	}
+
+	if version != 0 {
+		return fmt.Errorf("cannot write to paths in /path^version notation")
+	}
+
+	//Cached in the client after the first fetch, same as in Update.
+	mount, err := v.MountVersion(literal)
+	if err != nil {
+		return err
+	}
+
+	persisted := make([]bool, steps)
+	var lastConflict error
+	for attempt := 0; attempt < casAttempts; attempt++ {
+		//Same as in Update: the caller's path goes down unre-parsed.
+		s, ver, err := v.readWithVersion(path)
+		exists := err == nil
+		if err != nil && !IsNotFound(err) {
+			return err
+		}
+
+		var cas *uint
+		casResolved := false
+		if mount == 2 && exists {
+			observed := ver
+			cas = &observed
+			casResolved = true
+		}
+
+		conflicted := false
+		for i := 0; i < steps; i++ {
+			if persisted[i] {
+				continue
+			}
+			write, err := fn(i, s, exists)
+			if err != nil {
+				return err
+			}
+			if !write {
+				continue
+			}
+			//Resolved lazily at the pass's first write, so a chain whose
+			// steps all decline (or fail first) never pays the metadata
+			// request the absent branch can cost.
+			if mount == 2 && !casResolved {
+				cas, err = v.resolveAbsentCAS(literal)
+				if errors.Is(err, errStale404) {
+					lastConflict = err
+					conflicted = true
+					break
+				}
+				if err != nil {
+					return err
+				}
+				casResolved = true
+			}
+			assigned, err := v.writeCAS(path, s, cas)
+			if err == nil {
+				persisted[i] = true
+				exists = true
+				if mount == 2 {
+					observed := assigned
+					cas = &observed
+					casResolved = true
+				}
+				continue
+			}
+			if !vaultkv.IsCASConflict(err) {
+				return err
+			}
+			lastConflict = err
+			conflicted = true
+			break
+		}
+		if !conflicted {
+			return nil
+		}
+	}
+	return fmt.Errorf("gave up writing %s after %d attempts against concurrent writers: %w", literal, casAttempts, lastConflict)
 }
 
 // errIfFolder returns an error with your provided message if the given path is a folder.

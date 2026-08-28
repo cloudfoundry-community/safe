@@ -192,6 +192,13 @@ func (f *cliFakeVault) serveV2Data(w http.ResponseWriter, r *http.Request, path 
 			_, _ = w.Write([]byte(`{"errors":["malformed body"]}`))
 			return
 		}
+		//Every write attempt is recorded, refused ones included, so a
+		// test can compare what a refused write carried against what its
+		// retry carried.
+		if f.dataPuts == nil {
+			f.dataPuts = map[string][]map[string]string{}
+		}
+		f.dataPuts[path] = append(f.dataPuts[path], body.Data)
 		//A check-and-set write must name the current version exactly --
 		// 0 only creates, and Vault counts deleted and destroyed versions
 		// as current (entries are never removed from f.versions), so any

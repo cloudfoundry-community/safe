@@ -19,6 +19,12 @@ LDFLAGS := -X main.Version="$(VERSION)" -X main.BuildTime="$(BUILD_TIME)" -X mai
 BINARY_NAME := safe
 GO_FILES := $(shell find . -name '*.go' -type f -not -path "./vendor/*")
 
+# Release layout. ci/scripts/build runs `make clean release-all` and then tars
+# $(RELEASE_ROOT)/$(PROJECT)-$(VERSION)-* into the build output, so both names
+# are part of the CI contract.
+PROJECT ?= safe
+RELEASE_ROOT ?= release
+
 # Integration suite. TEST_PATH is the suite script, SAFE_PATH the binary it
 # drives, ENGINE the server to run against (vault or bao), and VERSIONS the
 # space-separated engine versions to test. CI overrides all of them; the
@@ -222,11 +228,27 @@ clean: ## Clean build artifacts and test cache
 	@rm -f $(BINARY_NAME) $(BINARY_NAME)-*
 	@rm -f coverage.out coverage.html test.cov
 	@rm -rf artifacts/
+	@rm -rf $(RELEASE_ROOT)/
 	@rm -rf safe-*/
 	@go clean -testcache
 	@echo "$(GREEN)✓ Cleanup complete$(RESET)"
 
 ##@ Release
+
+.PHONY: release-all
+release-all: ## Build versioned binaries into release/ (requires VERSION; this is what ci/scripts/build calls)
+	@echo "$(BLUE)Building $(PROJECT) $(VERSION) release binaries...$(RESET)"
+	@case "$(VERSION)" in */*) \
+		echo "$(RED)ERROR: VERSION must be a release version, not $(VERSION)$(RESET)"; exit 1;; \
+	esac
+	@mkdir -p $(RELEASE_ROOT)
+	@GOOS=linux   GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(RELEASE_ROOT)/$(PROJECT)-$(VERSION)-linux-amd64 ./cmd/safe
+	@GOOS=linux   GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o $(RELEASE_ROOT)/$(PROJECT)-$(VERSION)-linux-arm64 ./cmd/safe
+	@GOOS=darwin  GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(RELEASE_ROOT)/$(PROJECT)-$(VERSION)-darwin-amd64 ./cmd/safe
+	@GOOS=darwin  GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o $(RELEASE_ROOT)/$(PROJECT)-$(VERSION)-darwin-arm64 ./cmd/safe
+	@GOOS=windows GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(RELEASE_ROOT)/$(PROJECT)-$(VERSION)-windows-amd64.exe ./cmd/safe
+	@ls -la $(RELEASE_ROOT)
+	@echo "$(GREEN)✓ Release binaries built in $(RELEASE_ROOT)/$(RESET)"
 
 .PHONY: shipit
 shipit: ## Build release artifacts (requires VERSION env var)

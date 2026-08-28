@@ -563,6 +563,11 @@ type TreeCopyOpts struct {
 }
 
 func (s SecretEntry) Copy(v *Vault, dst string, opts TreeCopyOpts) error {
+	// Every branch below mutates dst directly through the client, bypassing
+	// the Vault methods that would otherwise invalidate the cache; one
+	// invalidation on return covers all of them.
+	defer v.invalidateVersions(dst)
+
 	if opts.Clear {
 		err := v.Client().DestroyAll(dst)
 		if err != nil {
@@ -937,6 +942,7 @@ func (w *treeWorker) workGet(t secretTree) ([]secretTree, error) {
 
 	if t.Deleted {
 		err = w.vault.client.Delete(path, &vaultkv.KVDeleteOpts{Versions: []uint{t.Version}})
+		w.vault.invalidateVersions(path)
 		if err != nil {
 			return nil, err
 		}

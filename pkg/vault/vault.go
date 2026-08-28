@@ -12,7 +12,9 @@ import (
 	"net/url"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -24,6 +26,28 @@ import (
 type Vault struct {
 	client *vaultkv.KV
 	debug  bool
+
+	// versionsMu guards versionsCache, which memoizes Versions per literal
+	// Vault path for the life of the process. The tree walk runs NumCPU
+	// workers concurrently calling Versions, so this must be race-safe.
+	versionsMu    sync.RWMutex
+	versionsCache map[string][]vaultkv.KVVersion
+	// versionsGen counts invalidations per path, and versionsEpoch counts
+	// whole-cache flushes (Curl's non-GET/HEAD case, which cannot be
+	// resolved to one path). Versions snapshots both before its network
+	// fetch and only stores the result if neither moved while the fetch was
+	// in flight: a fetch that straddles an invalidation -- a slow reader
+	// racing a concurrent write -- would otherwise be free to store its
+	// pre-mutation snapshot into the cache AFTER the mutation's own
+	// invalidation already ran, and nothing would ever clear it again. A
+	// plain "was there a cache entry at path X" check at store time cannot
+	// catch this: an over-called invalidateVersions may have already run
+	// and left no entry to compare against, or an unrelated Curl flush may
+	// have moved the epoch without ever touching this path's gen. -race
+	// cannot see this: it is a logical race between requests, not a data
+	// race on memory, since every access here is already lock-guarded.
+	versionsGen   map[string]uint64
+	versionsEpoch uint64
 }
 
 type VaultConfig struct {
@@ -95,7 +119,9 @@ func NewVault(conf VaultConfig) (*Vault, error) {
 				return ret
 			}(),
 		}).NewKV(),
-		debug: shouldDebug(),
+		debug:         shouldDebug(),
+		versionsCache: map[string][]vaultkv.KVVersion{},
+		versionsGen:   map[string]uint64{},
 	}, nil
 }
 
@@ -108,14 +134,63 @@ func (v *Vault) MountVersion(path string) (uint, error) {
 	return v.client.MountVersion(path)
 }
 
+// Versions returns the version history of the secret at path, caching the
+// result per literal Vault path for the life of the process. Every caller
+// gets its own clone, since the tree walk re-slices the result across
+// NumCPU concurrent workers. Errors are never cached: a not-found is often
+// immediately followed by a create, and caching that miss would hide it.
 func (v *Vault) Versions(path string) ([]vaultkv.KVVersion, error) {
 	path = Canonicalize(path)
+
+	v.versionsMu.RLock()
+	cached, ok := v.versionsCache[path]
+	gen := v.versionsGen[path]
+	epoch := v.versionsEpoch
+	v.versionsMu.RUnlock()
+	if ok {
+		return slices.Clone(cached), nil
+	}
+
 	ret, err := v.client.Versions(path)
 	if vaultkv.IsNotFound(err) {
 		return nil, NewSecretNotFoundError(path)
 	}
+	if err != nil {
+		return ret, err
+	}
 
-	return ret, err
+	v.versionsMu.Lock()
+	// Store only if nothing invalidated this path (or flushed the whole
+	// cache) while the fetch above was in flight. Either would mean this
+	// result was read before a concurrent mutation and must not be allowed
+	// to resurrect as the cached value after that mutation's own
+	// invalidation already ran.
+	if v.versionsGen[path] == gen && v.versionsEpoch == epoch {
+		v.versionsCache[path] = ret
+	}
+	v.versionsMu.Unlock()
+
+	return slices.Clone(ret), nil
+}
+
+// invalidateVersions drops the cached history for a literal Vault path and
+// bumps its generation, so a fetch already in flight for it will not store
+// a stale result once it completes. Canonicalize only: ParsePath would
+// truncate a literal ':' in a name. Cheap to over-call; correctness only
+// requires that every mutation path calls it.
+func (v *Vault) invalidateVersions(path string) {
+	path = Canonicalize(path)
+	v.versionsMu.Lock()
+	delete(v.versionsCache, path)
+	v.versionsGen[path]++
+	v.versionsMu.Unlock()
+}
+
+// UndeleteVersions undeletes the named versions of a secret at a literal
+// Vault path, invalidating any cached version history for it.
+func (v *Vault) UndeleteVersions(path string, versions []uint) error {
+	defer v.invalidateVersions(path)
+	return v.client.Undelete(Canonicalize(path), versions)
 }
 
 func shouldDebug() bool {
@@ -128,6 +203,14 @@ func shouldDebug() bool {
 // drop a trailing one -- were run over the whole string, query and all, so a
 // query carrying a URL was sent with its slashes collapsed, ?u=http://a/b
 // arriving as ?u=http:/a/b, and a value ending in a slash arrived without it.
+//
+// Curl's path is an arbitrary API URI, not necessarily a secret path (it can
+// address sys/, auth/, anything), so it cannot be resolved to a single cache
+// key the way every other mutating method here is. A non-GET/HEAD method is
+// assumed capable of mutating some secret's version history, and flushes the
+// whole cache rather than guessing which key. The flush runs regardless of
+// the call's outcome: a PUT that fails partway through Vault's own request
+// handling can still have applied.
 func (v *Vault) Curl(method string, path string, body []byte) (*http.Response, error) {
 	u, err := url.Parse(path)
 	if err != nil {
@@ -137,6 +220,23 @@ func (v *Vault) Curl(method string, path string, body []byte) (*http.Response, e
 	query, err := url.ParseQuery(u.RawQuery)
 	if err != nil {
 		return nil, fmt.Errorf("could not parse query: %w", err)
+	}
+
+	if !strings.EqualFold(method, "GET") && !strings.EqualFold(method, "HEAD") {
+		defer func() {
+			v.versionsMu.Lock()
+			clear(v.versionsCache)
+			// Bumped alongside the clear, not just the clear alone: a path
+			// this Curl call touched but that was never previously
+			// invalidated has no versionsGen entry yet, so its gen would
+			// still read as the same zero value before and after a bare
+			// clear -- indistinguishable from "nothing happened" to a
+			// fetch racing this call. The epoch has no such default-value
+			// collision, since every Versions call reads it fresh under
+			// the same lock this increment holds.
+			v.versionsEpoch++
+			v.versionsMu.Unlock()
+		}()
 	}
 
 	return v.client.Client.Curl(method, Canonicalize(u.Path), query, bytes.NewBuffer(body))
@@ -231,7 +331,7 @@ func (v *Vault) notFoundReading(path string, version uint64) error {
 		return NewSecretNotFoundError(path)
 	}
 
-	versions, err := v.client.Versions(path)
+	versions, err := v.Versions(path)
 	if err != nil || len(versions) == 0 {
 		//No history to consult, so the secret itself is the better answer.
 		return NewSecretNotFoundError(path)
@@ -280,7 +380,7 @@ func (v *Vault) ExplainNotFound(path string, err error) error {
 		return err
 	}
 
-	versions, verr := v.client.Versions(secret)
+	versions, verr := v.Versions(secret)
 	if verr != nil || len(versions) == 0 {
 		//Nothing to consult, so the secret really is the best answer.
 		return err
@@ -322,6 +422,8 @@ func (v *Vault) Write(path string, s *Secret) error {
 	if version != 0 {
 		return fmt.Errorf("cannot write to paths in /path^version notation")
 	}
+
+	defer v.invalidateVersions(path)
 
 	if s.Empty() {
 		return v.deleteIfPresent(EncodePath(path, "", 0), DeleteOpts{})
@@ -586,6 +688,7 @@ func (v *Vault) Delete(path string, opts DeleteOpts) error {
 
 func (v *Vault) deleteEntireSecret(path string, destroy bool, all bool) error {
 	secret, _, version := ParsePath(path)
+	defer v.invalidateVersions(secret)
 
 	if destroy && all {
 		return v.client.DestroyAll(secret)
@@ -693,6 +796,7 @@ func (v *Vault) deleteSpecificKey(path string, opts DeleteOpts) error {
 // DeleteVersions marks the given versions of the given secret as deleted for
 // a v2 backend or actually deletes it for a v1 backend.
 func (v *Vault) DeleteVersions(path string, versions []uint) error {
+	defer v.invalidateVersions(path)
 	return v.client.Delete(path, &vaultkv.KVDeleteOpts{Versions: versions, V1Destroy: true})
 }
 
@@ -701,6 +805,7 @@ func (v *Vault) Undelete(path string) error {
 	if key != "" {
 		return fmt.Errorf("cannot undelete specific key (%s)", path)
 	}
+	defer v.invalidateVersions(secret)
 
 	respVersions, err := v.Versions(secret)
 	if err != nil {
@@ -1009,7 +1114,9 @@ func (v *Vault) MoveCopyTree(oldRoot, newRoot string, move bool, opts MoveCopyOp
 			return nil
 		}
 		if opts.Deep && opts.DeletedVersions {
-			return v.client.DestroyAll(entry.Path)
+			err := v.client.DestroyAll(entry.Path)
+			v.invalidateVersions(entry.Path)
+			return err
 		}
 		// deleteEntireSecret, not v.Delete: Delete re-runs
 		// verifySecretState (a metadata GET per secret) that the walk
@@ -1046,6 +1153,7 @@ func (v *Vault) Move(oldpath, newpath string, opts MoveCopyOpts) error {
 		// deep move that names a key or a version, so nothing is dropped here.
 		rawOldPath, _, _ := ParsePath(oldpath)
 		err = v.client.DestroyAll(rawOldPath)
+		v.invalidateVersions(rawOldPath)
 		if err != nil {
 			return err
 		}

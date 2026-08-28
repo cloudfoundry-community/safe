@@ -109,6 +109,34 @@ func TestCmdGenChainRetriesAfterConflict(t *testing.T) {
 	}
 }
 
+// resolveAbsentCAS degrades to an unconditional write when the metadata
+// read it needs -- after the optimistic cas=0 guess conflicts against a
+// soft-deleted path's surviving version -- comes back 403: a token that
+// can write a path but was never granted read on its metadata must still
+// be able to gen onto a path that was previously deleted, not wedge
+// forever behind a check-and-set it cannot resolve.
+func TestCmdGenSucceedsWhenMetadataForbiddenOnSoftDeletedPath(t *testing.T) {
+	isolateHome(t)
+	fv := newCLIFakeV2(t)
+	fv.setV2("secret/x", map[string]string{"old": "gone"})
+	fv.deleteV2("secret/x", 1)
+	fv.denyMetadataGet("secret/x")
+
+	c := newKeygenCLI(t)
+	c.opt.Gen.Policy = defaultGenPolicy
+	if err := c.cmdGen("gen", "16", "secret/x", "a"); err != nil {
+		t.Fatalf("cmdGen: %v", err)
+	}
+
+	got := latestV2(t, fv, "secret/x")
+	if len(got["a"]) != 16 {
+		t.Errorf("secret/x[a] length = %d, want 16 (keys: %v)", len(got["a"]), keysOf(got))
+	}
+	if states := fv.versionStates("secret/x"); len(states) != 2 {
+		t.Errorf("version states = %v, want 2 (the soft-deleted seed, then the unconditional write)", states)
+	}
+}
+
 // --no-clobber re-decides on the retry: a key the conflict revealed to
 // have been written concurrently is refused, its notice emitted once, and
 // the concurrent value stands.

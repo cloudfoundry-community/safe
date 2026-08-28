@@ -22,6 +22,7 @@ import (
 	"math/big"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cloudfoundry-community/safe/pkg/vault"
 )
@@ -50,8 +51,13 @@ func storeCertV2(t *testing.T, fv *cliFakeVault, path string, x *vault.X509) {
 // call from an afterRequest hook: it reports failures with t.Error, which
 // unlike Fatal may be called off the test goroutine.
 func parseStoredCA(t *testing.T, fv *cliFakeVault, path string) *vault.X509 {
+	data, ok := latestV2Safe(fv, path)
+	if !ok {
+		t.Errorf("no versions at %s", path)
+		return nil
+	}
 	s := vault.NewSecret()
-	for k, v := range latestV2(t, fv, path) {
+	for k, v := range data {
 		if err := s.Set(k, v, false); err != nil {
 			t.Errorf("rebuild %s: %v", path, err)
 			return nil
@@ -63,6 +69,53 @@ func parseStoredCA(t *testing.T, fv *cliFakeVault, path string) *vault.X509 {
 		return nil
 	}
 	return ca
+}
+
+// A broken fixture -- no versions at the path parseStoredCA is asked to
+// parse -- must not hang the caller. parseStoredCA runs on the httptest
+// server's own goroutine when an afterRequest hook calls it, and calling
+// Fatal there is undefined by testing's own contract: Fatal/FailNow must
+// run on the goroutine executing the test, unlike Error/Errorf, which are
+// documented safe from any goroutine. parseStoredCA reports failures with
+// t.Error precisely to honor that contract.
+//
+// The hook is handed a standalone *testing.T rather than this test's own:
+// that keeps its (expected, deliberate) failure from propagating to this
+// test's result -- Go's runner fails an ancestor whenever any t.Run child
+// does -- while still exercising the exact reporting path (Errorf, mutex
+// and all) a real *testing.T uses. The round trip is bounded well under a
+// real client's own timeout, so a regression that reintroduces a
+// Fatal-based call here fails this test promptly instead of hanging it.
+func TestParseStoredCAReportsBrokenFixtureWithoutHanging(t *testing.T) {
+	isolateHome(t)
+	fv := newCLIFakeV2(t)
+	fv.setV2("secret/other", map[string]string{"k": strings.Repeat("x", 4096)})
+
+	sub := &testing.T{}
+	fv.afterRequest(`^GET /v1/secret/data/other(\?.*)?$`, 1, func() {
+		parseStoredCA(sub, fv, "secret/never-written")
+	})
+
+	c := newKeygenCLI(t)
+	c.opt.Gen.Policy = defaultGenPolicy
+
+	done := make(chan error, 1)
+	go func() { done <- c.cmdGen("gen", "16", "secret/other", "trigger") }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("cmdGen: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		// A hang here means the hook abandoned the response mid-flight
+		// instead of reporting through t.Error.
+		t.Fatal("cmdGen did not return within 3s: the afterRequest hook appears to have hung the response")
+	}
+
+	if !sub.Failed() {
+		t.Error("expected parseStoredCA to record the broken fixture at secret/never-written as a failure")
+	}
 }
 
 // latestCASerialV2 parses the hex serial counter of the newest CA version.

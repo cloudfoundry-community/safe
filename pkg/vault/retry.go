@@ -39,8 +39,12 @@ const (
 //     method to admit. Writes are never retried here: replaying a PUT
 //     would surface check-and-set conflicts from the wrong layer, and
 //     POST/DELETE are not idempotent.
-//   - On HTTP 429, and on connection-refused/connection-reset transport
-//     errors, which fail before Vault processes anything.
+//   - On HTTP 429, and on a connection-reset transport error, the
+//     genuinely transient case where a connection Vault (or whatever
+//     sits in front of it) already accepted then dropped mid-request.
+//     A refused connection is not retried: nothing is listening at all,
+//     which a wrong or unset VAULT_ADDR produces on every dial, and
+//     retrying only adds dials and sleeps to what should fail at once.
 //   - Never on 503: a sealed or unavailable Vault must surface
 //     immediately, not hide behind sleeps.
 type retryTransport struct {
@@ -105,12 +109,14 @@ func fitsBeforeDeadline(ctx context.Context, wait time.Duration) bool {
 }
 
 // retryableFailure reports whether one attempt's outcome is worth another
-// wire request: a 429, or a transport-level refusal/reset that failed
-// before a response existed. Any other response -- 503 sealed-Vault
-// semantics included -- or error surfaces as-is.
+// wire request: a 429, or a connection reset, which failed mid-connection
+// rather than because nothing was listening. Any other response -- 503
+// sealed-Vault semantics included -- or error surfaces as-is; a
+// connection refused especially so, since nothing about a repeat dial
+// makes a missing listener appear.
 func retryableFailure(resp *http.Response, err error) bool {
 	if err != nil {
-		return errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET)
+		return errors.Is(err, syscall.ECONNRESET)
 	}
 	return resp.StatusCode == http.StatusTooManyRequests
 }

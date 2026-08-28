@@ -267,9 +267,11 @@ func TestSealedVaultNotRetried(t *testing.T) {
 	}
 }
 
-// A connection refused fails before Vault processes anything, so reads
-// retry it: three attempts, two backoffs, then the error surfaces.
-func TestConnectionRefusedRetried(t *testing.T) {
+// A refused connection essentially never resolves inside the backoff
+// window: nothing is listening at all, which a wrong or unset VAULT_ADDR
+// produces on every dial. Retrying it only adds three dials and a couple
+// of sleeps to what should be an immediate, diagnosable failure.
+func TestConnectionRefusedFailsFast(t *testing.T) {
 	// Port 1 answers nothing on any sane machine; every dial is refused.
 	v, err := vault.NewVault(vault.VaultConfig{URL: "http://127.0.0.1:1", Token: "test-token"})
 	if err != nil {
@@ -279,6 +281,49 @@ func TestConnectionRefusedRetried(t *testing.T) {
 
 	if _, err := v.Read("secret/a"); err == nil {
 		t.Fatal("Read against a refused connection succeeded, want error")
+	}
+	if len(*sleeps) != 0 {
+		t.Errorf("backoff sleeps = %d, want 0: a refused connection must fail on the first attempt", len(*sleeps))
+	}
+}
+
+// A connection reset happens after Vault (or whatever is in front of it)
+// already accepted the TCP handshake, which is the genuinely transient
+// case worth another attempt: three tries, two backoffs, then the error
+// surfaces.
+func TestConnectionResetRetried(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			// Read whatever the client sent, then reset rather than
+			// close cleanly: SetLinger(0) makes the kernel send an RST
+			// instead of a FIN, which is what surfaces as ECONNRESET on
+			// the client side rather than a clean EOF.
+			buf := make([]byte, 4096)
+			_, _ = conn.Read(buf)
+			if tcp, ok := conn.(*net.TCPConn); ok {
+				_ = tcp.SetLinger(0)
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	v, err := vault.NewVault(vault.VaultConfig{URL: "http://" + ln.Addr().String(), Token: "test-token"})
+	if err != nil {
+		t.Fatalf("NewVault: %v", err)
+	}
+	sleeps := recordSleeps(t, v)
+
+	if _, err := v.Read("secret/a"); err == nil {
+		t.Fatal("Read against a reset connection succeeded, want error")
 	}
 	if len(*sleeps) != 2 {
 		t.Errorf("backoff sleeps = %d, want 2 (three attempts)", len(*sleeps))

@@ -37,3 +37,28 @@ func TestTransportIsTuned(t *testing.T) {
 		t.Error("idle connections never expire")
 	}
 }
+
+func TestCanonicalURL(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want string
+	}{
+		{"https://vault.example.com", "https://vault.example.com:443"},
+		{"http://vault.example.com", "http://vault.example.com:80"},
+		{"https://vault.example.com:8200", "https://vault.example.com:8200"},
+		{"https://vault.example.com/", "https://vault.example.com:443"},
+	}
+	for _, c := range cases {
+		got, err := vault.CanonicalURL(c.raw)
+		if err != nil {
+			t.Fatalf("CanonicalURL(%q): %v", c.raw, err)
+		}
+		if got != c.want {
+			t.Errorf("CanonicalURL(%q) = %q, want %q", c.raw, got, c.want)
+		}
+	}
+
+	if _, err := vault.CanonicalURL("://not a url"); err == nil {
+		t.Error("expected an error for an unparseable URL")
+	}
+}

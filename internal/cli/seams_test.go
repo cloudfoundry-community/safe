@@ -12,9 +12,13 @@ import (
 )
 
 // clearVaultEnv neutralizes every VAULT_* variable connectOrErr inspects so the
-// test controls the connection inputs regardless of the developer's shell.
+// test controls the connection inputs regardless of the developer's shell. It
+// also resets the connect cache on cleanup so a client built by this test
+// (e.g. an unauthenticated one from an empty VAULT_TOKEN) cannot be handed
+// back to a later test whose env happens to produce the same cache key.
 func clearVaultEnv(t *testing.T) {
 	t.Helper()
+	t.Cleanup(resetConnectCache)
 	for _, k := range []string{
 		"VAULT_ADDR", "VAULT_TOKEN", "VAULT_CACERT",
 		"VAULT_NAMESPACE", "VAULT_SKIP_VERIFY",

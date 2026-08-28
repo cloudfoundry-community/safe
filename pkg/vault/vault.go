@@ -59,6 +59,28 @@ type VaultConfig struct {
 	SkipVerify bool
 }
 
+// CanonicalURL applies the scheme-default-port normalization NewVault uses
+// when building a client's VaultURL, so callers can compare a client's live
+// URL against a raw address without duplicating that logic.
+func CanonicalURL(raw string) (string, error) {
+	u, err := url.Parse(strings.TrimSuffix(raw, "/"))
+	if err != nil {
+		return "", fmt.Errorf("could not parse Vault URL: %w", err)
+	}
+
+	//The default port for Vault is typically 8200 (which is the VaultKV default),
+	// but safe has historically ignored that and used the default http or https
+	// port, depending on which was specified as the scheme
+	if u.Port() == "" {
+		port := ":80"
+		if strings.ToLower(u.Scheme) == "https" {
+			port = ":443"
+		}
+		u.Host = u.Host + port
+	}
+	return u.String(), nil
+}
+
 // NewVault creates a new Vault object.  If an empty token is specified,
 // the current user's token is read from ~/.vault-token.
 func NewVault(conf VaultConfig) (*Vault, error) {
@@ -72,20 +94,13 @@ func NewVault(conf VaultConfig) (*Vault, error) {
 			return nil, fmt.Errorf("unable to retrieve system root certificate authorities: %w", err)
 		}
 	}
-	vaultURL, err := url.Parse(strings.TrimSuffix(conf.URL, "/"))
+	canonical, err := CanonicalURL(conf.URL)
+	if err != nil {
+		return nil, err
+	}
+	vaultURL, err := url.Parse(canonical)
 	if err != nil {
 		return nil, fmt.Errorf("could not parse Vault URL: %w", err)
-	}
-
-	//The default port for Vault is typically 8200 (which is the VaultKV default),
-	// but safe has historically ignored that and used the default http or https
-	// port, depending on which was specified as the scheme
-	if vaultURL.Port() == "" {
-		port := ":80"
-		if strings.ToLower(vaultURL.Scheme) == "https" {
-			port = ":443"
-		}
-		vaultURL.Host = vaultURL.Host + port
 	}
 
 	proxyRouter, err := NewProxyRouter()

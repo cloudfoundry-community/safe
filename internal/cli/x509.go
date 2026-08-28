@@ -200,25 +200,6 @@ func (c *CLI) cmdX509Issue(command string, args ...string) error {
 		}
 	}
 
-	if opt.X509.Issue.SignedBy != "" {
-		secret, err := v.Read(opt.X509.Issue.SignedBy)
-		if err != nil {
-			return err
-		}
-
-		ca, err = secret.X509(true)
-		if err != nil {
-			return err
-		}
-
-		//Signing with a certificate that is not an authority produces one no
-		// relying party will accept, and nothing further along says so: the
-		// certificate is written, looks ordinary, and fails at the far end.
-		if !ca.IsCA() {
-			return fmt.Errorf("%s is not a certificate authority", opt.X509.Issue.SignedBy)
-		}
-	}
-
 	if len(opt.X509.Issue.KeyUsage) == 0 {
 		opt.X509.Issue.KeyUsage = append(opt.X509.Issue.KeyUsage, "server_auth", "client_auth")
 		if opt.X509.Issue.CA {
@@ -226,14 +207,50 @@ func (c *CLI) cmdX509Issue(command string, args ...string) error {
 		}
 	}
 
+	//A bad key spec or a malformed subject is knowable from the flags alone,
+	// so both are refused before the CA read and before any key generation
+	// is paid for.
 	spec, err := vault.ResolveKeySpec(opt.X509.Issue.Type, opt.X509.Issue.Bits, opt.X509.Issue.Curve, nil)
 	if err != nil {
 		return err
 	}
+	if _, err := vault.ParseSubject(opt.X509.Issue.Subject); err != nil {
+		return err
+	}
 
-	cert, err := vault.NewCertificate(opt.X509.Issue.Subject,
+	//The CA read is a network round trip and the key draw is pure CPU, and
+	// neither depends on the other, so they run at the same time and join
+	// here. A CA problem comes back without waiting the generation out.
+	key, err := vault.GenerateKeyWhileFetching(spec, func() error {
+		if opt.X509.Issue.SignedBy == "" {
+			return nil
+		}
+		secret, rerr := v.Read(opt.X509.Issue.SignedBy)
+		if rerr != nil {
+			return rerr
+		}
+
+		signer, xerr := secret.X509(true)
+		if xerr != nil {
+			return xerr
+		}
+
+		//Signing with a certificate that is not an authority produces one no
+		// relying party will accept, and nothing further along says so: the
+		// certificate is written, looks ordinary, and fails at the far end.
+		if !signer.IsCA() {
+			return fmt.Errorf("%s is not a certificate authority", opt.X509.Issue.SignedBy)
+		}
+		ca = signer
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	cert, err := vault.NewCertificateWithKey(opt.X509.Issue.Subject,
 		uniq(opt.X509.Issue.Name), opt.X509.Issue.KeyUsage,
-		opt.X509.Issue.SigAlgorithm, spec)
+		opt.X509.Issue.SigAlgorithm, key)
 	if err != nil {
 		return err
 	}
@@ -307,11 +324,60 @@ func (c *CLI) cmdX509Reissue(command string, args ...string) error {
 		return err
 	}
 
+	//Flag problems are knowable from the certificate just read and the
+	// flags alone, so the spec and every override are validated here,
+	// before the authority is found and before any key generation is paid
+	// for. The overrides are applied further down, after the fetch joins.
+	// With no overriding flags the spec preserves the existing
+	// certificate's key type and parameters; --type/--bits/--curve
+	// override it.
+	spec, err := vault.ResolveKeySpec(opt.X509.Reissue.Type, opt.X509.Reissue.Bits, opt.X509.Reissue.Curve, cert.PrivateKey)
+	if err != nil {
+		return err
+	}
+	if opt.X509.Reissue.Subject != "" {
+		if _, err := vault.ParseSubject(opt.X509.Reissue.Subject); err != nil {
+			return err
+		}
+	}
+	if len(opt.X509.Reissue.KeyUsage) > 0 {
+		if _, _, err := vault.HandleJointKeyUsages(opt.X509.Reissue.KeyUsage); err != nil {
+			return err
+		}
+	}
+	if opt.X509.Reissue.SigAlgorithm != "" {
+		if _, err := vault.TranslateSignatureAlgorithm(opt.X509.Reissue.SigAlgorithm); err != nil {
+			return err
+		}
+	}
+
+	// Get new expiry date
+	var ttl time.Duration
+	if opt.X509.Reissue.TTL == "" {
+		ttl = cert.Certificate.NotAfter.Sub(cert.Certificate.NotBefore)
+	} else {
+		ttl, err = duration(opt.X509.Reissue.TTL)
+		if err != nil {
+			return err
+		}
+	}
+
 	//Which authority signed this is a fact about the certificate as stored,
 	// and answering it reads the signature the certificate arrived with. The
 	// changes below overwrite the algorithm that signature was made with, so
-	// the authority has to be found before they are applied.
-	ca, caPath, err := v.FindSigningCA(cert, args[0], opt.X509.Reissue.SignedBy)
+	// the authority has to be found before they are applied -- and finding
+	// it is a network round trip the new key's generation does not depend
+	// on, so the two run at the same time and join here.
+	_, _ = fmt.Printf("\nGenerating new %s key...\n", spec.Describe())
+	var (
+		ca     *vault.X509
+		caPath string
+	)
+	newKey, err := vault.GenerateKeyWhileFetching(spec, func() error {
+		var ferr error
+		ca, caPath, ferr = v.FindSigningCA(cert, args[0], opt.X509.Reissue.SignedBy)
+		return ferr
+	})
 	if err != nil {
 		return err
 	}
@@ -360,31 +426,6 @@ func (c *CLI) cmdX509Reissue(command string, args ...string) error {
 		cert.Certificate.SignatureAlgorithm = x509.UnknownSignatureAlgorithm
 	}
 
-	// Get new expiry date
-	var ttl time.Duration
-	if opt.X509.Reissue.TTL == "" {
-		ttl = cert.Certificate.NotAfter.Sub(cert.Certificate.NotBefore)
-	} else {
-		ttl, err = duration(opt.X509.Reissue.TTL)
-		if err != nil {
-			return err
-		}
-	}
-
-	// Determine the spec for the regenerated key. With no overriding
-	// flags this preserves the existing certificate's key type and
-	// parameters; --type/--bits/--curve override it.
-	spec, err := vault.ResolveKeySpec(opt.X509.Reissue.Type, opt.X509.Reissue.Bits, opt.X509.Reissue.Curve, cert.PrivateKey)
-	if err != nil {
-		return err
-	}
-
-	// Generate new key per the resolved spec.
-	_, _ = fmt.Printf("\nGenerating new %s key...\n", spec.Describe())
-	newKey, err := vault.GenerateKey(spec)
-	if err != nil {
-		return err
-	}
 	cert.PrivateKey = newKey
 	err = ca.Sign(cert, ttl)
 	if err != nil {

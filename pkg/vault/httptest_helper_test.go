@@ -30,6 +30,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -104,6 +105,11 @@ type fakeVault struct {
 	// cannot tell a test whether a key was ever transmitted before an abort;
 	// this can.
 	rekeyUpdateCalls int
+
+	// reqLog records one "METHOD /v1/<path>[?query]" line per request
+	// served, in arrival order. requestCount() counts regexp matches;
+	// resetRequestLog() clears it.
+	reqLog []string
 }
 
 func newFakeVault() *fakeVault {
@@ -278,6 +284,14 @@ func jsonErr(w http.ResponseWriter, status int, msg string) {
 // ServeHTTP dispatches requests to the fake Vault server.
 func (f *fakeVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p := r.URL.Path // e.g. /v1/secret/foo
+
+	line := r.Method + " " + p
+	if r.URL.RawQuery != "" {
+		line += "?" + r.URL.RawQuery
+	}
+	f.mu.Lock()
+	f.reqLog = append(f.reqLog, line)
+	f.mu.Unlock()
 
 	switch {
 	case p == "/v1/sys/internal/ui/mounts" && r.Method == http.MethodGet:
@@ -760,6 +774,27 @@ func assertKeyNotFound(t *testing.T, err error) {
 	if !vault.IsKeyNotFound(err) {
 		t.Fatalf("expected KeyNotFound error, got: %v", err)
 	}
+}
+
+// requestCount counts logged requests matching the given regexp, which is
+// matched against lines of the form "GET /v1/secret/foo?list=true".
+func (f *fakeVault) requestCount(pattern string) int {
+	re := regexp.MustCompile(pattern)
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	n := 0
+	for _, l := range f.reqLog {
+		if re.MatchString(l) {
+			n++
+		}
+	}
+	return n
+}
+
+func (f *fakeVault) resetRequestLog() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reqLog = nil
 }
 
 // suppress vaultkv import used only for type reference

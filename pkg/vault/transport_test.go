@@ -1,7 +1,6 @@
 package vault_test
 
 import (
-	"net/http"
 	"testing"
 
 	"github.com/cloudfoundry-community/safe/pkg/vault"
@@ -17,9 +16,10 @@ func TestTransportIsTuned(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewVault: %v", err)
 	}
-	tr, ok := v.Client().Client.Client.Transport.(*http.Transport)
+	tr, ok := vault.TunedTransportForTest(v)
 	if !ok {
-		t.Fatalf("transport is %T, want *http.Transport", v.Client().Client.Client.Transport)
+		t.Fatalf("transport is %T, want the retrying wrapper over *http.Transport",
+			v.Client().Client.Client.Transport)
 	}
 	if tr.TLSClientConfig.ClientSessionCache == nil {
 		t.Error("no TLS session cache: every handshake is a full handshake")

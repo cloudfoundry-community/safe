@@ -120,7 +120,7 @@ func NewVault(conf VaultConfig) (*Vault, error) {
 			Namespace: conf.Namespace,
 			Client: &http.Client{
 				Timeout: 30 * time.Second,
-				Transport: &http.Transport{
+				Transport: newRetryTransport(&http.Transport{
 					Proxy: proxyRouter.Proxy,
 					DialContext: (&net.Dialer{
 						Timeout:   10 * time.Second,
@@ -136,7 +136,7 @@ func NewVault(conf VaultConfig) (*Vault, error) {
 						InsecureSkipVerify: conf.SkipVerify, // #nosec G402 - User-controlled via config for development/testing
 						ClientSessionCache: tls.NewLRUClientSessionCache(32),
 					},
-				},
+				}),
 			},
 			Trace: func() (ret io.Writer) {
 				if shouldDebug() {

@@ -1412,6 +1412,9 @@ The following options are recognized:
 
       --type          The key algorithm: 'rsa' (default), 'ec'
                       (ECDSA), or 'ed25519'.
+                      An RSA-4096 key costs seconds of CPU to
+                      generate; --type ec and --type ed25519 are
+                      the fast options, arriving in microseconds.
 
   -b, --bits N        RSA key strength, in bits.  The only valid
                       arguments are 1024 (highly discouraged),
@@ -1478,6 +1481,12 @@ The following options are recognized:
       --type          The key algorithm: 'rsa', 'ec' (ECDSA), or
                       'ed25519'.  Defaults to the existing
                       certificate's key algorithm.
+                      Reissue preserves the existing key's type and
+                      parameters unless --type/--bits/--curve
+                      override them, so an RSA-4096 certificate
+                      pays seconds of key generation on every
+                      reissue; --type ec and --type ed25519 are
+                      the fast options, arriving in microseconds.
 
   -b, --bits  N       RSA key strength, in bits.  The only valid
                       arguments are 1024 (highly discouraged),

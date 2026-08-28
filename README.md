@@ -730,6 +730,10 @@ Issues a new X.509 TLS/SSL certificate, and stores the new RSA
 private key and the certificate in the Vault at _path_, in PEM
 format.
 
+The default key type is RSA-4096, which costs seconds of CPU to
+generate; `--type ec` and `--type ed25519` are the fast options,
+arriving in microseconds.
+
 `--signed-by` has to name a certificate authority, and cannot name
 _path_ itself.  Issuing writes the signing CA back, to record the
 serial number it handed out, and then writes the new certificate
@@ -744,6 +748,11 @@ that writes a certificate back keeps the whole chain.
 Reissues the certificate at _path_ with a freshly generated key,
 keeping its subject, its names, and the rest of its details unless
 options ask for something else.
+
+Reissue preserves the existing key's type and parameters unless
+`--type`, `--bits`, or `--curve` override them, so an RSA-4096
+certificate pays seconds of key generation on every reissue;
+`--type ec` and `--type ed25519` are the fast options.
 
 The signing authority comes from `--signed-by`, which has to name a
 certificate authority.  Naming one moves the certificate to it, so

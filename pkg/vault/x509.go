@@ -156,8 +156,19 @@ func ResolveKeySpec(keyType string, bits int, curve string, existing crypto.Sign
 	return KeySpec{}, fmt.Errorf("unrecognized key type %q; use rsa, ec, or ed25519", keyType)
 }
 
+// generateKeyFn is generateKey behind a package-level variable, so tests can
+// park key generation on a barrier and prove it overlaps the CA fetch in
+// GenerateKeyWhileFetching without paying for real RSA arithmetic -- see the
+// SetGenerateKeyForTest hook in export_test.go, which mirrors the
+// dhparamGen seam in dhparam.go.
+var generateKeyFn = generateKey
+
 // GenerateKey produces a new private key (as a crypto.Signer) per the spec.
 func GenerateKey(spec KeySpec) (crypto.Signer, error) {
+	return generateKeyFn(spec)
+}
+
+func generateKey(spec KeySpec) (crypto.Signer, error) {
 	switch spec.Algorithm {
 	case "rsa":
 		return rsa.GenerateKey(rand.Reader, spec.Bits)
@@ -168,6 +179,36 @@ func GenerateKey(spec KeySpec) (crypto.Signer, error) {
 		return priv, err
 	}
 	return nil, fmt.Errorf("unrecognized key algorithm %q", spec.Algorithm)
+}
+
+// GenerateKeyWhileFetching generates a private key per spec while fetch --
+// typically the read and parse of the signing CA -- runs on the calling
+// goroutine, and hands the key over once both are done. A fetch failure
+// returns immediately without waiting the generation out; the generation
+// goroutine delivers into a buffered channel either way, so an abandoned
+// key is collected by the garbage collector rather than leaking a parked
+// goroutine. Batch issuance will want N keys raced against one fetch, and
+// this is the N=1 shape of that.
+func GenerateKeyWhileFetching(spec KeySpec, fetch func() error) (crypto.Signer, error) {
+	type generated struct {
+		key crypto.Signer
+		err error
+	}
+	done := make(chan generated, 1)
+	go func() {
+		key, err := generateKeyFn(spec)
+		done <- generated{key, err}
+	}()
+
+	if err := fetch(); err != nil {
+		return nil, err
+	}
+
+	gen := <-done
+	if gen.err != nil {
+		return nil, fmt.Errorf("key generation failed: %w", gen.err)
+	}
+	return gen.key, nil
 }
 
 // algoForKey returns the x509 public key algorithm and a sane default
@@ -437,6 +478,8 @@ func (x *X509) IssuedBy(ca *X509) bool {
 	return bytes.Equal(ca.Certificate.RawSubject, x.Certificate.RawIssuer)
 }
 
+var subjectSeparator = regexp.MustCompile(" *= *")
+
 func ParseSubject(subj string) (pkix.Name, error) {
 	/* parse subject names that look like this:
 	    /cn=foo.bl/c=us/st=ny/l=buffalo/o=stark & wayne/ou=r&d
@@ -458,9 +501,8 @@ func ParseSubject(subj string) (pkix.Name, error) {
 		pairs = strings.Split(subj, ",")
 	}
 
-	kvre := regexp.MustCompile(" *= *")
 	for _, pair := range pairs {
-		kv := kvre.Split(pair, 2)
+		kv := subjectSeparator.Split(pair, 2)
 		if len(kv) != 2 {
 			return name, fmt.Errorf("malformed subject component '%s'", pair)
 		}
@@ -677,17 +719,30 @@ func TranslateSignatureAlgorithm(signatureAlgorithm string) (sigAlgo x509.Signat
 }
 
 func NewCertificate(subj string, names, keyUsage []string, signatureAlgorithm string, spec KeySpec) (*X509, error) {
+	//The subject parse stays ahead of the key draw, so a malformed subject
+	// is refused before seconds of RSA generation are spent on it.
+	if _, err := ParseSubject(subj); err != nil {
+		return nil, err
+	}
+
+	key, err := GenerateKey(spec)
+	if err != nil {
+		return nil, fmt.Errorf("key generation failed: %w", err)
+	}
+
+	return NewCertificateWithKey(subj, names, keyUsage, signatureAlgorithm, key)
+}
+
+// NewCertificateWithKey builds the certificate around a private key the
+// caller already holds -- one generated while the signing CA was being
+// fetched, rather than by NewCertificate above.
+func NewCertificateWithKey(subj string, names, keyUsage []string, signatureAlgorithm string, key crypto.Signer) (*X509, error) {
 	name, err := ParseSubject(subj)
 	if err != nil {
 		return nil, err
 	}
 
 	ips, domains, emails := CategorizeSANs(names)
-
-	key, err := GenerateKey(spec)
-	if err != nil {
-		return nil, fmt.Errorf("key generation failed: %w", err)
-	}
 
 	ku, eku, err := HandleJointKeyUsages(keyUsage)
 	if err != nil {

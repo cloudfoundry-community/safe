@@ -9,6 +9,7 @@ import (
 
 	fmt "github.com/jhunt/go-ansi"
 
+	"github.com/cloudfoundry-community/safe/internal/parallel"
 	"github.com/cloudfoundry-community/safe/pkg/rc"
 	"github.com/cloudfoundry-community/safe/pkg/vault"
 
@@ -127,8 +128,9 @@ func (c *CLI) cmdGen(command string, args ...string) error {
 	// sequential within their group, same as before parallelism was added.
 	order, groups := groupByCanonicalPath(targets, func(t genTarget) string { return t.path })
 	// The group context goes unused: reads and writes are contextless
-	// vaultkv requests, and password generation is microseconds.
-	return runPathGroups(order, groups, max(runtime.NumCPU(), 4), func(_ context.Context, target genTarget, notice func(format string, args ...any)) error {
+	// vaultkv requests, and password generation is microseconds. The work
+	// is round trips, not compute, so the fan-out is IO-sized.
+	return runPathGroups(order, groups, parallel.IOLimit(), func(_ context.Context, target genTarget, notice func(format string, args ...any)) error {
 		path, key := target.path, target.key
 		s, err := v.Read(path)
 		if err != nil && !vault.IsNotFound(err) {
@@ -244,7 +246,7 @@ func (c *CLI) cmdSsh(command string, args ...string) error {
 	// interrupted mid-search, so a sibling failure only stops paths that
 	// have not started yet.
 	order, groups := groupByCanonicalPath(args, func(path string) string { return path })
-	return runPathGroups(order, groups, max(runtime.NumCPU(), 4), func(_ context.Context, path string, notice func(format string, args ...any)) error {
+	return runPathGroups(order, groups, parallel.CPULimit(), func(_ context.Context, path string, notice func(format string, args ...any)) error {
 		s, err := v.Read(path)
 		if err != nil && !vault.IsNotFound(err) {
 			return err
@@ -295,7 +297,7 @@ func (c *CLI) cmdRsa(command string, args ...string) error {
 	// context goes unused for the same reason -- rsa.GenerateKey cannot be
 	// interrupted mid-search.
 	order, groups := groupByCanonicalPath(args, func(path string) string { return path })
-	return runPathGroups(order, groups, max(runtime.NumCPU(), 4), func(_ context.Context, path string, notice func(format string, args ...any)) error {
+	return runPathGroups(order, groups, parallel.CPULimit(), func(_ context.Context, path string, notice func(format string, args ...any)) error {
 		s, err := v.Read(path)
 		if err != nil && !vault.IsNotFound(err) {
 			return err

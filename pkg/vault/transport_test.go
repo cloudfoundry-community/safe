@@ -36,6 +36,11 @@ func TestTransportIsTuned(t *testing.T) {
 	if tr.IdleConnTimeout == 0 {
 		t.Error("idle connections never expire")
 	}
+	// The IO fan-out width (internal/parallel.IOLimit, at most 64) must
+	// sit under this ceiling, or wide fan-outs would churn connections.
+	if tr.MaxIdleConnsPerHost != 100 {
+		t.Errorf("MaxIdleConnsPerHost = %d, want 100", tr.MaxIdleConnsPerHost)
+	}
 }
 
 func TestCanonicalURL(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -196,6 +197,54 @@ func TestRetryAfterHeaderHonored(t *testing.T) {
 	}
 	if d := (*sleeps)[0]; d != 2*time.Second {
 		t.Errorf("backoff = %v, want 2s from Retry-After", d)
+	}
+}
+
+// A Retry-After far larger than the client timeout leaves room for must
+// not be honored into a hang: the retry has to recognize there is no time
+// left for another attempt and return the 429 as-is, fast, with the real
+// backoff sleep in play -- a stubbed sleep would prove nothing about the
+// deadline race this guards against.
+func TestRetryAfterBeyondDeadlineFailsFast(t *testing.T) {
+	v, script, fv := newRetryTestVault(t)
+	fv.set("secret/a", map[string]string{"k": "v"})
+	script.inject["GET /v1/secret/a"] = []scriptedResponse{{status: 429, retryAfter: "30"}}
+
+	start := time.Now()
+	_, err := v.Read("secret/a")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("Read against an unpayable Retry-After succeeded, want the 429 surfaced")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("Read took %v honoring an unpayable Retry-After, want well under the client timeout", elapsed)
+	}
+	if !strings.Contains(err.Error(), "scripted failure") {
+		t.Errorf("error = %q, want Vault's own message surfaced immediately", err)
+	}
+	if strings.Contains(err.Error(), "deadline exceeded") {
+		t.Errorf("error = %q, want the 429 surfaced rather than a deadline timeout", err)
+	}
+}
+
+// A Retry-After header whose seconds cannot fit in a Duration must be
+// treated as absent, not let the seconds-to-Duration multiplication
+// overflow into an arbitrary -- and possibly negative -- wait.
+func TestRetryAfterOverflowTreatedAsAbsent(t *testing.T) {
+	v, script, fv := newRetryTestVault(t)
+	sleeps := recordSleeps(t, v)
+	fv.set("secret/a", map[string]string{"k": "v"})
+	script.inject["GET /v1/secret/a"] = []scriptedResponse{{status: 429, retryAfter: "9223372036854775807"}}
+
+	if _, err := v.Read("secret/a"); err != nil {
+		t.Fatalf("Read after one 429 with an unrepresentable Retry-After: %v", err)
+	}
+	if len(*sleeps) != 1 {
+		t.Fatalf("backoff sleeps = %d, want 1", len(*sleeps))
+	}
+	if d := (*sleeps)[0]; d < 100*time.Millisecond || d >= 200*time.Millisecond {
+		t.Errorf("backoff = %v, want the ordinary jittered [100ms, 200ms) range, not the overflowed header", d)
 	}
 }
 

@@ -17,7 +17,6 @@ import (
 	"net"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -400,11 +399,14 @@ func (s Secret) X509(requireKey bool) (*X509, error) {
 
 	if s.Has("serial") {
 		v := s.Get("serial")
-		i, err := strconv.ParseInt(v, 16, 64)
-		if err != nil {
+		//The counter runs up to 2^159, so the stored hex has to come back
+		// through a big integer: a 64-bit parse refuses any counter that
+		// has passed 2^63, and the CA stops parsing mid-life.
+		serial, ok := new(big.Int).SetString(v, 16)
+		if !ok {
 			return nil, fmt.Errorf("not a valid CA certificate (serial '%s' is malformed)", v)
 		}
-		o.Serial = big.NewInt(i)
+		o.Serial = serial
 	}
 
 	if s.Has("crl") {
@@ -1025,22 +1027,65 @@ func (ca *X509) SaveTo(v *Vault, path string, skipIfExists bool) error {
 
 var maxSerial = big.NewInt(0).Exp(big.NewInt(2), big.NewInt(159), nil)
 
+// nextSerial advances the CA's issuance counter one serial, wrapping at
+// maxSerial. A wrap that lands on zero advances once more: RFC 5280 does
+// not allow a zero serial, and a revocation entry could never name a
+// certificate carrying one. The counter must be non-nil; Sign and
+// ReserveSerials' callers route counterless authorities to random serials
+// instead.
+func (ca *X509) nextSerial() *big.Int {
+	ca.Serial.Add(ca.Serial, big.NewInt(1))
+	ca.Serial.Mod(ca.Serial, maxSerial)
+	if ca.Serial.Sign() == 0 {
+		ca.Serial.SetInt64(1)
+	}
+	//Take a copy rather than hand out the counter. Revoke records the
+	// number it is handed by reference, and a certificate holding the
+	// counter itself would see its serial move every time the CA issued
+	// anything else.
+	return new(big.Int).Set(ca.Serial)
+}
+
+// ReserveSerials draws n serials from the CA's counter, one increment at
+// a time, and leaves the counter on the last one drawn. Drawing ahead of
+// signing lets a batch persist the advanced counter once, before any
+// certificate carrying a reserved number is written: a crash after that
+// one write burns unused numbers, which is harmless, rather than leaving
+// certificates the counter does not account for. The numbers are handed
+// to SignWithSerial, one per certificate.
+func (ca *X509) ReserveSerials(n int) []*big.Int {
+	serials := make([]*big.Int, n)
+	for i := range serials {
+		serials[i] = ca.nextSerial()
+	}
+	return serials
+}
+
 func (ca *X509) Sign(x *X509, ttl time.Duration) error {
-	if ca.Serial == nil || ca == x {
-		serial, err := rand.Int(rand.Reader, maxSerial)
+	//A certificate signing itself, and an authority that keeps no counter,
+	// take a random serial rather than a counted one.
+	var serial *big.Int
+	if ca.Serial != nil && ca != x {
+		serial = ca.nextSerial()
+	}
+	return ca.SignWithSerial(x, ttl, serial)
+}
+
+// SignWithSerial signs x under ca with a serial the caller already drew
+// via ReserveSerials, leaving the counter alone -- the draw happened at
+// reservation. A nil serial draws a random one instead, which is how Sign
+// serves a self-signed certificate or a counterless authority.
+func (ca *X509) SignWithSerial(x *X509, ttl time.Duration, serial *big.Int) error {
+	if serial == nil {
+		random, err := rand.Int(rand.Reader, maxSerial)
 		if err != nil {
 			return err
 		}
-		x.Certificate.SerialNumber = serial
-	} else {
-		ca.Serial.Add(ca.Serial, big.NewInt(1))
-		ca.Serial.Mod(ca.Serial, maxSerial)
-		//Take a copy rather than share the CA's counter. Revoke records the
-		// number it is handed by reference, and a certificate holding the
-		// counter itself would see its serial move every time the CA issued
-		// anything else.
-		x.Certificate.SerialNumber = new(big.Int).Set(ca.Serial)
+		serial = random
 	}
+	//A copy, not the caller's number: the reservation slice stays the
+	// caller's to reuse, and the certificate's serial must not move with it.
+	x.Certificate.SerialNumber = new(big.Int).Set(serial)
 
 	x.Certificate.NotBefore = time.Now()
 	x.Certificate.NotAfter = time.Now().Add(ttl)

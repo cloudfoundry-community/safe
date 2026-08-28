@@ -122,6 +122,11 @@ type secretTree struct {
 	// fetched marks a version node whose data the walk has already read (by
 	// workGetLatest, in one request); getWorkType assigns it no further work.
 	fetched bool
+	// priorList holds the listing captured during root classification in
+	// populateNodeType; priorListSet indicates it was successfully captured
+	// and should be reused in workList instead of fetching again.
+	priorList    []string
+	priorListSet bool
 }
 
 func (v *Vault) ConstructSecrets(path string, opts TreeOpts) (s Secrets, err error) {
@@ -465,16 +470,18 @@ func (t *secretTree) populateNodeType(v *Vault) error {
 			return err
 		}
 
-		_, err := v.List(t.Name)
+		list, err := v.List(t.Name)
 		if err != nil {
 			return err
 		}
+		t.priorList, t.priorListSet = list, true
 		t.Type = treeTypeDir
 	} else {
 		t.Type = treeTypeSecret
 
-		_, err := v.List(t.Name)
+		list, err := v.List(t.Name)
 		if err == nil {
+			t.priorList, t.priorListSet = list, true
 			t.Type = treeTypeDirAndSecret
 		}
 		if err != nil && !IsNotFound(err) {
@@ -851,22 +858,28 @@ func (w *treeWorker) work() {
 
 func (w *treeWorker) workList(t secretTree) ([]secretTree, error) {
 	path := strings.TrimSuffix(t.Name, "/")
-	list, err := w.vault.List(path)
-	if err != nil {
-		//IsNotFound: This is most likely because a mount exists but has no secrets
-		//in it yet Probably shouldn't err
-		//
-		//IsForbidden: This is because you were able to list the contents of a path
-		// that this path is contained in, but you do not have the permissions to
-		// list this path.
-		if vaultkv.IsForbidden(err) {
-			w.opts.noteSkippedForbidden()
-			return nil, nil
+	var list []string
+	if t.priorListSet {
+		list = t.priorList
+	} else {
+		var err error
+		list, err = w.vault.List(path)
+		if err != nil {
+			//IsNotFound: This is most likely because a mount exists but has no secrets
+			//in it yet Probably shouldn't err
+			//
+			//IsForbidden: This is because you were able to list the contents of a path
+			// that this path is contained in, but you do not have the permissions to
+			// list this path.
+			if vaultkv.IsForbidden(err) {
+				w.opts.noteSkippedForbidden()
+				return nil, nil
+			}
+			if IsNotFound(err) {
+				return nil, nil
+			}
+			return nil, err
 		}
-		if IsNotFound(err) {
-			return nil, nil
-		}
-		return nil, err
 	}
 
 	ret := []secretTree{}

@@ -184,3 +184,20 @@ func TestRootWalkListsMountsOnce(t *testing.T) {
 		t.Errorf("sys/mounts requests = %d, want 1", got)
 	}
 }
+
+// Classifying the walk root already lists it; the walk must not list the
+// same path a second time. The ?list=true query distinguishes LISTs from
+// the plain metadata GET verifyMetadataExists issues on the same path.
+func TestWalkRootListedOnce(t *testing.T) {
+	v, fv := newTestVault(t)
+	fv.mountV2("kv2")
+	fv.setV2("kv2/dir/a", map[string]string{"k": "v"})
+
+	fv.resetRequestLog()
+	if _, err := v.ConstructSecrets("kv2/dir", vault.TreeOpts{SkipVersionInfo: true, AllowDeletedSecrets: true}); err != nil {
+		t.Fatalf("ConstructSecrets: %v", err)
+	}
+	if got := fv.requestCount(`^GET /v1/kv2/metadata/dir\?list=true$`); got != 1 {
+		t.Errorf("root LISTs = %d, want 1", got)
+	}
+}

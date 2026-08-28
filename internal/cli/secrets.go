@@ -7,6 +7,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	fmt "github.com/jhunt/go-ansi"
 	"gopkg.in/yaml.v2"
 
+	"github.com/cloudfoundry-community/safe/internal/parallel"
 	"github.com/cloudfoundry-community/safe/pkg/rc"
 	"github.com/cloudfoundry-community/safe/pkg/vault"
 )
@@ -168,13 +170,30 @@ func (c *CLI) cmdGet(command string, args ...string) error {
 		return nil
 	}
 
+	// Read every path concurrently, then aggregate sequentially so the
+	// order-sensitive output below -- the errs slice and the KeysOnly
+	// listing -- stays driven by args, not by fetch completion order.
+	type fetched struct {
+		s   *vault.Secret
+		err error
+	}
+	fetches := make([]fetched, len(args))
+	// fn always returns nil: per-path errors are aggregated by the
+	// sequential loop below exactly as before, so EachLimit's fail-fast
+	// never triggers here and the always-nil return is deliberate.
+	_ = parallel.EachLimit(args, max(runtime.NumCPU(), 4), func(i int, path string) error {
+		s, err := v.Read(path)
+		fetches[i] = fetched{s: s, err: err}
+		return nil
+	})
+
 	// Track errors, paths, keys, values
 	errs := make([]error, 0)
 	results := make(map[string]map[string]string, 0)
 	missingKeys := make(map[string][]string)
-	for _, path := range args {
+	for i, path := range args {
 		p, k, _ := vault.ParsePath(path)
-		s, err := v.Read(path)
+		s, err := fetches[i].s, fetches[i].err
 
 		// Check if the desired path[:key] is found
 		if err != nil {

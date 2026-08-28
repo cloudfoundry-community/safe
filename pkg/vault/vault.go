@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/url"
@@ -50,6 +51,11 @@ type Vault struct {
 	// race on memory, since every access here is already lock-guarded.
 	versionsGen   map[string]uint64
 	versionsEpoch uint64
+
+	// casSleep waits out the backoff between Update/UpdateSteps retry
+	// passes; a seam so tests assert requested waits instead of serving
+	// them. See sleepBeforeRetry.
+	casSleep func(ctx context.Context, d time.Duration) error
 }
 
 type VaultConfig struct {
@@ -148,6 +154,7 @@ func NewVault(conf VaultConfig) (*Vault, error) {
 		debug:         shouldDebug(),
 		versionsCache: map[string][]vaultkv.KVVersion{},
 		versionsGen:   map[string]uint64{},
+		casSleep:      sleepBackoff,
 	}, nil
 }
 
@@ -499,6 +506,50 @@ func (v *Vault) Write(path string, s *Secret) error {
 // that a genuinely contended path fails loudly instead of spinning.
 const casAttempts = 5
 
+// casBackoffBase is the first wait Update/UpdateSteps request between
+// retry passes; casBackoffCap bounds how large it grows. Small and bounded
+// on purpose: this runs synchronously inside a CLI command, not a daemon,
+// with only casAttempts passes to spend -- there is no room for the
+// GET-retry transport's coarser schedule (3.2's 100ms-per-doubling scale,
+// sized for a single throttled read, not a bounded burst of writers all
+// waiting on one path).
+const (
+	casBackoffBase = 10 * time.Millisecond
+	casBackoffCap  = 200 * time.Millisecond
+)
+
+// casBackoff returns the wait Update/UpdateSteps request before retry pass
+// number attempt (1-based): full jitter over [0, ceiling], where ceiling
+// doubles with each attempt and saturates at casBackoffCap. Full jitter,
+// rather than a fixed base plus jitter, spreads concurrent losers of the
+// same conflict across the whole window instead of clustering them near
+// its start.
+func casBackoff(attempt int) time.Duration {
+	return rand.N(casBackoffCeiling(attempt) + 1)
+}
+
+// casBackoffCeiling returns the upper bound (inclusive) casBackoff draws
+// under for retry pass number attempt (1-based).
+func casBackoffCeiling(attempt int) time.Duration {
+	d := casBackoffBase << (attempt - 1)
+	if d <= 0 || d > casBackoffCap {
+		return casBackoffCap
+	}
+	return d
+}
+
+// sleepBeforeRetry waits out a jittered backoff before Update or
+// UpdateSteps' next attempt, unless attempt -- its zero-based index --
+// was the last one: giving up is immediate, never delayed by a wait
+// nobody benefits from. The uncontended path never reaches this call at
+// all, since it returns before the loop's bottom.
+func (v *Vault) sleepBeforeRetry(attempt int) error {
+	if attempt >= casAttempts-1 {
+		return nil
+	}
+	return v.casSleep(context.Background(), casBackoff(attempt+1))
+}
+
 // writeCAS writes s at path with the given check-and-set version and
 // returns the version Vault assigned. A nil cas sends no check-and-set at
 // all -- the unconditional write, and the only kind a KV v1 mount
@@ -668,6 +719,9 @@ func (v *Vault) Update(path string, fn func(s *Secret, exists bool) (out *Secret
 			resolved, rerr := v.resolveAbsentCAS(literal)
 			if errors.Is(rerr, errStale404) {
 				lastConflict = rerr
+				if serr := v.sleepBeforeRetry(attempt); serr != nil {
+					return 0, serr
+				}
 				continue
 			}
 			if rerr != nil {
@@ -681,6 +735,10 @@ func (v *Vault) Update(path string, fn func(s *Secret, exists bool) (out *Secret
 				return 0, werr
 			}
 			lastConflict = werr
+		}
+
+		if serr := v.sleepBeforeRetry(attempt); serr != nil {
+			return 0, serr
 		}
 	}
 	return 0, fmt.Errorf("gave up writing %s after %d attempts against concurrent writers: %w", literal, casAttempts, lastConflict)
@@ -806,6 +864,9 @@ func (v *Vault) UpdateSteps(path string, steps int, fn func(step int, s *Secret,
 		}
 		if !conflicted {
 			return nil
+		}
+		if serr := v.sleepBeforeRetry(attempt); serr != nil {
+			return serr
 		}
 	}
 	return fmt.Errorf("gave up writing %s after %d attempts against concurrent writers: %w", literal, casAttempts, lastConflict)

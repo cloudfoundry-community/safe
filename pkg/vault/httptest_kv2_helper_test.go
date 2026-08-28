@@ -270,11 +270,29 @@ func (f *fakeVault) serveV2Data(w http.ResponseWriter, r *http.Request, path str
 	switch r.Method {
 	case http.MethodPut, http.MethodPost:
 		var body struct {
-			Data map[string]string `json:"data"`
+			Data    map[string]string `json:"data"`
+			Options struct {
+				CAS *uint `json:"cas"`
+			} `json:"options"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			jsonErr(w, http.StatusBadRequest, "invalid json")
 			return
+		}
+		//A check-and-set write must name the current version exactly --
+		// 0 only creates, and Vault counts deleted and destroyed versions
+		// as current, so any surviving metadata refuses cas=0. Vault
+		// reports the mismatch as a plain 400 whose message is the only
+		// thing that tells it apart from any other bad request.
+		if body.Options.CAS != nil {
+			current := uint(0)
+			if h := f.v2data[path]; h != nil && len(h.versions) > 0 {
+				current = h.first + uint(len(h.versions)) - 1
+			}
+			if *body.Options.CAS != current {
+				jsonErr(w, http.StatusBadRequest, "check-and-set parameter did not match the current version")
+				return
+			}
 		}
 		n := f.appendV2Locked(path, body.Data)
 		w.Header().Set("Content-Type", "application/json")

@@ -182,11 +182,25 @@ func (f *cliFakeVault) serveV2Data(w http.ResponseWriter, r *http.Request, path 
 	switch r.Method {
 	case http.MethodPut, http.MethodPost:
 		var body struct {
-			Data map[string]string `json:"data"`
+			Data    map[string]string `json:"data"`
+			Options struct {
+				CAS *uint `json:"cas"`
+			} `json:"options"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = w.Write([]byte(`{"errors":["malformed body"]}`))
+			return
+		}
+		//A check-and-set write must name the current version exactly --
+		// 0 only creates, and Vault counts deleted and destroyed versions
+		// as current (entries are never removed from f.versions), so any
+		// surviving history refuses cas=0. Vault reports the mismatch as
+		// a plain 400 whose message is the only thing distinguishing it
+		// from any other bad request.
+		if body.Options.CAS != nil && *body.Options.CAS != uint(len(f.versions[path])) {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"errors":["check-and-set parameter did not match the current version"]}`))
 			return
 		}
 		v := f.appendVersionLocked(path, body.Data)

@@ -7,7 +7,6 @@ import (
 	"io"
 	"math/big"
 	"os"
-	"runtime"
 	"strings"
 	"time"
 
@@ -295,7 +294,7 @@ func (c *CLI) cmdX509Issue(command string, args ...string) error {
 		// generated: keygen-before-refusal burns seconds. The reads run
 		// concurrently and the notices replay in argument order.
 		readErrs := make([]error, len(targets))
-		_ = parallel.EachLimit(context.Background(), targets, max(runtime.NumCPU(), 4), func(_ context.Context, i int, target *issueTarget) error {
+		_ = parallel.EachLimit(context.Background(), targets, parallel.IOLimit(), func(_ context.Context, i int, target *issueTarget) error {
 			_, err := v.Read(target.arg)
 			readErrs[i] = err
 			return nil
@@ -348,7 +347,7 @@ func (c *CLI) cmdX509Issue(command string, args ...string) error {
 	// and neither depends on the other, so they run at the same time and
 	// join here. A CA problem comes back without waiting the draws out.
 	var ca *vault.X509
-	keys, err := vault.GenerateKeysWhileFetching(spec, len(targets), max(runtime.NumCPU(), 4), func() error {
+	keys, err := vault.GenerateKeysWhileFetching(spec, len(targets), parallel.CPULimit(), func() error {
 		if opt.X509.Issue.SignedBy == "" {
 			return nil
 		}
@@ -424,7 +423,7 @@ func (c *CLI) cmdX509Issue(command string, args ...string) error {
 	}
 
 	writeErrs := make([]error, len(targets))
-	_ = parallel.EachLimit(context.Background(), targets, max(runtime.NumCPU(), 4), func(_ context.Context, i int, target *issueTarget) error {
+	_ = parallel.EachLimit(context.Background(), targets, parallel.IOLimit(), func(_ context.Context, i int, target *issueTarget) error {
 		writeErrs[i] = target.cert.SaveTo(v, target.arg, opt.SkipIfExists)
 		return nil
 	})

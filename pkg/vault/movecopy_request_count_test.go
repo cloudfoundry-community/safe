@@ -3,6 +3,7 @@ package vault_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cloudfoundry-community/safe/pkg/vault"
 )
@@ -162,6 +163,32 @@ func TestMoveCopyTreeRefusesOnForbiddenSource(t *testing.T) {
 	}
 	if _, err := v.Read("kv2/dst2/a"); err == nil {
 		t.Error("kv2/dst2/a was written despite the walk refusal")
+	}
+}
+
+// Tree copies run their per-secret writes concurrently.
+func TestCopyTreeRunsWritesConcurrently(t *testing.T) {
+	v, fv := newTestVault(t)
+	fv.mountV2("kv2")
+	for _, name := range []string{"a", "b", "c", "d"} {
+		fv.setV2("kv2/src/"+name, map[string]string{"k": name})
+	}
+	release := fv.holdRequests(2, `^(PUT|POST) /v1/kv2/data/dst/`)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- v.MoveCopyTree("kv2/src", "kv2/dst", false, vault.MoveCopyOpts{})
+	}()
+
+	select {
+	case <-release: // two writes were concurrently in flight
+	case err := <-done:
+		t.Fatalf("MoveCopyTree finished without write overlap: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("no overlap within 5s: writes are serialized")
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("MoveCopyTree: %v", err)
 	}
 }
 

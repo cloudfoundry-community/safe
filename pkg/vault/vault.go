@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/cloudfoundry-community/safe/internal/parallel"
 	"github.com/cloudfoundry-community/vaultkv"
 	"github.com/jhunt/go-ansi"
 )
@@ -466,11 +467,11 @@ func (v *Vault) DeleteTree(root string, opts DeleteOpts) error {
 	if err != nil {
 		return err
 	}
-	for _, path := range secrets.Paths() {
-		err = v.deleteEntireSecret(path, opts.Destroy, opts.All)
-		if err != nil {
-			return err
-		}
+	err = parallel.EachLimit(secrets.Paths(), max(runtime.NumCPU(), 4), func(_ int, path string) error {
+		return v.deleteEntireSecret(path, opts.Destroy, opts.All)
+	})
+	if err != nil {
+		return err
 	}
 
 	mount, err := v.Client().MountPath(rawRoot)
@@ -993,11 +994,10 @@ func (v *Vault) MoveCopyTree(oldRoot, newRoot string, move bool, opts MoveCopyOp
 		}
 	}
 
-	for _, entry := range tree {
+	err = parallel.EachLimit(tree, max(runtime.NumCPU(), 4), func(_ int, entry SecretEntry) error {
 		newPath := strings.Replace(EncodePath(entry.Path, "", 0), oldRoot, newRoot, 1)
 		rawNewPath, _, _ := ParsePath(newPath)
-		err = entry.Copy(v, rawNewPath, TreeCopyOpts{Clear: opts.Deep, Pad: opts.Deep})
-		if err != nil {
+		if err := entry.Copy(v, rawNewPath, TreeCopyOpts{Clear: opts.Deep, Pad: opts.Deep}); err != nil {
 			return err
 		}
 		// An entry the walk could not actually read carries no versions.
@@ -1005,21 +1005,20 @@ func (v *Vault) MoveCopyTree(oldRoot, newRoot string, move bool, opts MoveCopyOp
 		// case, but guard the destructive branch independently too: never
 		// let a zero-version entry -- one entry.Copy just wrote nothing
 		// for -- reach the source delete/destroy.
-		if move && len(entry.Versions) > 0 {
-			if opts.Deep && opts.DeletedVersions {
-				err = v.client.DestroyAll(entry.Path)
-			} else {
-				// deleteEntireSecret, not v.Delete: Delete re-runs
-				// verifySecretState (a metadata GET per secret) that the
-				// walk already answered, and canSemanticallyDelete is a
-				// no-op for the key-less, version-less paths recursion
-				// guarantees.
-				err = v.deleteEntireSecret(EncodePath(entry.Path, "", 0), false, false)
-			}
-			if err != nil {
-				return err
-			}
+		if !move || len(entry.Versions) == 0 {
+			return nil
 		}
+		if opts.Deep && opts.DeletedVersions {
+			return v.client.DestroyAll(entry.Path)
+		}
+		// deleteEntireSecret, not v.Delete: Delete re-runs
+		// verifySecretState (a metadata GET per secret) that the walk
+		// already answered, and canSemanticallyDelete is a no-op for the
+		// key-less, version-less paths recursion guarantees.
+		return v.deleteEntireSecret(EncodePath(entry.Path, "", 0), false, false)
+	})
+	if err != nil {
+		return err
 	}
 	return nil
 }

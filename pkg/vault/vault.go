@@ -1027,6 +1027,25 @@ func (v *Vault) Mounts(typ string) ([]string, error) {
 	return ret, nil
 }
 
+// KVMounts returns every kv and generic mount in one mount-table request,
+// kv mounts first, matching the order the root walk historically used.
+func (v *Vault) KVMounts() ([]string, error) {
+	mounts, err := v.client.Client.ListMounts()
+	if err != nil {
+		return nil, err
+	}
+	var kvs, generics []string
+	for name, mountInfo := range mounts {
+		switch mountInfo.Type {
+		case "kv":
+			kvs = append(kvs, strings.TrimSuffix(name, "/")+"/")
+		case "generic":
+			generics = append(generics, strings.TrimSuffix(name, "/")+"/")
+		}
+	}
+	return append(kvs, generics...), nil
+}
+
 func DecodeErrorResponse(body []byte) error {
 	var raw map[string]any
 

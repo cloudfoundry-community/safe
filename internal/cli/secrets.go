@@ -371,16 +371,11 @@ func (c *CLI) cmdLs(command string, args ...string) error {
 
 		var paths []string
 		if root == "" {
-			generics, err := v.Mounts("generic")
+			var err error
+			paths, err = v.KVMounts()
 			if err != nil {
 				return err
 			}
-			kvs, err := v.Mounts("kv")
-			if err != nil {
-				return err
-			}
-
-			paths = append(generics, kvs...)
 		} else {
 			paths, err = v.List(root)
 			if err != nil {

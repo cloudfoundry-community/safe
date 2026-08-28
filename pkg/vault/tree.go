@@ -955,17 +955,10 @@ func (w *treeWorker) workGet(t secretTree) ([]secretTree, error) {
 }
 
 func (w *treeWorker) workMounts(_ secretTree) ([]secretTree, error) {
-	generics, err := w.vault.Mounts("generic")
+	mounts, err := w.vault.KVMounts()
 	if err != nil {
 		return nil, err
 	}
-
-	kvs, err := w.vault.Mounts("kv")
-	if err != nil {
-		return nil, err
-	}
-
-	mounts := append(kvs, generics...)
 
 	ret := []secretTree{}
 	for _, mount := range mounts {

@@ -170,3 +170,17 @@ func TestLatestOnlyKeyedWalkForbiddenDataFallback(t *testing.T) {
 		t.Errorf("forbidden skips = %d, want 1", skipped.Load())
 	}
 }
+
+// Walking the root must list the mount table exactly once.
+func TestRootWalkListsMountsOnce(t *testing.T) {
+	v, fv := newTestVault(t)
+	fv.set("secret/a", map[string]string{"k": "v"})
+
+	fv.resetRequestLog()
+	if _, err := v.ConstructSecrets("/", vault.TreeOpts{SkipVersionInfo: true, AllowDeletedSecrets: true}); err != nil {
+		t.Fatalf("ConstructSecrets: %v", err)
+	}
+	if got := fv.requestCount(`^GET /v1/sys/mounts$`); got != 1 {
+		t.Errorf("sys/mounts requests = %d, want 1", got)
+	}
+}

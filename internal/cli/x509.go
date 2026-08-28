@@ -7,7 +7,6 @@ import (
 	"io"
 	"math/big"
 	"os"
-	"runtime"
 	"strings"
 	"time"
 
@@ -32,7 +31,7 @@ type prefetched struct {
 
 func prefetchReads(v *vault.Vault, paths []string) []prefetched {
 	fetches := make([]prefetched, len(paths))
-	_ = parallel.EachLimit(context.Background(), paths, max(runtime.NumCPU(), 4), func(_ context.Context, i int, path string) error {
+	_ = parallel.EachLimit(context.Background(), paths, parallel.IOLimit(), func(_ context.Context, i int, path string) error {
 		s, err := v.Read(path)
 		fetches[i] = prefetched{s: s, err: err}
 		return nil

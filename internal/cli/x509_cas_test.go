@@ -433,6 +433,47 @@ func TestX509RevokeOfConcurrentlyRevokedCertWritesNothing(t *testing.T) {
 	}
 }
 
+// A plain sequential re-revoke of a certificate already revoked in an
+// earlier, unrelated run is not the concurrent case: the plan's own
+// "Rejected and deferred" list declines to skip CRL churn for an
+// unchanged entry list, so this must still publish a fresh CRL -- one
+// new CA version, CRL Number advanced -- exactly as it did before
+// check-and-set landed.
+func TestX509RevokeOfAlreadyRevokedCertStillPublishesFreshCRL(t *testing.T) {
+	isolateHome(t)
+	fv := newCLIFakeV2(t)
+	ca := newCA(t, "authority")
+	leafA := newLeaf(t, ca, "a")
+	ca.Revoke(leafA)
+	storeCertV2(t, fv, "secret/ca", ca)
+	storeCertV2(t, fv, "secret/a", leafA)
+
+	beforeNumber := latestCRLV2(t, fv, "secret/ca").Number
+
+	c := newX509CLI(t)
+	c.opt.X509.Revoke.SignedBy = "secret/ca"
+	if err := c.cmdX509Revoke("x509 revoke", "secret/a"); err != nil {
+		t.Fatalf("revoke of an already-revoked certificate: %v", err)
+	}
+
+	if states := fv.versionStates("secret/ca"); len(states) != 2 {
+		t.Errorf("CA versions = %d, want 2 (the seed, then the fresh CRL publish)", len(states))
+	}
+	afterNumber := latestCRLV2(t, fv, "secret/ca").Number
+	if afterNumber.Cmp(beforeNumber) <= 0 {
+		t.Errorf("CRL number = %s, want it to have advanced past %s", afterNumber, beforeNumber)
+	}
+	count := 0
+	for _, entry := range latestCRLV2(t, fv, "secret/ca").RevokedCertificateEntries {
+		if entry.SerialNumber.Cmp(leafA.Certificate.SerialNumber) == 0 {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("the serial appears %d times on the CRL, want exactly once", count)
+	}
+}
+
 // A CA swapped for a different authority between read and write must not
 // credit the foreign CA with the revocation: the retry re-checks the
 // signature against the fresh CA and refuses.

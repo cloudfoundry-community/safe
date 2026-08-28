@@ -918,6 +918,16 @@ func (c *CLI) cmdX509Revoke(command string, args ...string) error {
 	// that outlive this one invocation, where a leaf typo is a one-off
 	// the next invocation fixes.
 	var cert *vault.X509
+	//Tracked across attempts to tell apart "already revoked before this
+	// invocation started" (an ordinary repeat revoke -- still writes, see
+	// below) from "revoked by someone else while we were retrying" (the
+	// concurrent case, which does not). Keyed off what the FIRST attempt
+	// saw, not off which attempt is running, so the decision stays stable
+	// across every retry: a later attempt reusing an already-true flag
+	// keeps declining, and one that starts false never flips to declining
+	// just because a concurrent writer's own revocation is now visible.
+	attempts := 0
+	revokedBeforeUs := false
 	_, err := v.Update(opt.X509.Revoke.SignedBy, func(cs *vault.Secret, exists bool) (*vault.Secret, bool, error) {
 		if !exists {
 			p, _, _ := vault.ParsePath(opt.X509.Revoke.SignedBy)
@@ -964,14 +974,25 @@ func (c *CLI) cmdX509Revoke(command string, args ...string) error {
 		//A concurrent writer may have revoked this same certificate
 		// already; re-publishing the list to record nothing new would be
 		// pointless churn, so the write is declined and the winner's
-		// version stands. This applies equally on the very first attempt:
-		// revoking an already-revoked certificate now writes nothing and
-		// leaves the CRL's version and ThisUpdate untouched, where it used
-		// to re-publish the same list under a bumped CRL number every
-		// time. A consumer that relied on ThisUpdate advancing on every
-		// revoke invocation, revoked or not, would need crl --renew
-		// instead.
-		if ca.HasRevoked(cert) {
+		// version stands. That guard must fire only for that concurrent
+		// case, never for an ordinary repeat revoke of a certificate a
+		// prior, unrelated run already revoked: the plan's "Rejected and
+		// deferred" list explicitly declines to skip CRL republication
+		// for an unchanged entry list (a byte-stable CRL walks past its
+		// own NextUpdate), so a sequential re-revoke still writes, same
+		// as it always did. attempts and revokedBeforeUs key the decision
+		// off what the FIRST attempt saw, not off HasRevoked's answer on
+		// whichever attempt happens to be running: a certificate already
+		// on the list before this invocation started gets the write every
+		// time; one that lands on the list only after a retry means
+		// someone else recorded it for us, and only then is the write
+		// declined.
+		attempts++
+		already := ca.HasRevoked(cert)
+		if attempts == 1 {
+			revokedBeforeUs = already
+		}
+		if already && !revokedBeforeUs {
 			return nil, false, nil
 		}
 

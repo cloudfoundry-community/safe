@@ -126,25 +126,42 @@ func (c *CLI) cmdGen(command string, args ...string) error {
 	// paths generate concurrently, multiple keys on the same path stay
 	// sequential within their group, same as before parallelism was added.
 	order, groups := groupByCanonicalPath(targets, func(t genTarget) string { return t.path })
+	// Each group runs as one unit -- a single read serves every key on its
+	// path, so runPathGroups sees one target per group: the whole key list.
+	// N keys then cost N+1 requests instead of 2N, one write per key so the
+	// version history still gains one version per generated key.
+	wholeGroups := make(map[string][][]genTarget, len(groups))
+	for p, ts := range groups {
+		wholeGroups[p] = [][]genTarget{ts}
+	}
 	// The group context goes unused: reads and writes are contextless
 	// vaultkv requests, and password generation is microseconds.
-	return runPathGroups(order, groups, max(runtime.NumCPU(), 4), func(_ context.Context, target genTarget, notice func(format string, args ...any)) error {
-		path, key := target.path, target.key
-		s, err := v.Read(path)
+	return runPathGroups(order, wholeGroups, max(runtime.NumCPU(), 4), func(_ context.Context, group []genTarget, notice func(format string, args ...any)) error {
+		// One read seeds the state every key in the group builds on;
+		// --no-clobber checks run against this accumulated state, so a
+		// skipped key's existing value rides along in the writes that
+		// follow. A failure at key k leaves keys 1..k-1 persisted, the
+		// same partial state the per-key read-modify-write left.
+		s, err := v.Read(group[0].path)
 		if err != nil && !vault.IsNotFound(err) {
 			return err
 		}
-		exists := (err == nil)
-		if opt.SkipIfExists && exists && s.Has(key) {
-			if !opt.Quiet {
-				notice("@R{Cowardly refusing to update} @C{%s:%s} @R{as it is already present in Vault}\n", path, key)
+		for _, target := range group {
+			path, key := target.path, target.key
+			if opt.SkipIfExists && s.Has(key) {
+				if !opt.Quiet {
+					notice("@R{Cowardly refusing to update} @C{%s:%s} @R{as it is already present in Vault}\n", path, key)
+				}
+				continue
 			}
-			return nil
+			if err := s.Password(key, length, opt.Gen.Policy, opt.SkipIfExists); err != nil {
+				return err
+			}
+			if err := v.Write(path, s); err != nil {
+				return err
+			}
 		}
-		if err = s.Password(key, length, opt.Gen.Policy, opt.SkipIfExists); err != nil {
-			return err
-		}
-		return v.Write(path, s)
+		return nil
 	})
 }
 

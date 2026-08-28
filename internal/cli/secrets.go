@@ -1022,16 +1022,33 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 		if err != nil {
 			return err
 		}
-		for path, s := range data {
+		// Sorting first means processing order is a function of the input
+		// alone, never of Go's randomized map iteration, exactly as the
+		// version-2 loop's importPairs arranges. Distinct paths then write
+		// concurrently; each `wrote` line is buffered by its path's slot
+		// and replayed after the fan-out, so stderr comes out in sorted
+		// order rather than completion order.
+		paths := make([]string, 0, len(data))
+		for path := range data {
+			paths = append(paths, path)
+		}
+		sort.Strings(paths)
+		wrote := make([]bool, len(paths))
+		err = parallel.EachLimit(context.Background(), paths, max(runtime.NumCPU(), 4), func(_ context.Context, i int, path string) error {
 			//The keys of an export are literal Vault paths; Write reads its
 			// argument as path:key syntax.
-			err = v.Write(vault.EncodePath(path, "", 0), s)
-			if err != nil {
+			if err := v.Write(vault.EncodePath(path, "", 0), data[path]); err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintf(os.Stderr, "wrote %s\n", path)
+			wrote[i] = true
+			return nil
+		})
+		for i, path := range paths {
+			if wrote[i] {
+				_, _ = fmt.Fprintf(os.Stderr, "wrote %s\n", path)
+			}
 		}
-		return nil
+		return err
 	}
 
 	v2Import := func(input []byte) error {

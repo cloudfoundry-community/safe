@@ -112,6 +112,39 @@ func TestConnectCacheKeyHashesCACertContent(t *testing.T) {
 	}
 }
 
+// TestConnectCacheRestoresMutatedToken proves a cache hit re-syncs the
+// cached client's auth token with VAULT_TOKEN before handing it back.
+// cmdAuth blanks the shared client's token via SetAuthToken("") so login
+// attempts do not send a stale token (internal/cli/target.go), which does
+// not change any input the cache key covers, so without this guard the
+// `auth status` sub-path would get back a client that sends no token and
+// report a working token as invalid.
+func TestConnectCacheRestoresMutatedToken(t *testing.T) {
+	isolateHome(t)
+	t.Cleanup(resetConnectCache)
+	resetConnectCache()
+	t.Setenv("VAULT_ADDR", "https://127.0.0.1:1")
+	t.Setenv("VAULT_TOKEN", "tok")
+	for _, k := range []string{"HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "SAFE_ALL_PROXY", "safe_all_proxy", "NO_PROXY", "no_proxy", "VAULT_CACERT", "VAULT_NAMESPACE", "VAULT_SKIP_VERIFY"} {
+		t.Setenv(k, "")
+	}
+
+	a, err := connectOrErr(true)
+	if err != nil {
+		t.Fatalf("connectOrErr: %v", err)
+	}
+
+	a.Client().Client.SetAuthToken("")
+
+	b, err := connectOrErr(true)
+	if err != nil {
+		t.Fatalf("connectOrErr (after SetAuthToken mutation): %v", err)
+	}
+	if got := b.Client().Client.AuthToken; got != "tok" {
+		t.Errorf("cached client auth token = %q, want %q (VAULT_TOKEN)", got, "tok")
+	}
+}
+
 // TestConnectCacheRevalidatesMutatedURL proves a cache hit re-checks the
 // cached client's live URL against VAULT_ADDR before handing it back. safe
 // unseal/seal mutate a shared client's URL via SetURL to walk cluster nodes

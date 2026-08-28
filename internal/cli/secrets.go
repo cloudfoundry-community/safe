@@ -514,9 +514,13 @@ func (c *CLI) cmdTree(command string, args ...string) error {
 			//Version metadata is what the liveness check reads, and the tree
 			// renders none of it, so a quick walk has no reason to fetch it.
 			// ConstructSecrets turns this back on whenever it still has to
-			// decide what to drop, which is every walk without -q.
-			SkipVersionInfo:     !opt.Tree.ShowKeys,
-			AllowDeletedSecrets: opt.Tree.Quick,
+			// decide what to drop, which is every --exact walk.
+			SkipVersionInfo: !opt.Tree.ShowKeys,
+			// The quick walk is the default. --exact buys back the
+			// per-secret liveness check that hides a deleted latest
+			// version, at one metadata read per leaf. -q names the
+			// default, so an explicit --exact wins over it.
+			AllowDeletedSecrets: !opt.Tree.Exact,
 		})
 
 		if err != nil {
@@ -555,8 +559,9 @@ func (c *CLI) cmdPaths(command string, args ...string) error {
 			return err
 		}
 		secrets, err := v.ConstructSecrets(root, vault.TreeOpts{
-			FetchKeys:           opt.Paths.ShowKeys,
-			AllowDeletedSecrets: opt.Paths.Quick,
+			FetchKeys: opt.Paths.ShowKeys,
+			// As for tree: quick by default, --exact to filter.
+			AllowDeletedSecrets: !opt.Paths.Exact,
 			SkipVersionInfo:     !opt.Paths.ShowKeys,
 		})
 		if err != nil {

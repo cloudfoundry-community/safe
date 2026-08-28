@@ -3,6 +3,7 @@ package vault
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -238,10 +239,11 @@ func StartSOCKS5Server(dialFn func(string, string) (net.Conn, error)) (addr stri
 	}
 
 	go func() {
-		// go-socks5's Serve always returns a non-nil error once the
-		// listener closes; log it unconditionally.
-		serr := socks5Server.Serve(socks5Listener)
-		fmt.Fprintf(os.Stderr, "SOCKS5 proxy error: %s\n", serr)
+		// Serve never returns nil; closing the listener is the normal
+		// shutdown path, so only real accept failures are worth noise.
+		if serr := socks5Server.Serve(socks5Listener); !errors.Is(serr, net.ErrClosed) {
+			fmt.Fprintf(os.Stderr, "SOCKS5 proxy error: %s\n", serr)
+		}
 	}()
 
 	return socks5Listener.Addr().String(), socks5Listener.Close, nil

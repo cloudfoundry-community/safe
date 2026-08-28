@@ -109,13 +109,15 @@ func TestExportWalksAVersion2MountFromTheRoot(t *testing.T) {
 	}
 }
 
-// A secret whose newest version is deleted drops out of a listing, since there
-// is nothing at that path a plain read would return.
-func TestPathsOmitsASecretWhoseLatestVersionIsDeleted(t *testing.T) {
+// A secret whose newest version is deleted drops out of an --exact listing,
+// since there is nothing at that path a plain read would return. The default
+// walk no longer looks, and keeps it.
+func TestExactPathsOmitsASecretWhoseLatestVersionIsDeleted(t *testing.T) {
 	isolateHome(t)
 	fv := walkFixture(t)
 	fv.deleteV2("secret/app/db", 2)
 	c := newTestCLI(t)
+	c.opt.Paths.Exact = true
 
 	out := captureStdout(t, func() {
 		if err := c.cmdPaths("paths", "secret"); err != nil {
@@ -124,11 +126,11 @@ func TestPathsOmitsASecretWhoseLatestVersionIsDeleted(t *testing.T) {
 	})
 
 	if strings.Contains(out, "secret/app/db") {
-		t.Errorf("paths lists secret/app/db, whose newest version is deleted:\n%s", out)
+		t.Errorf("paths --exact lists secret/app/db, whose newest version is deleted:\n%s", out)
 	}
 	for _, want := range []string{"secret/app/api", "secret/top"} {
 		if !strings.Contains(out, want) {
-			t.Errorf("paths is missing %s:\n%s", want, out)
+			t.Errorf("paths --exact is missing %s:\n%s", want, out)
 		}
 	}
 }

@@ -476,16 +476,21 @@ dockerhub
 github
 ```
 
-### tree \[-d|-q|--keys\] path \[path ...\]
+### tree \[-d|--exact|--keys\] path \[path ...\]
 
 Provide a tree hierarchy listing of all reachable keys in the
 Vault.
 
 `-d` draws only the folders, which is a quicker way to get your
 bearings in an unfamiliar Vault.  `--keys` names the keys inside each
-secret beside it.  `-q` skips the liveness check, exactly as it does
-for `ls` above; with `--keys` the lookup is made anyway, since that is
-how the keys are reached.
+secret beside it.
+
+Unlike `ls`, `tree` does not check liveness by default: a secret whose
+newest version has been deleted or destroyed is still listed.  The
+check costs a version lookup per secret, which on a large tree is most
+of the work the command does.  `--exact` buys it back and drops those
+secrets, exactly as `ls` does.  `-q` is still accepted and names the
+default.
 
 ```
 safe tree secret/dc1
@@ -502,14 +507,13 @@ safe tree secret/dc1
             └── github
 ```
 
-### paths \[-q|--keys\] path \[path ... \]
+### paths \[--exact|--keys\] path \[path ... \]
 
 Provide a flat listing of all reachable keys in the Vault.
 
 `--keys` prints a line per key, as `path:key`, rather than a line per
-secret.  `-q` skips the liveness check, exactly as it does for `ls`
-above; with `--keys` the lookup is made anyway, since that is how the
-keys are reached.
+secret.  As with `tree`, the liveness check is off by default and
+`--exact` turns it on; `-q` is still accepted and names the default.
 
 ```
 safe paths secret/dc1

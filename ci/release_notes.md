@@ -12,13 +12,15 @@
 
 * Every walking command asks Vault for its mount table once rather than repeatedly, and the HTTP transport is tuned for connection reuse.
 
-`safe tree` and `safe paths` are unchanged. Their default output pays one metadata read per leaf purely to hide deleted secrets, and the Vault API offers no cheaper way to detect a deleted latest version. Use `-q` to skip that filtering.
+* `safe tree` and `safe paths` of a 300 secret tree drop from 413 requests to 113. Their old default paid one metadata read per leaf purely to hide secrets whose latest version is deleted, and the Vault API offers no cheaper way to detect that. The quick walk is now the default; see the behavior change below.
 
 # Behavior Changes
 
 Most commands are byte for byte identical to the previous release, including under a restricted token. These are the exceptions.
 
 * **A recursive `copy` or `move` over a tree you can list but cannot fully read now fails.** It refuses up front, exits non-zero, and reports how many secrets or versions it could not read. Previously `copy -Rf` exited zero while writing empty secrets for every unreadable source, and `move -Rf` exited non-zero only after copying part of the tree and deleting several sources. Scripts that relied on the old exit status will need updating.
+
+* **`safe tree` and `safe paths` no longer hide deleted secrets by default.** A secret whose latest version has been soft-deleted now appears in both listings. The check that hid it cost one metadata read per leaf, which was most of what those commands did. Pass `--exact` to get the old filtering back. `-q` and `--quick` are still accepted on both commands and now name the default, so existing invocations are unaffected. `safe ls` is unchanged and still checks by default.
 
 * A KV v2 secret whose metadata read is forbidden but whose data read is permitted is now returned with its keys and values rather than skipped. `safe values` no longer prints its incomplete results warning for that case, and `export`, `find`, and the `--keys` walks return the secret.
 

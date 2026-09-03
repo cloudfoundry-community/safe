@@ -1,11 +1,7 @@
 # Behavior Changes
 
-* **The warning printed when TLS certificate verification is disabled is now off by default.** v1.22.0 wrote that line to stderr unconditionally whenever a target set `skip_verify`, which broke tooling that wraps `safe` and either parses its stderr or expects it to stay quiet. Targeting a Vault with a self-signed certificate is routine rather than exceptional, so the notice is now opt-in: set `SAFE_SKIP_VERIFY_WARNING=1` to get it back. `safe envvars` documents it. Whether certificates are verified is unchanged either way; only the warning changed.
+* **A hand-edited `~/.saferc` that spells a boolean the YAML 1.1 way (`skip_verify: yes`, `on`, `y`, or their negatives) is now rejected.** `safe` reads its configuration with YAML 1.2 scalar rules, under which those words are strings, and reports the line and column of the offending value. Files written by `safe` are unaffected: it has only ever written `true` or `false`. Change the word to `true` or `false` and the file loads again.
 
 # Dependencies
 
-* `safe` builds against Go 1.27.1.
-
-* `safe` no longer depends directly on an archived library. `gopkg.in/yaml.v2`, archived in April 2025, gives way to its maintained successor `go.yaml.in/yaml/v2` v2.4.4. `github.com/pborman/uuid` gives way to `github.com/google/uuid` v1.6.0, which it wrapped and which `safe` already carried indirectly. YAML parsing and rendering are unchanged, and `safe uuid` writes the same version 4 UUIDs, though it now reports a failed entropy draw rather than proceeding past it.
-
-* `golang.org/x/crypto` moves to v0.56.0 and `github.com/gofrs/flock` to v0.13.1.
+* `safe` now reads and writes YAML with `github.com/goccy/go-yaml` v1.19.2, the library our other Go tools use, in place of `go.yaml.in/yaml/v2`. `~/.saferc`, `~/.svtoken`, and `safe get -K` output are byte-for-byte unchanged. In `safe get` output, values that need quoting are now double-quoted rather than single-quoted, and long values are no longer folded at 80 columns. Every value reads back identically in any YAML parser. Values that the new library would otherwise write ambiguously, such as a secret beginning with `? ` or spelled like a number, are quoted explicitly so they always parse back as strings.

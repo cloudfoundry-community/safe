@@ -54,13 +54,17 @@ var timestamp = regexp.MustCompile(`^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}`)
 //
 // Several branches exist because goccy/go-yaml v1.19.2 writes these values
 // wrongly on its own: a string starting with "? " is emitted as a plain
-// scalar no parser accepts; "1e3", ".inf", and ".nan" are emitted unquoted
-// and read back as floats; carriage returns and tabs inside a plain scalar
-// or literal block are lost (goccy/go-yaml#781 covers the \r case); and a
-// literal block for a value ending in two or more newlines is emitted with
-// the wrong chomping and loses a newline. The remaining branches match the
-// conservative rules go.yaml.in/yaml/v2 applied, so existing output stays
-// plain wherever it was plain before.
+// scalar no parser accepts; ".inf" and ".nan" are emitted unquoted and
+// read back as floats, and "1e3" is emitted unquoted and reads as a float
+// under the YAML 1.2 core schema; carriage returns and tabs inside a plain
+// scalar are lost (goccy/go-yaml#781 covers the \r case); and a value that
+// is nothing but newlines is emitted as an empty literal block and decodes
+// as "" (goccy/go-yaml#872 is the parse-side counterpart). Values ending
+// in two or more newlines are also quoted, conservatively, so no reader
+// has to honor a keep-chomping indicator. The remaining branches match
+// the conservative rules go.yaml.in/yaml/v2 applied, so existing output
+// stays plain wherever it was plain before; the leading ":" rule also
+// sidesteps goccy/go-yaml#837.
 func needsQuote(s string) bool {
 	if reserved[strings.ToLower(s)] || numeric.MatchString(s) || timestamp.MatchString(s) {
 		return true

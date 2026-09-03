@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"go.yaml.in/yaml/v2"
+	"github.com/cloudfoundry-community/safe/pkg/yamlenc"
 )
 
 // The lost-update defect, at full contention: every writer's delta must land,
@@ -88,7 +88,7 @@ func TestReadersNeverSeeATornFile(t *testing.T) {
 					return
 				}
 				var c Config
-				if err := yaml.Unmarshal(b, &c); err != nil {
+				if err := yamlenc.Unmarshal(b, &c); err != nil {
 					t.Errorf("torn .saferc observed: %s\n%s", err, b)
 					return
 				}

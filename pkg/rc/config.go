@@ -8,8 +8,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/cloudfoundry-community/safe/pkg/yamlenc"
 	fmt "github.com/jhunt/go-ansi"
-	"go.yaml.in/yaml/v2"
 )
 
 var toCleanup []string
@@ -129,13 +129,13 @@ func Read() (Config, error) {
 		return Config{}, err
 	}
 
-	if err = yaml.Unmarshal(b, &c); err != nil {
-		return Config{}, fmt.Errorf("could not parse config: %w", err)
+	if err = yamlenc.Unmarshal(b, &c); err != nil {
+		return Config{}, fmt.Errorf("could not parse config: %s", yamlenc.ErrorMessage(err))
 	}
 	if c.Version == 0 {
 		var legacy oldConfig
-		if err = yaml.Unmarshal(b, &legacy); err != nil {
-			return Config{}, fmt.Errorf("could not parse legacy config: %w", err)
+		if err = yamlenc.Unmarshal(b, &legacy); err != nil {
+			return Config{}, fmt.Errorf("could not parse legacy config: %s", yamlenc.ErrorMessage(err))
 		}
 		c = legacy.convert()
 	}
@@ -178,7 +178,7 @@ func Update(mutate func(c *Config) error) error {
 }
 
 func (c *Config) write() error {
-	b, err := yaml.Marshal(c)
+	b, err := yamlenc.Marshal(c)
 	if err != nil {
 		return err
 	}
@@ -209,7 +209,7 @@ func (c *Config) write() error {
 			CACerts:    strings.Join(v.CACerts, "\n"),
 			Namespace:  v.Namespace,
 		}
-		svBytes, err = yaml.Marshal(sv)
+		svBytes, err = yamlenc.Marshal(sv)
 		if err != nil {
 			return err
 		}

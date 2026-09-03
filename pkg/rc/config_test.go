@@ -65,13 +65,19 @@ func TestRead(t *testing.T) {
 
 	t.Run("invalid yaml returns error", func(t *testing.T) {
 		home := setHome(t)
-		writeFile(t, filepath.Join(home, ".saferc"), "vaults: [unterminated")
+		writeFile(t, filepath.Join(home, ".saferc"), "vaults:\n  prod:\n    token: s.LEAKME\n    url: [unterminated\n")
 		_, err := Read()
 		if err == nil {
 			t.Fatal("expected error for malformed .saferc, got nil")
 		}
 		if !strings.Contains(err.Error(), "could not parse config") {
 			t.Errorf("error message %q does not contain 'could not parse config'", err.Error())
+		}
+		if strings.Contains(err.Error(), "s.LEAKME") {
+			t.Errorf("parse error echoes ~/.saferc contents: %q", err.Error())
+		}
+		if strings.Contains(err.Error(), "\n") {
+			t.Errorf("parse error spans lines: %q", err.Error())
 		}
 	})
 
@@ -194,6 +200,27 @@ SkipVerify:
 		dev := c.Vaults["dev"]
 		if dev == nil || dev.Token != "dev-token" || !dev.SkipVerify {
 			t.Errorf("converted dev vault wrong: %+v", dev)
+		}
+	})
+
+	t.Run("YAML 1.1 boolean spellings are rejected with the position named", func(t *testing.T) {
+		home := setHome(t)
+		writeFile(t, filepath.Join(home, ".saferc"), `version: 1
+current: prod
+vaults:
+  prod:
+    url: https://vault.prod:8200
+    token: t
+    skip_verify: yes
+`)
+		_, err := Read()
+		if err == nil {
+			t.Fatal("expected an error for skip_verify: yes, got nil")
+		}
+		for _, want := range []string{"could not parse config", "[7:18]", "bool"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q does not mention %q", err.Error(), want)
+			}
 		}
 	})
 }

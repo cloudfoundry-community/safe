@@ -21,9 +21,8 @@ import (
 	"testing"
 	"time"
 
-	"go.yaml.in/yaml/v2"
-
 	"github.com/cloudfoundry-community/safe/pkg/rc"
+	"github.com/cloudfoundry-community/safe/pkg/yamlenc"
 )
 
 // localEngine names an installed engine binary, or skips the test.
@@ -148,7 +147,7 @@ func readSafercAt(t *testing.T, home string) (rc.Config, bool) {
 		return rc.Config{}, false
 	}
 	var cfg rc.Config
-	if err := yaml.Unmarshal(b, &cfg); err != nil {
+	if err := yamlenc.Unmarshal(b, &cfg); err != nil {
 		t.Fatalf("~/.saferc does not parse: %v\n%s", err, b)
 	}
 	return cfg, true

@@ -15,11 +15,11 @@ import (
 
 	"github.com/cloudfoundry-community/vaultkv"
 	fmt "github.com/jhunt/go-ansi"
-	"go.yaml.in/yaml/v2"
 
 	"github.com/cloudfoundry-community/safe/internal/parallel"
 	"github.com/cloudfoundry-community/safe/pkg/rc"
 	"github.com/cloudfoundry-community/safe/pkg/vault"
+	"github.com/cloudfoundry-community/safe/pkg/yamlenc"
 )
 
 // walkRoot resolves a tree-walk root argument to the literal Vault path the
@@ -268,7 +268,7 @@ func (c *CLI) cmdGet(command string, args ...string) error {
 			printedPaths[p] = true
 			result, ok := results[p]
 			if !ok {
-				yml, err := yaml.Marshal(map[string][]string{p: []string{}})
+				yml, err := yamlenc.Marshal(map[string][]string{p: []string{}})
 				if err != nil {
 					return fmt.Errorf("failed to marshal output: %w", err)
 				}
@@ -280,7 +280,7 @@ func (c *CLI) cmdGet(command string, args ...string) error {
 					strKeys[i] = foundKeys[i].String()
 				}
 				sort.Strings(strKeys)
-				yml, err := yaml.Marshal(map[string][]string{p: strKeys})
+				yml, err := yamlenc.Marshal(map[string][]string{p: strKeys})
 				if err != nil {
 					return fmt.Errorf("failed to marshal output: %w", err)
 				}
@@ -288,7 +288,7 @@ func (c *CLI) cmdGet(command string, args ...string) error {
 			}
 		}
 	} else {
-		yml, err := yaml.Marshal(results)
+		yml, err := yamlenc.Marshal(results)
 		if err != nil {
 			return fmt.Errorf("failed to marshal output: %w", err)
 		}

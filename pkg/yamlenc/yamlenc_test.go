@@ -133,3 +133,131 @@ func TestUnmarshalIgnoresUnknownFields(t *testing.T) {
 		t.Errorf("Version = %d, want 1", v.Version)
 	}
 }
+
+// Map keys sort the way go.yaml.in/yaml/v2 sorted them: non-letters
+// before letters, digit runs by numeric value, then rune order. The
+// expected bytes are the previous encoder's output for this map.
+func TestMarshalKeyOrderMatchesPreviousEncoder(t *testing.T) {
+	out, err := Marshal(map[string]string{
+		"key1": "a", "key2": "b", "key9": "c", "key10": "d", "_under": "e",
+		"Alpha": "f", "beta": "g", "a-b": "h", "a.b": "i", "ab": "j",
+		"A": "k", "a": "l", "10": "m", "9": "n", "x01": "o", "x1": "p",
+	})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	want := "_under: e\n\"9\": \"n\"\n\"10\": m\nA: k\nAlpha: f\na: l\na-b: h\na.b: i\nab: j\nbeta: g\nkey1: a\nkey2: b\nkey9: c\nkey10: d\nx1: p\nx01: o\n"
+	if string(out) != want {
+		t.Errorf("got:\n%s\nwant:\n%s", out, want)
+	}
+}
+
+// The reorder pass reaches maps nested inside structs, slices, and other
+// maps, and leaves struct fields in declaration order.
+func TestMarshalReordersNestedMaps(t *testing.T) {
+	type vault struct {
+		URL     string   `yaml:"url"`
+		Token   string   `yaml:"token"`
+		CACerts []string `yaml:"ca_certs,omitempty"`
+	}
+	type config struct {
+		Version int               `yaml:"version"`
+		Current string            `yaml:"current"`
+		Vaults  map[string]*vault `yaml:"vaults"`
+	}
+	out, err := Marshal(&config{
+		Version: 1,
+		Current: "env10",
+		Vaults: map[string]*vault{
+			"env10":  {URL: "https://v10:8200", Token: "t10"},
+			"env2":   {URL: "https://v2:8200", Token: "t2"},
+			"_local": {URL: "http://127.0.0.1:8200"},
+			"gone":   nil,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	want := `version: 1
+current: env10
+vaults:
+  _local:
+    url: http://127.0.0.1:8200
+    token: ""
+  env2:
+    url: https://v2:8200
+    token: t2
+  env10:
+    url: https://v10:8200
+    token: t10
+  gone: null
+`
+	if string(out) != want {
+		t.Errorf("got:\n%s\nwant:\n%s", out, want)
+	}
+	nested, err := Marshal(map[string]map[string]string{
+		"secret/b10": {"k2": "v", "k10": "w"},
+		"secret/b2":  {"z": "x"},
+	})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	wantNested := "secret/b2:\n  z: x\nsecret/b10:\n  k2: v\n  k10: w\n"
+	if string(nested) != wantNested {
+		t.Errorf("got:\n%s\nwant:\n%s", nested, wantNested)
+	}
+}
+
+// keyLess is the previous encoder's sorter; this pins its quirks.
+func TestKeyLess(t *testing.T) {
+	ordered := []string{"_under", "9", "10", "A", "Alpha", "a", "a-b", "a.b", "ab", "beta", "key1", "key2", "key9", "key10", "x1", "x01"}
+	for i := 0; i < len(ordered); i++ {
+		for j := i + 1; j < len(ordered); j++ {
+			if !keyLess(ordered[i], ordered[j]) {
+				t.Errorf("keyLess(%q, %q) = false, want true", ordered[i], ordered[j])
+			}
+			if keyLess(ordered[j], ordered[i]) {
+				t.Errorf("keyLess(%q, %q) = true, want false", ordered[j], ordered[i])
+			}
+		}
+	}
+}
+
+// A blank line inside a literal block is written empty, not indented, as
+// the previous encoder wrote it; the joined CA certs in ~/.svtoken rely
+// on this.
+func TestMarshalLiteralBlankLineIsEmpty(t *testing.T) {
+	out, err := Marshal(map[string]string{"k": "a\n\nb\n"})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if want := "k: |\n  a\n\n  b\n"; string(out) != want {
+		t.Errorf("got %q, want %q", out, want)
+	}
+}
+
+// Trailing whitespace on any line of a multi-line value forces the
+// double-quoted style, exactly as the previous encoder did.
+func TestMarshalQuotesTrailingWhitespaceLines(t *testing.T) {
+	out, err := Marshal(map[string]string{"t1": "a \nb", "t2": "a\nb  \n", "t3": "a\nb ", "t4": "a\n   \nb"})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	want := "t1: \"a \\nb\"\nt2: \"a\\nb  \\n\"\nt3: \"a\\nb \"\nt4: \"a\\n   \\nb\"\n"
+	if string(out) != want {
+		t.Errorf("got:\n%s\nwant:\n%s", out, want)
+	}
+}
+
+// quoter leaves alone any value the encoder already quoted, recognizing it
+// by the quote baked into the node text. That holds only while Marshal
+// uses the encoder's default string style; this pins it.
+func TestMarshalLeavesEncoderQuotedValuesAlone(t *testing.T) {
+	out, err := Marshal(map[string]string{"k": "\"q\""})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if want := "k: \"\\\"q\\\"\"\n"; string(out) != want {
+		t.Errorf("got %q, want %q", out, want)
+	}
+}

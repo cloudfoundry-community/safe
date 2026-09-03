@@ -79,8 +79,11 @@ var quoteCases = []struct {
 	{"multiend", "a\nb\n\n\n", true}, // goccy alone loses trailing newlines
 	{"multilead", "  a\nb", false},
 	{"multitab", "a\n\tb\n", true},
-	{"multitrail", "a \nb", false},
+	{"multitrail", "a \nb", true},
+	{"multitrail2", "a\nb  \n", true}, // goccy alone drops the spaces
+	{"multitrailend", "a\nb ", true},  // goccy alone drops the space
 	{"multiws", "a\n  b\n", false},
+	{"multiwsline", "a\n   \nb", true}, // goccy alone drops the spaces
 	{"n", "n", true},
 	{"nan", ".nan", true}, // goccy alone emits a float
 	{"nbsp", "a\u00a0b", false},

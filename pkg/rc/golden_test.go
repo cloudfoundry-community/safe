@@ -65,3 +65,81 @@ namespace: ns
 		t.Errorf(".svtoken bytes changed:\n--- got\n%s--- want\n%s", got, wantSV)
 	}
 }
+
+// The first golden covers one plain target. This one covers the fields it
+// left out: strongbox, manage_vault_token, a namespace-less target with
+// two CA certs, and vault names whose natural sort differs from a plain
+// string sort.
+func TestWriteGoldenBytesCoversEveryField(t *testing.T) {
+	home := setHome(t)
+	c := Config{
+		Version: 1,
+		Current: "env10",
+		Vaults: map[string]*Vault{
+			"env10": {
+				URL:   "https://vault.env10:8200",
+				Token: "token-10",
+				CACerts: []string{
+					"-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n",
+					"-----BEGIN CERTIFICATE-----\nBBBB\n-----END CERTIFICATE-----\n",
+				},
+				Strongbox: true,
+			},
+			"env2":   {URL: "https://vault.env2:8200", Token: "token-2"},
+			"_local": {URL: "http://127.0.0.1:8200"},
+		},
+		Options: Options{ManageVaultToken: true},
+	}
+	if err := c.write(); err != nil {
+		t.Fatalf("write: %s", err)
+	}
+
+	wantRC := `version: 1
+current: env10
+vaults:
+  _local:
+    url: http://127.0.0.1:8200
+    token: ""
+  env2:
+    url: https://vault.env2:8200
+    token: token-2
+  env10:
+    url: https://vault.env10:8200
+    token: token-10
+    ca_certs:
+    - |
+      -----BEGIN CERTIFICATE-----
+      AAAA
+      -----END CERTIFICATE-----
+    - |
+      -----BEGIN CERTIFICATE-----
+      BBBB
+      -----END CERTIFICATE-----
+    strongbox: true
+options:
+  manage_vault_token: true
+`
+	if got := readFile(t, filepath.Join(home, ".saferc")); got != wantRC {
+		t.Errorf(".saferc bytes changed:\n--- got\n%s--- want\n%s", got, wantRC)
+	}
+
+	wantSV := `vault: https://vault.env10:8200
+token: token-10
+skip_verify: false
+ca_certs: |
+  -----BEGIN CERTIFICATE-----
+  AAAA
+  -----END CERTIFICATE-----
+
+  -----BEGIN CERTIFICATE-----
+  BBBB
+  -----END CERTIFICATE-----
+`
+	if got := readFile(t, filepath.Join(home, ".svtoken")); got != wantSV {
+		t.Errorf(".svtoken bytes changed:\n--- got\n%s--- want\n%s", got, wantSV)
+	}
+
+	if got := readFile(t, filepath.Join(home, ".vault-token")); got != "token-10" {
+		t.Errorf(".vault-token = %q, want %q", got, "token-10")
+	}
+}

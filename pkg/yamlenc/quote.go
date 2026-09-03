@@ -65,6 +65,11 @@ var timestamp = regexp.MustCompile(`^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}`)
 // the conservative rules go.yaml.in/yaml/v2 applied, so existing output
 // stays plain wherever it was plain before; the leading ":" rule also
 // sidesteps goccy/go-yaml#837.
+//
+// A multi-line value with trailing whitespace on any line is quoted as
+// well. The printer drops that whitespace from a literal block, and how
+// much it drops depends on the block's indentation, so the value would
+// read back changed; the previous encoder quoted these values too.
 func needsQuote(s string) bool {
 	if reserved[strings.ToLower(s)] || numeric.MatchString(s) || timestamp.MatchString(s) {
 		return true
@@ -81,6 +86,11 @@ func needsQuote(s string) bool {
 		// Multi-line values become a literal block, which is fine unless
 		// the block would be only newlines, start with one, or end in two
 		// or more, the shapes goccy's chomping indicator gets wrong.
+		for _, line := range strings.Split(s, "\n") {
+			if line != strings.TrimRight(line, " \t") {
+				return true
+			}
+		}
 		return strings.Trim(s, "\n") == "" || strings.HasPrefix(s, "\n") || strings.HasSuffix(s, "\n\n")
 	}
 	if s != strings.TrimSpace(s) {

@@ -8,17 +8,29 @@ package yamlenc
 
 import (
 	"io"
+	"reflect"
+	"regexp"
 
 	"github.com/goccy/go-yaml"
 	"github.com/goccy/go-yaml/ast"
 	"github.com/goccy/go-yaml/printer"
 )
 
+// padding matches a line that is nothing but spaces. The printer indents
+// the blank lines inside a literal block, where go.yaml.in/yaml/v2 left
+// them empty; both parse the same, and stripping the spaces keeps the bytes
+// of ~/.svtoken and safe get output identical to the old encoder's. After
+// needsQuote has moved every value with trailing whitespace on a line into
+// the double-quoted style, literal-block padding is the only place a
+// whitespace-only line can occur.
+var padding = regexp.MustCompile(`(?m)^ +$`)
+
 // Marshal renders v as YAML. The value is encoded with the library's own
-// rules first, then the tree is walked and every plain string that
-// needsQuote is switched to the double-quoted style; see needsQuote for the
-// rule and the upstream issues it works around. Encoding natively and
-// editing the tree, rather than registering a CustomMarshaler, keeps
+// rules first, then the tree is edited in two passes: reorder restores the
+// map key order the previous encoder used, and quoter switches every plain
+// string that needsQuote flags to the double-quoted style; see needsQuote
+// for the rule and the upstream issues it works around. Encoding natively
+// and editing the tree, rather than registering a CustomMarshaler, keeps
 // literal blocks at their correct indentation: a CustomMarshaler's bytes
 // are re-parsed as a standalone document, and a nested literal block then
 // carries that document's indent on top of its real one.
@@ -27,9 +39,10 @@ func Marshal(v any) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	reorder(node, reflect.ValueOf(v))
 	ast.Walk(quoter{}, node)
 	var p printer.Printer
-	return p.PrintNode(node), nil
+	return padding.ReplaceAll(p.PrintNode(node), nil), nil
 }
 
 // Unmarshal decodes data into v with the library defaults: unknown fields

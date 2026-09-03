@@ -8,11 +8,11 @@ import (
 	"reflect"
 	"sort"
 
+	"github.com/cloudfoundry-community/safe/pkg/yamlenc"
 	"github.com/jhunt/go-ansi"
 	"github.com/tredoe/osutil/user/crypt/md5_crypt"
 	"github.com/tredoe/osutil/user/crypt/sha256_crypt"
 	"github.com/tredoe/osutil/user/crypt/sha512_crypt"
-	"go.yaml.in/yaml/v2"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -295,7 +295,7 @@ func (s *Secret) JSON() string {
 // YAML converts a Secret to its YAML representation and returns it as a string.
 // Returns an empty string if there were any errors.
 func (s *Secret) YAML() string {
-	b, err := yaml.Marshal(s.data)
+	b, err := yamlenc.Marshal(s.data)
 	if err != nil {
 		return ""
 	}

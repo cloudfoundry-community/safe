@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/cloudfoundry-community/safe/pkg/vault"
+	"github.com/cloudfoundry-community/safe/pkg/yamlenc"
 )
 
 // newTestSecret builds a Secret with the given key/value pairs.
@@ -345,6 +346,28 @@ func TestSecret_YAML(t *testing.T) {
 		}
 		if !strings.Contains(y, "one") {
 			t.Errorf("YAML() output missing value 'one': %q", y)
+		}
+	})
+
+	t.Run("hostile values survive a YAML round trip", func(t *testing.T) {
+		s := newTestSecret(
+			"question", "? x",
+			"exponent", "1e3",
+			"infinity", ".inf",
+			"crlf", "line1\r\nline2",
+			"tabbed", "a\tb",
+			"truthy", "yes",
+			"pem", "-----BEGIN-----\nAAA\n-----END-----\n",
+			"plain", "it's a secret",
+		)
+		var back map[string]string
+		if err := yamlenc.Unmarshal([]byte(s.YAML()), &back); err != nil {
+			t.Fatalf("YAML() output does not parse: %v\n%s", err, s.YAML())
+		}
+		for _, k := range s.Keys() {
+			if back[k] != s.Get(k) {
+				t.Errorf("%s: got %q, want %q", k, back[k], s.Get(k))
+			}
 		}
 	})
 }

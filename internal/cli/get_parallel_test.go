@@ -12,8 +12,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"go.yaml.in/yaml/v2"
 )
 
 // Reading several paths in one `get` overlaps the underlying reads, rather
@@ -84,23 +82,12 @@ func TestGetKeysOnlyOutputOrderUnchanged(t *testing.T) {
 	}
 
 	want := "---\n" +
-		mustKeysYAML(t, "secret/a", []string{"k1", "k2"}) +
-		mustKeysYAML(t, "secret/b", []string{"k1"}) +
-		mustKeysYAML(t, "secret/c", []string{"a", "z"})
+		"secret/a:\n- k1\n- k2\n\n" +
+		"secret/b:\n- k1\n\n" +
+		"secret/c:\n- a\n- z\n\n"
 	if out != want {
 		t.Errorf("safe get -K output changed:\ngot:\n%q\nwant:\n%q", out, want)
 	}
-}
-
-// mustKeysYAML renders one safe get -K block exactly as cmdGet's KeysOnly
-// branch does, for building an expected multi-path transcript.
-func mustKeysYAML(t *testing.T, path string, keys []string) string {
-	t.Helper()
-	yml, err := yaml.Marshal(map[string][]string{path: keys})
-	if err != nil {
-		t.Fatalf("yaml.Marshal: %v", err)
-	}
-	return string(yml) + "\n"
 }
 
 // A multi-path get naming two missing secrets out of order reports them in

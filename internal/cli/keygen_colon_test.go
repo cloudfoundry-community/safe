@@ -10,7 +10,7 @@ package cli
 import (
 	"testing"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 )
 
 // defaultGenPolicy mirrors the character policy the CLI sets before dispatching
@@ -70,7 +70,7 @@ func TestCmdUuidColonBearingPath(t *testing.T) {
 	}
 
 	kv := fv.get("secret/we:ird")
-	if uuid.Parse(kv["id"]) == nil {
+	if _, err := uuid.Parse(kv["id"]); err != nil {
 		t.Errorf("secret/we:ird[id] = %q, want a UUID (keys: %v)", kv["id"], kv)
 	}
 	if sib := fv.get("secret/we"); sib["other"] != "untouched" {
@@ -87,7 +87,8 @@ func TestCmdUuidPlainPath(t *testing.T) {
 	if err := c.cmdUuid("uuid", "secret/plain:id"); err != nil {
 		t.Fatalf("cmdUuid: %v", err)
 	}
-	if kv := fv.get("secret/plain"); uuid.Parse(kv["id"]) == nil {
+	kv := fv.get("secret/plain")
+	if _, err := uuid.Parse(kv["id"]); err != nil {
 		t.Errorf("secret/plain[id] = %q, want a UUID (keys: %v)", kv["id"], kv)
 	}
 }

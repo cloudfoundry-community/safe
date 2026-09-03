@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"gopkg.in/yaml.v2"
+	"go.yaml.in/yaml/v2"
 )
 
 // The lost-update defect, at full contention: every writer's delta must land,

@@ -15,7 +15,7 @@ import (
 
 	"github.com/cloudfoundry-community/vaultkv"
 	fmt "github.com/jhunt/go-ansi"
-	"gopkg.in/yaml.v2"
+	"go.yaml.in/yaml/v2"
 
 	"github.com/cloudfoundry-community/safe/internal/parallel"
 	"github.com/cloudfoundry-community/safe/pkg/rc"

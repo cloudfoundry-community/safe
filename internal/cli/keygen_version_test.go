@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 )
 
 // assertVersionRefused fails unless err complains about the version notation.
@@ -164,7 +164,8 @@ func TestCmdUuidAcceptsAnEscapedCaret(t *testing.T) {
 	if err := c.cmdUuid("uuid", `secret/u\^7:id`); err != nil {
 		t.Fatalf("cmdUuid: %v", err)
 	}
-	if kv := fv.get(`secret/u^7`); uuid.Parse(kv["id"]) == nil {
+	kv := fv.get(`secret/u^7`)
+	if _, err := uuid.Parse(kv["id"]); err != nil {
 		t.Errorf("secret/u^7[id] = %q, want a UUID (keys: %v)", kv["id"], kv)
 	}
 }

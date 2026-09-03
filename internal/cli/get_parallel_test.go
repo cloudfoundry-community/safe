@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"gopkg.in/yaml.v2"
+	"go.yaml.in/yaml/v2"
 )
 
 // Reading several paths in one `get` overlaps the underlying reads, rather

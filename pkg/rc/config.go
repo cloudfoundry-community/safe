@@ -9,7 +9,7 @@ import (
 	"sync"
 
 	fmt "github.com/jhunt/go-ansi"
-	"gopkg.in/yaml.v2"
+	"go.yaml.in/yaml/v2"
 )
 
 var toCleanup []string

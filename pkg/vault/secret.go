@@ -12,8 +12,8 @@ import (
 	"github.com/tredoe/osutil/user/crypt/md5_crypt"
 	"github.com/tredoe/osutil/user/crypt/sha256_crypt"
 	"github.com/tredoe/osutil/user/crypt/sha512_crypt"
+	"go.yaml.in/yaml/v2"
 	"golang.org/x/crypto/bcrypt"
-	"gopkg.in/yaml.v2"
 )
 
 // A Secret contains a set of key/value pairs that store anything you

@@ -13,7 +13,7 @@ import (
 	"github.com/cloudfoundry-community/safe/pkg/rc"
 	"github.com/cloudfoundry-community/safe/pkg/vault"
 
-	uuid "github.com/pborman/uuid"
+	"github.com/google/uuid"
 )
 
 // renderNotice formats a per-target stderr notice through go-ansi exactly as
@@ -196,7 +196,10 @@ func (c *CLI) cmdUuid(command string, args ...string) error {
 		return err
 	}
 
-	u := uuid.NewRandom()
+	u, err := uuid.NewRandom()
+	if err != nil {
+		return fmt.Errorf("could not generate a UUID: @R{%s}", err)
+	}
 
 	stringuuid := u.String()
 
@@ -223,7 +226,7 @@ func (c *CLI) cmdUuid(command string, args ...string) error {
 	// and the skip check re-decides against that state -- a concurrent
 	// write of the key turns the retry into a refusal.
 	var skipped bool
-	_, err := v.Update(path, func(s *vault.Secret, exists bool) (*vault.Secret, bool, error) {
+	_, err = v.Update(path, func(s *vault.Secret, exists bool) (*vault.Secret, bool, error) {
 		skipped = false
 		if opt.SkipIfExists && exists && s.Has(key) {
 			skipped = true

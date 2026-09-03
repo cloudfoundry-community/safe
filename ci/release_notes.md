@@ -72,4 +72,6 @@ Most commands are byte for byte identical to the previous release, including und
 
 * Requires `vaultkv` v0.7.2, which adds KV v2 check-and-set support and a whole-table mount cache, and carries v0.7.1's fixes for connection reuse after error responses, a stale token on redirects, and mount lookup concurrency.
 
+* Builds against Go 1.27.1.
+
 * The archived `gopkg.in/yaml.v2` is replaced by its maintained successor, `go.yaml.in/yaml/v2` v2.4.4, and the archived `github.com/pborman/uuid` by `github.com/google/uuid` v1.6.0, which pborman/uuid was already a wrapper around. `golang.org/x/crypto` moves to v0.56.0 and `github.com/gofrs/flock` to v0.13.1. Parsing, rendering, and the UUIDs `safe uuid` writes are unchanged.

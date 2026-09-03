@@ -88,6 +88,20 @@ func CanonicalURL(raw string) (string, error) {
 	return u.String(), nil
 }
 
+// warnSkipVerify prints the insecure-TLS warning, but only when the caller has
+// asked for it with SAFE_SKIP_VERIFY_WARNING=1. It is off by default because
+// safe is called from scripts and other tools that target Vaults with
+// self-signed certificates as a matter of course, and an unasked-for line on
+// stderr breaks anything that reads safe's stderr or expects it to be quiet.
+// Whoever wants the reminder opts in; skip-verify itself is unaffected either
+// way.
+func warnSkipVerify(skipVerify bool) {
+	if !skipVerify || os.Getenv("SAFE_SKIP_VERIFY_WARNING") != "1" {
+		return
+	}
+	_, _ = ansi.Fprintf(os.Stderr, "@Y{WARNING: TLS certificate verification disabled — connections to Vault are insecure}\n")
+}
+
 // NewVault creates a new Vault object.  If an empty token is specified,
 // the current user's token is read from ~/.vault-token.
 func NewVault(conf VaultConfig) (*Vault, error) {
@@ -115,9 +129,7 @@ func NewVault(conf VaultConfig) (*Vault, error) {
 		return nil, fmt.Errorf("error setting up proxy: %w", err)
 	}
 
-	if conf.SkipVerify {
-		_, _ = ansi.Fprintf(os.Stderr, "@Y{WARNING: TLS certificate verification disabled — connections to Vault are insecure}\n")
-	}
+	warnSkipVerify(conf.SkipVerify)
 
 	return &Vault{
 		client: (&vaultkv.Client{

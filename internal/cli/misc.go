@@ -73,6 +73,11 @@ const envvarsHelp = `@G{[SCRIPTING]}
                  'vault' or 'bao' (OpenBao). Defaults to the first of the
                  two found on PATH, vault first. 'safe local --engine'
                  overrides this.
+  @B{SAFE_SKIP_VERIFY_WARNING}
+                 Set to '1' to print a warning to stderr whenever TLS
+                 certificate verification is disabled for the target.
+                 Off by default; it does not change whether verification
+                 happens.
 
 @G{[PROXYING]}
   @B{HTTP_PROXY}     The proxy to use for HTTP requests.

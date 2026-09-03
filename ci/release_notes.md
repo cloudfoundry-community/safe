@@ -66,7 +66,7 @@ Most commands are byte for byte identical to the previous release, including und
 
 * `safe dhparam` no longer streams OpenSSL's progress output to stderr. The generated parameters and all error reporting are unchanged.
 
-* The warning printed when TLS certificate verification is disabled now says connections are insecure, rather than merely not authenticated.
+* The warning printed when TLS certificate verification is disabled is now opt-in, off by default, and says connections are insecure rather than merely not authenticated. Set `SAFE_SKIP_VERIFY_WARNING=1` to see it. Nothing that wraps safe gets an unasked-for line on stderr, and whether verification happens is unchanged.
 
 # Upstream Convergence
 

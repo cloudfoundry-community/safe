@@ -87,6 +87,9 @@ func newRenewCLI(t *testing.T) *CLI {
 // own.
 func TestRenewAllDoesNotCarrySettingsBetweenTargets(t *testing.T) {
 	isolateHome(t)
+	//The insecure-TLS warning is off unless it is asked for, and it is what
+	// this test reads the carried setting off of.
+	t.Setenv("SAFE_SKIP_VERIFY_WARNING", "1")
 	alpha, beta := newRenewFake(t), newRenewFake(t)
 	writeSaferc(t, `version: 1
 current: alpha

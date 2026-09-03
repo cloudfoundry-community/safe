@@ -14,7 +14,6 @@ require (
 	github.com/jhunt/go-envirotron v0.0.0-20191007155228-c8f2a184ad0f
 	github.com/mattn/go-isatty v0.0.24
 	github.com/tredoe/osutil v1.5.0
-	go.yaml.in/yaml/v2 v2.4.4
 	golang.org/x/crypto v0.56.0
 	golang.org/x/net v0.58.0
 	golang.org/x/term v0.45.0

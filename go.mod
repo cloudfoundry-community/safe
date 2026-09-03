@@ -6,6 +6,7 @@ require (
 	github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5
 	github.com/cloudfoundry-community/goutils v0.0.0-20230124234059-1add95a6ecd7
 	github.com/cloudfoundry-community/vaultkv v0.7.2
+	github.com/goccy/go-yaml v1.19.2
 	github.com/gofrs/flock v0.13.1
 	github.com/google/uuid v1.6.0
 	github.com/jhunt/go-ansi v0.0.0-20181127194324-5fd839f108b6

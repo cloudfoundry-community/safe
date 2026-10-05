@@ -369,3 +369,36 @@ exit 1
 		t.Errorf("expected Vault's own complaint relayed, got:\n%s", stderr.String())
 	}
 }
+
+func TestCmdLocal_RaftBackedLifecycleCreatesDirectory(t *testing.T) {
+	// No t.Parallel — captureStderr mutates os.Stderr.
+	isolateHome(t)
+	installFakeLocalVault(t)
+	c := localCLI(t)
+	dir := filepath.Join(t.TempDir(), "raft-data")
+	c.opt.Local.Raft = dir
+	c.opt.Local.Port = freePort(t)
+
+	var err error
+	var stderr string
+	captureStdout(t, func() {
+		stderr = captureStderr(t, func() {
+			err = c.cmdLocal("local")
+		})
+	})
+	if err != nil {
+		t.Fatalf("cmdLocal returned unexpected error: %v\nstderr:\n%s", err, stderr)
+	}
+	// A new raft directory must not be mistaken for an initialized vault, so
+	// no unseal key was prompted for and init produced the seal key.
+	if !strings.Contains(stderr, "local-seal-key") {
+		t.Errorf("expected the seal key echoed, got:\n%s", stderr)
+	}
+	info, statErr := os.Stat(dir)
+	if statErr != nil {
+		t.Fatalf("raft directory was not created: %v", statErr)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Errorf("raft directory mode = %v, want 0700", info.Mode().Perm())
+	}
+}

@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -23,6 +25,7 @@ type localConfigParams struct {
 	port       int      // listener port
 	memory     bool     // true for an in-memory backend
 	filePath   string   // file backend path (when memory is false)
+	raftPath   string   // raft backend path (single-node integrated storage)
 	engineName string   // Engine.Name() of the server this config is for
 	global     []string // raw key=value overrides for the top-level config
 	listener   []string // raw key=value overrides for the listener "tcp" stanza
@@ -125,6 +128,15 @@ func buildLocalConfig(p localConfigParams) (string, error) {
 			hclField{key: "disable_unauthed_rekey_endpoints", val: "false"})
 	}
 
+	if p.raftPath != "" {
+		// A single-node raft server still needs to know how to reach
+		// itself. The cluster address sits one above the API port, which is
+		// where the engine's own default cluster listener binds.
+		globalDefaults = append(globalDefaults,
+			hclField{key: "api_addr", val: strconv.Quote(fmt.Sprintf("http://127.0.0.1:%d", p.port))},
+			hclField{key: "cluster_addr", val: strconv.Quote(fmt.Sprintf("http://127.0.0.1:%d", p.port+1))})
+	}
+
 	global, err := applyConfigKV(globalDefaults, p.global)
 	if err != nil {
 		return "", err
@@ -147,13 +159,57 @@ func buildLocalConfig(p localConfigParams) (string, error) {
 	}
 	b.WriteString("}\n")
 
-	if p.memory {
+	switch {
+	case p.memory:
 		b.WriteString("storage \"inmem\" {}\n")
-	} else {
+	case p.raftPath != "":
+		fmt.Fprintf(&b, "storage \"raft\" {\n  path = %s\n  node_id = %s\n}\n",
+			strconv.Quote(p.raftPath), strconv.Quote(raftNodeID))
+	default:
 		fmt.Fprintf(&b, "storage \"file\" { path = %s }\n", strconv.Quote(p.filePath))
 	}
 
 	return b.String(), nil
+}
+
+// raftNodeID is the fixed node identity of the single-node raft cluster that
+// `safe local --raft` runs.
+const raftNodeID = "safe-local"
+
+// localDataInitialized reports whether the storage directory already holds a
+// vault. The file backend is judged by whether its path exists. Raft is
+// judged by what raft writes (vault.db or a raft/ directory), because safe
+// creates the raft directory itself before the server starts.
+func localDataInitialized(filePath, raftPath string) bool {
+	if raftPath != "" {
+		for _, name := range []string{"vault.db", "raft"} {
+			if _, err := os.Stat(filepath.Join(raftPath, name)); err == nil {
+				return true
+			}
+		}
+		return false
+	}
+	if filePath == "" {
+		return false
+	}
+	_, err := os.Stat(filePath)
+	return err == nil || !os.IsNotExist(err)
+}
+
+// ensureRaftDir creates the raft data directory (mode 0700) when it is new.
+// Raft will not create it, and an existing directory is left as it is.
+func ensureRaftDir(path string) error {
+	info, err := os.Stat(path)
+	if err == nil {
+		if !info.IsDir() {
+			return fmt.Errorf("--raft path %q exists and is not a directory", path)
+		}
+		return nil
+	}
+	if !os.IsNotExist(err) {
+		return err
+	}
+	return os.MkdirAll(path, 0o700)
 }
 
 // lockedBuffer is a goroutine-safe byte sink. `safe local` points the server

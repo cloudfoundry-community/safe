@@ -6,9 +6,13 @@ package cli
 // PATH (installFakeBin lives in server_vault_cmd_test.go).
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // installFakeVaultVersionOnly installs a fake `vault` that answers `vault
@@ -37,10 +41,12 @@ func TestCmdLocal_NeitherMemoryNorFileErrors(t *testing.T) {
 
 	err := c.cmdLocal("local")
 	if err == nil {
-		t.Fatal("expected an error when neither --memory nor --file is given, got nil")
+		t.Fatal("expected an error when none of --memory, --file, or --raft is given, got nil")
 	}
-	if !strings.Contains(err.Error(), "--memory or --file") {
-		t.Errorf("unexpected error wording: %v", err)
+	for _, flag := range []string{"--memory", "--file", "--raft"} {
+		if !strings.Contains(err.Error(), flag) {
+			t.Errorf("error should name %s, got: %v", flag, err)
+		}
 	}
 }
 
@@ -54,8 +60,42 @@ func TestCmdLocal_BothMemoryAndFileErrors(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error when both --memory and --file are given, got nil")
 	}
-	if !strings.Contains(err.Error(), "not both") {
+	if !strings.Contains(err.Error(), "only one") {
 		t.Errorf("unexpected error wording: %v", err)
+	}
+}
+
+func TestCmdLocal_MutuallyExclusiveStorageFlags(t *testing.T) {
+	cases := []struct {
+		name       string
+		memory     bool
+		file, raft string
+	}{
+		{"memory and raft", true, "", "/x/raft"},
+		{"file and raft", false, "/x/file", "/x/raft"},
+		{"all three", true, "/x/file", "/x/raft"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateHome(t)
+			c := localCLI(t)
+			c.opt.Local.Memory = tc.memory
+			c.opt.Local.File = tc.file
+			c.opt.Local.Raft = tc.raft
+
+			err := c.cmdLocal("local")
+			if err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			if !strings.Contains(err.Error(), "only one") {
+				t.Errorf("unexpected error wording: %v", err)
+			}
+			for _, flag := range []string{"--memory", "--file", "--raft"} {
+				if !strings.Contains(err.Error(), flag) {
+					t.Errorf("error should name %s, got: %v", flag, err)
+				}
+			}
+		})
 	}
 }
 
@@ -131,4 +171,39 @@ func TestCmdLocal_MalformedListenerPairErrorsWithOldVault(t *testing.T) {
 	if !strings.Contains(err.Error(), "empty key") {
 		t.Errorf("unexpected error wording: %v", err)
 	}
+}
+
+func TestWaitLocalActive(t *testing.T) {
+	t.Run("waits through standby and not-yet-active until health is 200", func(t *testing.T) {
+		var hits atomic.Int32
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1/sys/health" {
+				t.Errorf("unexpected path %s", r.URL.Path)
+			}
+			if hits.Add(1) < 3 {
+				w.WriteHeader(http.StatusTooManyRequests)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer ts.Close()
+
+		if err := waitLocalActive(ts.URL, 5*time.Second, time.Millisecond); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got := hits.Load(); got != 3 {
+			t.Errorf("health polled %d times, want 3", got)
+		}
+	})
+
+	t.Run("gives up when the node never becomes active", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusTooManyRequests)
+		}))
+		defer ts.Close()
+
+		if err := waitLocalActive(ts.URL, 50*time.Millisecond, time.Millisecond); err == nil {
+			t.Fatal("expected a timeout error, got nil")
+		}
+	})
 }

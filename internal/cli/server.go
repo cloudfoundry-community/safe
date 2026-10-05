@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -74,6 +75,32 @@ func effectiveListenerAddress(port int, overrides []string) (address string, tls
 		}
 	}
 	return address, !tlsDisabled, nil
+}
+
+// waitLocalActive polls /v1/sys/health until the node reports itself active.
+// Raft needs a moment after unseal to elect itself leader, and until then
+// requests fail with "local node not active". Health answers 200 only for an
+// active node; 429 (standby), 500, 503, and connection errors all mean keep
+// waiting. Any other status is not something this wait understands, so it
+// does not hold the caller up.
+func waitLocalActive(baseURL string, timeout, interval time.Duration) error {
+	client := &http.Client{Timeout: time.Second}
+	deadline := time.Now().Add(timeout)
+	for {
+		resp, err := client.Get(baseURL + "/v1/sys/health")
+		if err == nil {
+			_ = resp.Body.Close()
+			switch resp.StatusCode {
+			case http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusServiceUnavailable:
+			default:
+				return nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("the node did not become active within %s", timeout)
+		}
+		time.Sleep(interval)
+	}
 }
 
 // localPortScanStart is where automatic port selection begins scanning.
@@ -275,11 +302,17 @@ func restoreTarget(name, previous, url string) error {
 func (c *CLI) cmdLocal(command string, args ...string) error {
 	opt := c.opt
 
-	if !opt.Local.Memory && opt.Local.File == "" {
-		return fmt.Errorf("Please specify either --memory or --file <path>")
+	chosen := 0
+	for _, set := range []bool{opt.Local.Memory, opt.Local.File != "", opt.Local.Raft != ""} {
+		if set {
+			chosen++
+		}
 	}
-	if opt.Local.Memory && opt.Local.File != "" {
-		return fmt.Errorf("Please specify either --memory or --file <path>, but not both")
+	if chosen == 0 {
+		return fmt.Errorf("Please specify one of --memory, --file <path>, or --raft <path>")
+	}
+	if chosen > 1 {
+		return fmt.Errorf("Please specify only one of --memory, --file <path>, or --raft <path>")
 	}
 
 	engine, err := selectEngine(opt.Local.Engine)
@@ -309,12 +342,20 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 	keys := make([]string, 0)
 	if !opt.Local.Memory {
 		opt.Local.File = filepath.ToSlash(opt.Local.File)
-		if _, err := os.Stat(opt.Local.File); err == nil || !os.IsNotExist(err) {
+		opt.Local.Raft = filepath.ToSlash(opt.Local.Raft)
+		// Decide before ensureRaftDir: creating the directory must not make
+		// a brand-new raft vault look initialized.
+		if localDataInitialized(opt.Local.File, opt.Local.Raft) {
 			key, err := pr("Unseal Key", false, true)
 			if err != nil {
 				return err
 			}
 			keys = append(keys, key)
+		}
+		if opt.Local.Raft != "" {
+			if err := ensureRaftDir(opt.Local.Raft); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -406,6 +447,7 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 			port:       port,
 			memory:     opt.Local.Memory,
 			filePath:   opt.Local.File,
+			raftPath:   opt.Local.Raft,
 			engineName: engine.Name(),
 			global:     opt.Local.Config,
 			listener:   opt.Local.Listener,
@@ -481,6 +523,11 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 	if err = v.Unseal(keys); err != nil {
 		die(fmt.Errorf("Unable to unseal the new (temporary) %s server: %w", engine.Title(), err))
 	}
+	if opt.Local.Raft != "" {
+		if err = waitLocalActive(localVaultURL(address), 30*time.Second, 250*time.Millisecond); err != nil {
+			die(fmt.Errorf("Raft storage did not elect a leader after unseal: %w", err))
+		}
+	}
 	token, err = resolveRootToken(token, func() (string, error) {
 		return v.NewRootToken(keys)
 	})
@@ -532,7 +579,7 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 			_, _ = fmt.Fprintf(os.Stderr, "@R{This %s server is MEMORY-BACKED!}\n", engine.Title())
 			_, _ = fmt.Fprintf(os.Stderr, "If you want to @Y{retain your secrets} be sure to @C{safe export}.\n")
 		} else {
-			_, _ = fmt.Fprintf(os.Stderr, "Storing data (encrypted) in @G{%s}\n", opt.Local.File)
+			_, _ = fmt.Fprintf(os.Stderr, "Storing data (encrypted) in @G{%s}\n", cmp.Or(opt.Local.File, opt.Local.Raft))
 			_, _ = fmt.Fprintf(os.Stderr, "Your %s Seal Key is @M{%s}\n", engine.Title(), keys[0])
 		}
 		_, _ = fmt.Fprintf(os.Stderr, "Ctrl-C to shut down the %s server\n", engine.Title())

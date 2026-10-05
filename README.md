@@ -912,15 +912,18 @@ whitespace before `eval` ever sees it.
 `--fish` writes the same thing for fish, and `--json` writes it as JSON. Give
 one of them: naming two is an error.
 
-### local (--memory|--file dir) \[--engine vault|bao\]
+### local (--memory|--file dir|--raft dir) \[--engine vault|bao\]
 
 Spin up a throwaway server for testing or experimentation, target it, and tear
 it down again on Ctrl-C. Use `--memory` for an in-memory backend whose data is
 gone on exit, or `--file <dir>` to keep the (encrypted) data between runs.
 
+OpenBao 2.7 removed the file storage backend, so `--file` no longer starts there. Use `--raft <dir>` instead. It runs a single-node integrated raft store in that directory, creating it with mode 0700 when it is new, and it is initialized, unsealed, and targeted exactly the way `--file` is. Give exactly one of `--memory`, `--file`, and `--raft`.
+
 ```
 safe local --memory
 safe local --file /tmp/my-vault
+safe local --raft /tmp/my-raft-vault
 ```
 
 safe can drive either HashiCorp Vault or [OpenBao][openbao], which forked from
@@ -946,7 +949,7 @@ export SAFE_ENGINE=bao
 the engine the same way.
 
 One caveat on OpenBao: it removed the legacy `sys/generate-root` API. A
-`--file` backend that safe initialized itself works on either engine, but
+`--file` or `--raft` backend that safe initialized itself works on either engine, but
 re-opening an existing one whose root token you no longer have needs that API,
 and so needs `--engine vault`.
 

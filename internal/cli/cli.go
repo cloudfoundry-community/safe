@@ -252,6 +252,7 @@ type Options struct {
 	Local struct {
 		As       string   `cli:"--as"`
 		File     string   `cli:"-f, --file"`
+		Raft     string   `cli:"--raft"`
 		Memory   bool     `cli:"-m, --memory"`
 		Port     int      `cli:"-p, --port"`
 		Config   []string `cli:"-c, --config"`
@@ -548,7 +549,7 @@ The following options are recognized:
 
 	r.Dispatch("local", &Help{
 		Summary: "Run a local vault",
-		Usage:   "safe local (--memory|--file path/to/dir) [--as name] [--port port] [--engine vault|bao] [--config key=value ...] [--listener key=value ...]",
+		Usage:   "safe local (--memory|--file path/to/dir|--raft path/to/dir) [--as name] [--port port] [--engine vault|bao] [--config key=value ...] [--listener key=value ...]",
 		Description: `
 Spins up a new Vault instance.
 
@@ -570,6 +571,13 @@ the path to a directory to use for the file backend.  The files created
 by the mechanism will be encrypted.  You will be given the seal key for
 subsequent activations of the Vault.
 
+OpenBao 2.7 removed the file storage backend.  To keep data around with
+it, use --raft <dir> instead, which runs a single-node integrated raft
+store in that directory (created with mode 0700 if it does not exist).
+It is initialized, unsealed, and targeted exactly like --file, and you are
+given the same seal key to unseal it again.  Exactly one of --memory,
+--file, and --raft must be given.
+
 safe can run either HashiCorp Vault or OpenBao, whose server, secrets,
 auth, and operator commands are the same.  By default it uses whichever
 of 'vault' or 'bao' it finds first on $PATH, in that order, so that
@@ -580,7 +588,7 @@ the flag every time.  A pinned engine that is not installed is an
 error rather than a fallback to the other one.
 
 Note that OpenBao removed the legacy sys/generate-root API.  A --file
-backend that safe initialized itself works either way, but re-opening
+or --raft backend that safe initialized itself works either way, but re-opening
 an existing one whose root token you no longer have requires that API,
 and so requires --engine vault.
 

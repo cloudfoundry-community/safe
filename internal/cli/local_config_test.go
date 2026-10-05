@@ -2,6 +2,8 @@ package cli
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -187,6 +189,46 @@ func TestBuildLocalConfig(t *testing.T) {
 		}
 		mustContain(t, body, `storage "file" { path = "/tmp/vault data" }`)
 		mustNotContain(t, body, `backend "file"`)
+	})
+
+	t.Run("raft backend writes storage stanza and single-node addresses", func(t *testing.T) {
+		body, err := buildLocalConfig(localConfigParams{
+			port:       18999,
+			raftPath:   "/tmp/raft data",
+			engineName: "bao",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		mustContain(t, body, "storage \"raft\" {\n  path = \"/tmp/raft data\"\n  node_id = \"safe-local\"\n}\n")
+		mustContain(t, body, `api_addr = "http://127.0.0.1:18999"`)
+		mustContain(t, body, `cluster_addr = "http://127.0.0.1:19000"`)
+		mustNotContain(t, body, `storage "file"`)
+		mustNotContain(t, body, `storage "inmem"`)
+	})
+
+	t.Run("raft backend addresses can be overridden with --config", func(t *testing.T) {
+		body, err := buildLocalConfig(localConfigParams{
+			port:     18999,
+			raftPath: "/tmp/r",
+			global:   []string{"api_addr=http://10.0.0.1:1"},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		mustContain(t, body, `api_addr = "http://10.0.0.1:1"`)
+		if strings.Count(body, "api_addr") != 1 {
+			t.Errorf("api_addr should appear once:\n%s", body)
+		}
+	})
+
+	t.Run("non-raft backends carry no raft addresses", func(t *testing.T) {
+		body, err := buildLocalConfig(localConfigParams{port: 8201, memory: true})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		mustNotContain(t, body, "api_addr")
+		mustNotContain(t, body, "cluster_addr")
 	})
 
 	t.Run("global override adds top-level option", func(t *testing.T) {
@@ -390,4 +432,88 @@ func mustNotContain(t *testing.T, body, unwanted string) {
 	if strings.Contains(body, unwanted) {
 		t.Errorf("expected config not to contain %q, got:\n%s", unwanted, body)
 	}
+}
+
+func TestLocalDataInitialized(t *testing.T) {
+	mk := func(t *testing.T, paths ...string) string {
+		dir := t.TempDir()
+		for _, p := range paths {
+			full := filepath.Join(dir, p)
+			if strings.HasSuffix(p, "/") {
+				if err := os.MkdirAll(full, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(full, []byte("x"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return dir
+	}
+
+	t.Run("raft empty directory is not initialized", func(t *testing.T) {
+		if localDataInitialized("", mk(t)) {
+			t.Error("an empty raft directory must read as uninitialized")
+		}
+	})
+	t.Run("raft missing directory is not initialized", func(t *testing.T) {
+		if localDataInitialized("", filepath.Join(t.TempDir(), "nope")) {
+			t.Error("a missing raft directory must read as uninitialized")
+		}
+	})
+	t.Run("raft with vault.db is initialized", func(t *testing.T) {
+		if !localDataInitialized("", mk(t, "vault.db")) {
+			t.Error("vault.db means initialized")
+		}
+	})
+	t.Run("raft with raft subdirectory is initialized", func(t *testing.T) {
+		if !localDataInitialized("", mk(t, "raft/")) {
+			t.Error("raft/ means initialized")
+		}
+	})
+	t.Run("file backend keeps the existence rule", func(t *testing.T) {
+		if !localDataInitialized(mk(t), "") {
+			t.Error("an existing file directory reads as initialized")
+		}
+		if localDataInitialized(filepath.Join(t.TempDir(), "nope"), "") {
+			t.Error("a missing file directory reads as uninitialized")
+		}
+	})
+}
+
+func TestEnsureRaftDir(t *testing.T) {
+	t.Run("creates a new directory with mode 0700", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "a", "raft")
+		if err := ensureRaftDir(dir); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		info, err := os.Stat(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !info.IsDir() || info.Mode().Perm() != 0o700 {
+			t.Errorf("got %v, want a 0700 directory", info.Mode())
+		}
+	})
+	t.Run("leaves an existing directory alone", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.Chmod(dir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := ensureRaftDir(dir); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		info, _ := os.Stat(dir)
+		if info.Mode().Perm() != 0o750 {
+			t.Errorf("mode changed to %v", info.Mode().Perm())
+		}
+	})
+	t.Run("rejects a path that is a file", func(t *testing.T) {
+		f := filepath.Join(t.TempDir(), "f")
+		if err := os.WriteFile(f, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := ensureRaftDir(f); err == nil {
+			t.Error("expected an error")
+		}
+	})
 }

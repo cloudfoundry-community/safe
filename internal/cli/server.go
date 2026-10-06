@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -101,6 +102,21 @@ func waitLocalActive(baseURL string, timeout, interval time.Duration) error {
 		}
 		time.Sleep(interval)
 	}
+}
+
+// lookupTokenPolicies asks the local server which policies token carries,
+// through auth/token/lookup-self. A token the server does not recognise
+// comes back as a vaultkv.ErrForbidden.
+func lookupTokenPolicies(address, token string) ([]string, error) {
+	v, err := connectLocal(address, token)
+	if err != nil {
+		return nil, err
+	}
+	info, err := v.Client().Client.TokenInfoSelf()
+	if err != nil {
+		return nil, err
+	}
+	return info.Policies, nil
 }
 
 // localPortScanStart is where automatic port selection begins scanning.
@@ -624,7 +640,19 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 	if savedToken != "" {
 		// The caller already holds the root token, so sys/generate-root is
 		// never called. OpenBao disables that API by default, and Vault
-		// would mint a second root token nobody asked for.
+		// would mint a second root token nobody asked for. The token is
+		// checked against the engine instead, and the two refusals below
+		// are worded for callers that match on them.
+		policies, err := lookupTokenPolicies(address, savedToken)
+		if err != nil {
+			if vaultkv.IsForbidden(err) {
+				die(fmt.Errorf("The root token in %s was rejected by %s", opt.Local.RootTokenFile, engine.Title()))
+			}
+			die(fmt.Errorf("Unable to check the root token in %s: %w", opt.Local.RootTokenFile, err))
+		}
+		if !slices.Contains(policies, "root") {
+			die(fmt.Errorf("The root token in %s is not a root token", opt.Local.RootTokenFile))
+		}
 		token = savedToken
 	} else {
 		token, err = resolveRootToken(token, func() (string, error) {

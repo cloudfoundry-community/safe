@@ -10,6 +10,7 @@ package cli
 import (
 	"bytes"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -209,4 +210,73 @@ func TestReadRootTokenFile(t *testing.T) {
 			t.Errorf("expected a warning naming the file and not the token, got: %s", warn.String())
 		}
 	})
+}
+
+// A token the engine rejects, or one without the root policy, must stop safe
+// with a stable message that names the file, and must take the engine down
+// with it. Callers match these messages to decide what to do next, so they
+// must never fall back to generate-root, and must never print the token.
+func TestLocalRefusesUnusableRootToken(t *testing.T) {
+	cases := []struct {
+		name, token, want string
+	}{
+		{"rejected", "unknown-token", "was rejected by Vault"},
+		{"not root", "not-root-token", "is not a root token"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			installFakeLocalVault(t)
+			t.Setenv("SAFE_FAKE_VAULT_FAIL", "hang")
+			genroot := filepath.Join(t.TempDir(), "generate-root.log")
+			t.Setenv("SAFE_FAKE_VAULT_GENROOT_LOG", genroot)
+
+			home := t.TempDir()
+			port := freeRaftPort(t)
+			tokenFile := writeTokenFile(t, tc.token+"\n")
+			p := startSafeLocalWith(t, home, "refused", "local-seal-key\n",
+				"local", "--raft", initializedRaftDir(t), "--engine", "vault", "--as", "refused",
+				"--port", fmt.Sprintf("%d", port), "--root-token-file", tokenFile)
+
+			err, ok := p.waitExit(30 * time.Second)
+			if !ok {
+				t.Fatalf("safe local did not exit with an unusable root token:\n%s", p.output.String())
+			}
+			if err == nil {
+				t.Errorf("safe local exited zero with an unusable root token:\n%s", p.output.String())
+			}
+			out := p.output.String()
+			if want := fmt.Sprintf("!! The root token in %s %s", tokenFile, tc.want); !strings.Contains(out, want) {
+				t.Errorf("expected %q, got:\n%s", want, out)
+			}
+			if strings.Contains(out, tc.token) {
+				t.Errorf("safe printed the token")
+			}
+			if _, statErr := os.Stat(genroot); !os.IsNotExist(statErr) {
+				t.Errorf("safe fell back to sys/generate-root")
+			}
+			assertPortQuiet(t, port)
+			if cfg, ok := readSafercAt(t, home); ok {
+				if _, found := cfg.Vaults["refused"]; found {
+					t.Errorf("the refused start left a target in ~/.saferc")
+				}
+			}
+		})
+	}
+}
+
+// assertPortQuiet fails unless nothing answers on port within a few seconds.
+func assertPortQuiet(t *testing.T, port int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 500*time.Millisecond)
+		if err != nil {
+			return
+		}
+		_ = conn.Close()
+		if time.Now().After(deadline) {
+			t.Fatalf("the engine is still listening on :%d after safe local exited", port)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }

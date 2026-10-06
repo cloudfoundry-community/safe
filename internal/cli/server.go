@@ -314,6 +314,17 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 	if chosen > 1 {
 		return fmt.Errorf("Please specify only one of --memory, --file <path>, or --raft <path>")
 	}
+	if opt.Local.ClusterPort != 0 {
+		if opt.Local.Raft == "" {
+			return fmt.Errorf("--cluster-port applies only to --raft storage")
+		}
+		if opt.Local.ClusterPort < 1 || opt.Local.ClusterPort > 65535 {
+			return fmt.Errorf("--cluster-port %d is not a valid port", opt.Local.ClusterPort)
+		}
+		if opt.Local.ClusterPort == opt.Local.Port {
+			return fmt.Errorf("--cluster-port %d must differ from --port", opt.Local.ClusterPort)
+		}
+	}
 
 	engine, err := selectEngine(opt.Local.Engine)
 	if err != nil {
@@ -444,13 +455,14 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 		}
 
 		srv, err = launchLocalServer(engine, localConfigParams{
-			port:       port,
-			memory:     opt.Local.Memory,
-			filePath:   opt.Local.File,
-			raftPath:   opt.Local.Raft,
-			engineName: engine.Name(),
-			global:     opt.Local.Config,
-			listener:   opt.Local.Listener,
+			port:        port,
+			clusterPort: opt.Local.ClusterPort,
+			memory:      opt.Local.Memory,
+			filePath:    opt.Local.File,
+			raftPath:    opt.Local.Raft,
+			engineName:  engine.Name(),
+			global:      opt.Local.Config,
+			listener:    opt.Local.Listener,
 		})
 		if err != nil {
 			return err

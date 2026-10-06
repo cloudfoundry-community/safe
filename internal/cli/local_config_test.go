@@ -202,9 +202,28 @@ func TestBuildLocalConfig(t *testing.T) {
 		}
 		mustContain(t, body, "storage \"raft\" {\n  path = \"/tmp/raft data\"\n  node_id = \"safe-local\"\n}\n")
 		mustContain(t, body, `api_addr = "http://127.0.0.1:18999"`)
-		mustContain(t, body, `cluster_addr = "http://127.0.0.1:19000"`)
+		// Without an explicit cluster port, the cluster listener sits one
+		// above the API port, where the engine's own default puts it.
+		mustContain(t, body, `cluster_addr = "https://127.0.0.1:19000"`)
+		mustContain(t, body, `  cluster_address = "127.0.0.1:19000"`)
 		mustNotContain(t, body, `storage "file"`)
 		mustNotContain(t, body, `storage "inmem"`)
+	})
+
+	t.Run("raft backend renders an explicit cluster port", func(t *testing.T) {
+		body, err := buildLocalConfig(localConfigParams{
+			port:        18999,
+			clusterPort: 9500,
+			raftPath:    "/tmp/r",
+			engineName:  "bao",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		mustContain(t, body, "listener \"tcp\" {\n  address = \"127.0.0.1:18999\"\n")
+		mustContain(t, body, `  cluster_address = "127.0.0.1:9500"`)
+		mustContain(t, body, `cluster_addr = "https://127.0.0.1:9500"`)
+		mustNotContain(t, body, "19000")
 	})
 
 	t.Run("raft backend addresses can be overridden with --config", func(t *testing.T) {
@@ -229,6 +248,7 @@ func TestBuildLocalConfig(t *testing.T) {
 		}
 		mustNotContain(t, body, "api_addr")
 		mustNotContain(t, body, "cluster_addr")
+		mustNotContain(t, body, "cluster_address")
 	})
 
 	t.Run("global override adds top-level option", func(t *testing.T) {

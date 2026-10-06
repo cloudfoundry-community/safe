@@ -22,13 +22,14 @@ type hclField struct {
 // localConfigParams carries everything needed to render the HCL config for
 // `safe local`.
 type localConfigParams struct {
-	port       int      // listener port
-	memory     bool     // true for an in-memory backend
-	filePath   string   // file backend path (when memory is false)
-	raftPath   string   // raft backend path (single-node integrated storage)
-	engineName string   // Engine.Name() of the server this config is for
-	global     []string // raw key=value overrides for the top-level config
-	listener   []string // raw key=value overrides for the listener "tcp" stanza
+	port        int      // listener port
+	clusterPort int      // raft cluster listener port; 0 means port+1
+	memory      bool     // true for an in-memory backend
+	filePath    string   // file backend path (when memory is false)
+	raftPath    string   // raft backend path (single-node integrated storage)
+	engineName  string   // Engine.Name() of the server this config is for
+	global      []string // raw key=value overrides for the top-level config
+	listener    []string // raw key=value overrides for the listener "tcp" stanza
 }
 
 // hclKeyPattern matches a bare HCL identifier usable as a config key.
@@ -130,11 +131,16 @@ func buildLocalConfig(p localConfigParams) (string, error) {
 
 	if p.raftPath != "" {
 		// A single-node raft server still needs to know how to reach
-		// itself. The cluster address sits one above the API port, which is
-		// where the engine's own default cluster listener binds.
+		// itself. The cluster listener binds the cluster port on loopback,
+		// and cluster_addr advertises it with https because cluster traffic
+		// is always TLS. Without an explicit port it sits one above the API
+		// port, which is where the engine's own default puts it.
+		clusterPort := localClusterPort(p.port, p.clusterPort)
 		globalDefaults = append(globalDefaults,
 			hclField{key: "api_addr", val: strconv.Quote(fmt.Sprintf("http://127.0.0.1:%d", p.port))},
-			hclField{key: "cluster_addr", val: strconv.Quote(fmt.Sprintf("http://127.0.0.1:%d", p.port+1))})
+			hclField{key: "cluster_addr", val: strconv.Quote(fmt.Sprintf("https://127.0.0.1:%d", clusterPort))})
+		listenerDefaults = append(listenerDefaults,
+			hclField{key: "cluster_address", val: strconv.Quote(fmt.Sprintf("127.0.0.1:%d", clusterPort))})
 	}
 
 	global, err := applyConfigKV(globalDefaults, p.global)
@@ -170,6 +176,16 @@ func buildLocalConfig(p localConfigParams) (string, error) {
 	}
 
 	return b.String(), nil
+}
+
+// localClusterPort is the raft cluster port for a server listening on port:
+// the explicit --cluster-port when one was given, and otherwise the port
+// above the API port.
+func localClusterPort(port, explicit int) int {
+	if explicit != 0 {
+		return explicit
+	}
+	return port + 1
 }
 
 // raftNodeID is the fixed node identity of the single-node raft cluster that

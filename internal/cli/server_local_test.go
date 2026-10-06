@@ -8,6 +8,7 @@ package cli
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -78,6 +79,9 @@ func TestCmdLocal_MutuallyExclusiveStorageFlags(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			isolateHome(t)
+			// No engine on PATH: validation must refuse before one is
+			// looked for, let alone started.
+			t.Setenv("PATH", t.TempDir())
 			c := localCLI(t)
 			c.opt.Local.Memory = tc.memory
 			c.opt.Local.File = tc.file
@@ -96,6 +100,62 @@ func TestCmdLocal_MutuallyExclusiveStorageFlags(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The cluster port only means something to raft; the other backends run no
+// cluster listener, so accepting it there would silently do nothing.
+func TestCmdLocal_ClusterPortRequiresRaft(t *testing.T) {
+	cases := []struct {
+		name   string
+		memory bool
+		file   string
+	}{
+		{"memory", true, ""},
+		{"file", false, "/x/file"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateHome(t)
+			// No engine on PATH: validation must refuse before one is
+			// looked for, let alone started.
+			t.Setenv("PATH", t.TempDir())
+			c := localCLI(t)
+			c.opt.Local.Memory = tc.memory
+			c.opt.Local.File = tc.file
+			c.opt.Local.ClusterPort = 9500
+
+			err := c.cmdLocal("local")
+			if err == nil {
+				t.Fatal("expected an error for --cluster-port without --raft, got nil")
+			}
+			for _, want := range []string{"--cluster-port", "--raft"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error should name %s, got: %v", want, err)
+				}
+			}
+		})
+	}
+}
+
+func TestCmdLocal_ClusterPortMustDifferFromPort(t *testing.T) {
+	isolateHome(t)
+	t.Setenv("PATH", t.TempDir())
+	c := localCLI(t)
+	dir := filepath.Join(t.TempDir(), "raft")
+	c.opt.Local.Raft = dir
+	c.opt.Local.Port = 8219
+	c.opt.Local.ClusterPort = 8219
+
+	err := c.cmdLocal("local")
+	if err == nil {
+		t.Fatal("expected an error for a cluster port equal to the API port, got nil")
+	}
+	if !strings.Contains(err.Error(), "--cluster-port") || !strings.Contains(err.Error(), "8219") {
+		t.Errorf("unexpected error wording: %v", err)
+	}
+	if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
+		t.Errorf("the raft directory was created before validation failed")
 	}
 }
 

@@ -44,6 +44,22 @@ func freePort(t *testing.T) int {
 	return port
 }
 
+// freeRaftPort is freePort for a raft vault, whose cluster port sits one
+// above its API port by default. safe refuses to start when that port is
+// taken, so an ephemeral port whose neighbour happens to be busy would fail
+// the test for a reason it is not about.
+func freeRaftPort(t *testing.T) int {
+	t.Helper()
+	for i := 0; i < 50; i++ {
+		port := freePort(t)
+		if localPortFree(port + 1) {
+			return port
+		}
+	}
+	t.Fatal("no ephemeral port with a free neighbour for the cluster listener")
+	return 0
+}
+
 // scheduleExit closes done once, a beat after the current response, so the
 // helper's answer reaches the client before the process goes away.
 func scheduleExit(once *sync.Once, done chan struct{}) {
@@ -377,7 +393,7 @@ func TestCmdLocal_RaftBackedLifecycleCreatesDirectory(t *testing.T) {
 	c := localCLI(t)
 	dir := filepath.Join(t.TempDir(), "raft-data")
 	c.opt.Local.Raft = dir
-	c.opt.Local.Port = freePort(t)
+	c.opt.Local.Port = freeRaftPort(t)
 
 	var err error
 	var stderr string

@@ -319,3 +319,74 @@ func TestLocalRetryLoopIsBounded(t *testing.T) {
 		t.Errorf("%d temp config files leaked: %v", len(leftovers), leftovers)
 	}
 }
+
+// A raft vault binds a cluster listener as well as its API listener. The
+// engine does not fail when the cluster port is taken; it runs without a
+// cluster listener and says so only in its own log. So safe checks the
+// cluster port itself, before anything is launched.
+func TestLocalRaftHeldClusterPortFailsBeforeLaunch(t *testing.T) {
+	cases := []struct {
+		name string
+		args func(held int) []string
+	}{
+		{"explicit --cluster-port", func(held int) []string {
+			return []string{"--port", fmt.Sprintf("%d", freePort(t)), "--cluster-port", fmt.Sprintf("%d", held)}
+		}},
+		{"default beside an explicit --port", func(held int) []string {
+			return []string{"--port", fmt.Sprintf("%d", held-1)}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// The fake refuses `vault server`, so reaching a launch shows up
+			// as its own complaint in safe's output.
+			installFakeVaultVersionOnly(t, "Vault v1.15.4")
+			held := holdPort(t)
+			dir := filepath.Join(t.TempDir(), "raft")
+
+			args := append([]string{"local", "--raft", dir, "--engine", "vault", "--as", "clustered"}, tc.args(held)...)
+			_, stderr, status := run(t, args...)
+			if status == 0 {
+				t.Fatalf("safe local exited zero with its cluster port held:\n%s", stderr)
+			}
+			if !strings.Contains(stderr, fmt.Sprintf("cluster port %d is already in use", held)) {
+				t.Errorf("failure does not diagnose the held cluster port %d:\n%s", held, stderr)
+			}
+			if !strings.Contains(stderr, "--cluster-port") {
+				t.Errorf("failure does not point at --cluster-port:\n%s", stderr)
+			}
+			if strings.Contains(stderr, "unexpected invocation") {
+				t.Errorf("safe launched the engine before checking the cluster port:\n%s", stderr)
+			}
+		})
+	}
+}
+
+// Automatic port selection for raft must skip an API port whose default
+// cluster port is taken, and must never pick the explicit cluster port as
+// the API port.
+func TestFindCandidateRaftPort(t *testing.T) {
+	t.Run("skips a port whose neighbour is held", func(t *testing.T) {
+		held := holdPort(t)
+		got, err := findCandidateRaftPort(held-1, 0)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got == held-1 || got == held {
+			t.Errorf("picked %d with cluster port %d held", got, held)
+		}
+	})
+	t.Run("skips the explicit cluster port", func(t *testing.T) {
+		start, err := findCandidatePort(localPortScanStart)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := findCandidateRaftPort(start, start)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got == start {
+			t.Errorf("picked the explicit cluster port %d as the API port", got)
+		}
+	})
+}

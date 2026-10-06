@@ -125,14 +125,47 @@ const maxStartupWait = 30 * time.Second
 // child's own bind failure is authoritative, and cmdLocal retries on it.
 func findCandidatePort(start int) (int, error) {
 	for port := start; port < 9999; port++ {
-		l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-		if err != nil {
-			continue
+		if localPortFree(port) {
+			return port, nil
 		}
-		_ = l.Close()
-		return port, nil
 	}
 	return 0, fmt.Errorf("no free local port found between %d and 9998", start)
+}
+
+// findCandidateRaftPort is findCandidatePort for a raft vault, which also
+// binds a cluster listener. With no explicit cluster port, the port above
+// each candidate must be free as well. With one, the candidate must simply
+// not be that port.
+func findCandidateRaftPort(start, clusterPort int) (int, error) {
+	for port := start; port < 9999; port++ {
+		if port == clusterPort || !localPortFree(port) {
+			continue
+		}
+		if clusterPort == 0 && !localPortFree(port+1) {
+			continue
+		}
+		return port, nil
+	}
+	return 0, fmt.Errorf("no free pair of local ports found between %d and 9999", start)
+}
+
+// localPortFree reports whether a loopback bind on port succeeds right now.
+func localPortFree(port int) bool {
+	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return false
+	}
+	_ = l.Close()
+	return true
+}
+
+// clusterPortInUseError explains a taken raft cluster port, naming where
+// the port came from so the operator knows which option moves it.
+func clusterPortInUseError(clusterPort int, explicit bool) error {
+	if explicit {
+		return fmt.Errorf("cluster port %d is already in use; choose another with --cluster-port", clusterPort)
+	}
+	return fmt.Errorf("cluster port %d is already in use (it defaults to --port plus one); choose another with --cluster-port or --port", clusterPort)
 }
 
 // localServer is one launched attempt at running the engine.
@@ -334,7 +367,11 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 	autoScan := opt.Local.Port == 0
 	port := opt.Local.Port
 	if autoScan {
-		port, err = findCandidatePort(localPortScanStart)
+		if opt.Local.Raft != "" {
+			port, err = findCandidateRaftPort(localPortScanStart, opt.Local.ClusterPort)
+		} else {
+			port, err = findCandidatePort(localPortScanStart)
+		}
 		if err != nil {
 			return err
 		}
@@ -454,6 +491,27 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 			return err
 		}
 
+		// The engine does not fail when its cluster port is taken: a single
+		// raft node carries on without a cluster listener and says so only
+		// in its own log. So the bind probe here is the only check there
+		// is. An automatically chosen pair moves on to the next one; a port
+		// the operator named is an error.
+		if opt.Local.Raft != "" {
+			if clusterPort := localClusterPort(port, opt.Local.ClusterPort); !localPortFree(clusterPort) {
+				if autoScan && opt.Local.ClusterPort == 0 && attempt < maxPortAttempts {
+					port, err = findCandidateRaftPort(port+1, 0)
+					if err != nil {
+						die(err)
+					}
+					continue
+				}
+				if srv == nil {
+					return clusterPortInUseError(clusterPort, opt.Local.ClusterPort != 0)
+				}
+				die(clusterPortInUseError(clusterPort, opt.Local.ClusterPort != 0))
+			}
+		}
+
 		srv, err = launchLocalServer(engine, localConfigParams{
 			port:        port,
 			clusterPort: opt.Local.ClusterPort,
@@ -482,7 +540,11 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 				die(fmt.Errorf("port %d is already in use; choose another with --port, or omit --port to let safe pick one", port))
 			}
 			if attempt < maxPortAttempts {
-				port, err = findCandidatePort(port + 1)
+				if opt.Local.Raft != "" {
+					port, err = findCandidateRaftPort(port+1, opt.Local.ClusterPort)
+				} else {
+					port, err = findCandidatePort(port + 1)
+				}
 				if err != nil {
 					die(err)
 				}

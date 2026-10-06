@@ -154,3 +154,23 @@ func TestHelpSpotChecks(t *testing.T) {
 		t.Errorf("version help missing its usage line:\n%s", version)
 	}
 }
+
+// Callers probe a development build of safe for the raft options by reading
+// `safe help local`, so the usage line must keep naming them.
+func TestLocalHelpNamesRaftOptions(t *testing.T) {
+	h := newTestRunner().Topics["local"]
+	if h == nil {
+		t.Fatal("local has no help topic")
+	}
+	for _, opt := range []string{"--cluster-port", "--root-token-file"} {
+		if !strings.Contains(h.Usage, opt) {
+			t.Errorf("local usage does not mention %s: %s", opt, h.Usage)
+		}
+		if !strings.Contains(h.Description, opt) {
+			t.Errorf("local description does not explain %s", opt)
+		}
+	}
+	if strings.Contains(h.Description, "removed the legacy sys/generate-root") {
+		t.Errorf("local description still says OpenBao removed sys/generate-root")
+	}
+}

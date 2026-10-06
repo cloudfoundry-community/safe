@@ -912,7 +912,7 @@ whitespace before `eval` ever sees it.
 `--fish` writes the same thing for fish, and `--json` writes it as JSON. Give
 one of them: naming two is an error.
 
-### local (--memory|--file dir|--raft dir) \[--engine vault|bao\]
+### local (--memory|--file dir|--raft dir) \[--cluster-port port\] \[--root-token-file path\] \[--engine vault|bao\]
 
 Spin up a throwaway server for testing or experimentation, target it, and tear
 it down again on Ctrl-C. Use `--memory` for an in-memory backend whose data is
@@ -925,6 +925,23 @@ safe local --memory
 safe local --file /tmp/my-vault
 safe local --raft /tmp/my-raft-vault
 ```
+
+A raft vault also runs a cluster listener, which binds the port above the API port by default. Pass `--cluster-port` to put it somewhere else, for example when several local vaults run side by side. safe checks that the cluster port is free before it starts, because the engine would otherwise carry on without a cluster listener and mention it only in its own log. The option works only with `--raft`.
+
+```
+safe local --raft /tmp/my-raft-vault --port 18300 --cluster-port 19300
+```
+
+To reopen a `--file` or `--raft` vault later, safe needs its seal key and a root token. It prompts for the seal key, or reads it from standard input when that is not a terminal. If you kept the root token, put it in a file that only you can read and pass `--root-token-file`:
+
+```
+safe local --raft /tmp/my-raft-vault --root-token-file ~/.my-vault/root.key \
+  < ~/.my-vault/unseal.key
+```
+
+safe reads the token file before it starts the server, so the token never shows up on a command line or in the server's environment. After unseal, safe asks the server about the token and insists on the root policy. A token the server rejects stops safe with `The root token in <file> was rejected by <engine>`, and a token without the root policy stops it with `The root token in <file> is not a root token`. safe never prints the token, and it refuses the option with `--memory` or with storage that is not initialized yet.
+
+Every `--raft` vault uses the raft node ID `safe-local`. Treat that ID as a stable contract, because a raft store remembers its node ID and tools that migrate a file-backed vault into raft for safe, such as ocfp, write the same value.
 
 safe can drive either HashiCorp Vault or [OpenBao][openbao], which forked from
 it and kept the same server, secrets, auth, and operator commands. With no
@@ -948,10 +965,7 @@ export SAFE_ENGINE=bao
 `safe vault ...`, which hands its arguments to the engine's own CLI, resolves
 the engine the same way.
 
-One caveat on OpenBao: it removed the legacy `sys/generate-root` API. A
-`--file` or `--raft` backend that safe initialized itself works on either engine, but
-re-opening an existing one whose root token you no longer have needs that API,
-and so needs `--engine vault`.
+One caveat on OpenBao: since 2.5.3 it disables the `sys/generate-root` API by default. Without `--root-token-file`, reopening a vault generates a new root token through that API, so under OpenBao a reopen needs `--root-token-file`. If the root token is lost, only `--engine vault` can still generate a new one.
 
 Testing
 -------

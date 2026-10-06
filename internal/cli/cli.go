@@ -551,7 +551,7 @@ The following options are recognized:
 
 	r.Dispatch("local", &Help{
 		Summary: "Run a local vault",
-		Usage:   "safe local (--memory|--file path/to/dir|--raft path/to/dir) [--as name] [--port port] [--engine vault|bao] [--config key=value ...] [--listener key=value ...]",
+		Usage:   "safe local (--memory|--file path/to/dir|--raft path/to/dir) [--as name] [--port port] [--cluster-port port] [--root-token-file path] [--engine vault|bao] [--config key=value ...] [--listener key=value ...]",
 		Description: `
 Spins up a new Vault instance.
 
@@ -580,6 +580,30 @@ It is initialized, unsealed, and targeted exactly like --file, and you are
 given the same seal key to unseal it again.  Exactly one of --memory,
 --file, and --raft must be given.
 
+A raft vault also runs a cluster listener.  It binds the port above the
+API port unless --cluster-port names another one, which helps when
+several local vaults run side by side.  safe checks that the cluster
+port is free before it starts, because the engine would otherwise carry
+on without a cluster listener and say so only in its own log.
+--cluster-port applies only to --raft.
+
+To reopen an existing --file or --raft vault, safe needs its seal key,
+which it prompts for (or reads from standard input), and a root token.
+If you still have the root token, put it in a file that only you can
+read and pass --root-token-file:
+
+  safe local --raft path/to/dir --root-token-file path/to/root.key \
+    < path/to/unseal.key
+
+safe reads the file before it starts the server, so the token never
+appears on a command line or in the server's environment.  After unseal
+it asks the server about the token and requires the root policy.  A
+token the server rejects stops safe with "The root token in <file> was
+rejected by <engine>", and one without the root policy stops it with
+"The root token in <file> is not a root token".  safe never prints the
+token.  The option is refused with --memory, and with storage that is
+not initialized yet.
+
 safe can run either HashiCorp Vault or OpenBao, whose server, secrets,
 auth, and operator commands are the same.  By default it uses whichever
 of 'vault' or 'bao' it finds first on $PATH, in that order, so that
@@ -589,10 +613,10 @@ SAFE_ENGINE in your environment to change the default without passing
 the flag every time.  A pinned engine that is not installed is an
 error rather than a fallback to the other one.
 
-Note that OpenBao removed the legacy sys/generate-root API.  A --file
-or --raft backend that safe initialized itself works either way, but re-opening
-an existing one whose root token you no longer have requires that API,
-and so requires --engine vault.
+Without --root-token-file, reopening a vault generates a new root token
+through the sys/generate-root API.  OpenBao disabled that API by default
+in 2.5.3, so under OpenBao a reopen needs --root-token-file.  If the
+root token is lost, only --engine vault can still generate a new one.
 
 To tune the generated configuration, pass key=value pairs:
 

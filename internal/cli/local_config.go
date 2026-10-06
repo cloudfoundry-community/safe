@@ -189,7 +189,11 @@ func localClusterPort(port, explicit int) int {
 }
 
 // raftNodeID is the fixed node identity of the single-node raft cluster that
-// `safe local --raft` runs.
+// `safe local --raft` runs. It is a stable contract: a raft store remembers
+// its node ID, and ocfp writes this same value when it migrates a file-backed
+// vault to raft, so a migrated store finds itself in its own configuration.
+// Changing it would leave every existing --raft directory unable to elect a
+// leader.
 const raftNodeID = "safe-local"
 
 // localDataInitialized reports whether the storage directory already holds a

@@ -112,6 +112,14 @@ func awaitLocalReady(t *testing.T, p *localProc, d time.Duration) {
 func startSafeLocal(t *testing.T, home, engine, name string, extra ...string) *localProc {
 	t.Helper()
 	args := append([]string{"local", "--memory", "--engine", engine, "--as", name}, extra...)
+	return startSafeLocalWith(t, home, name, "", args...)
+}
+
+// startSafeLocalWith is startSafeLocal with the whole argument list in the
+// caller's hands, and with stdin fed from the given string, which is how an
+// unseal key reaches a `safe local` that reopens existing storage.
+func startSafeLocalWith(t *testing.T, home, name, stdin string, args ...string) *localProc {
+	t.Helper()
 	tmpDir := t.TempDir()
 	cmd := exec.Command(safeBinary(t), args...)
 	cmd.Env = append(os.Environ(),
@@ -122,6 +130,7 @@ func startSafeLocal(t *testing.T, home, engine, name string, extra ...string) *l
 		"VAULT_TOKEN=",
 	)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Stdin = strings.NewReader(stdin)
 	var output lockedBuffer
 	cmd.Stdout = &output
 	cmd.Stderr = &output

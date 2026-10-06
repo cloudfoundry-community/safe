@@ -250,15 +250,16 @@ type Options struct {
 	Exists struct{} `cli:"exists, check"`
 
 	Local struct {
-		As          string   `cli:"--as"`
-		File        string   `cli:"-f, --file"`
-		Raft        string   `cli:"--raft"`
-		Memory      bool     `cli:"-m, --memory"`
-		Port        int      `cli:"-p, --port"`
-		ClusterPort int      `cli:"--cluster-port"`
-		Config      []string `cli:"-c, --config"`
-		Listener    []string `cli:"-l, --listener"`
-		Engine      string   `cli:"-e, --engine"`
+		As            string   `cli:"--as"`
+		File          string   `cli:"-f, --file"`
+		Raft          string   `cli:"--raft"`
+		Memory        bool     `cli:"-m, --memory"`
+		Port          int      `cli:"-p, --port"`
+		ClusterPort   int      `cli:"--cluster-port"`
+		RootTokenFile string   `cli:"--root-token-file"`
+		Config        []string `cli:"-c, --config"`
+		Listener      []string `cli:"-l, --listener"`
+		Engine        string   `cli:"-e, --engine"`
 	} `cli:"local"`
 
 	Init struct {

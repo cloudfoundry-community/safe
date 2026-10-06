@@ -14,6 +14,7 @@ package cli
 // this file.
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -71,11 +72,23 @@ func scheduleExit(once *sync.Once, done chan struct{}) {
 	})
 }
 
+// fakeRootTokenPolicies maps the tokens the fake engine knows to the
+// policies lookup-self reports for them. Any other token is rejected with a
+// 403, the way a real engine answers a token it never issued.
+var fakeRootTokenPolicies = map[string][]string{
+	"local-root-token": {"root"},
+	"saved-root-token": {"root"},
+	"not-root-token":   {"default"},
+}
+
 // TestFakeLocalVaultHelper is not a test: it is the body of the fake `vault
 // server` process. It only runs when the fake vault script re-executes the
 // test binary with SAFE_FAKE_VAULT_HELPER=1; otherwise it skips. The
 // SAFE_FAKE_VAULT_FAIL variable, inherited from the test through the script,
-// selects a failure the real Vault could produce at that point.
+// selects a failure the real Vault could produce at that point. When
+// SAFE_FAKE_VAULT_GENROOT_LOG names a file, every request to a
+// sys/generate-root endpoint appends a line to it, so a test can prove safe
+// never went near that API.
 func TestFakeLocalVaultHelper(t *testing.T) {
 	if os.Getenv("SAFE_FAKE_VAULT_HELPER") != "1" {
 		t.Skip("helper process body, not a test")
@@ -141,6 +154,27 @@ func TestFakeLocalVaultHelper(t *testing.T) {
 				return
 			}
 			w.WriteHeader(http.StatusNoContent)
+
+		case r.URL.Path == "/v1/auth/token/lookup-self":
+			policies, known := fakeRootTokenPolicies[r.Header.Get("X-Vault-Token")]
+			if !known {
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"errors":["permission denied"]}`))
+				return
+			}
+			body, _ := json.Marshal(map[string]any{"data": map[string]any{"policies": policies}})
+			_, _ = w.Write(body)
+
+		case strings.HasPrefix(r.URL.Path, "/v1/sys/generate-root"):
+			if log := os.Getenv("SAFE_FAKE_VAULT_GENROOT_LOG"); log != "" {
+				f, ferr := os.OpenFile(log, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) // #nosec G304 -- path chosen by the test that spawned us
+				if ferr == nil {
+					_, _ = fmt.Fprintf(f, "%s %s\n", r.Method, r.URL.Path)
+					_ = f.Close()
+				}
+			}
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"errors":[]}`))
 
 		case strings.HasPrefix(r.URL.Path, "/v1/sys/internal/ui/mounts"):
 			_, _ = w.Write([]byte(`{"data":{"secret":{"secret/":{"type":"kv","options":{"version":"1"}}}}}`))

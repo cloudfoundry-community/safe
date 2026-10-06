@@ -358,6 +358,9 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 			return fmt.Errorf("--cluster-port %d must differ from --port", opt.Local.ClusterPort)
 		}
 	}
+	if opt.Local.RootTokenFile != "" && opt.Local.Memory {
+		return fmt.Errorf("--root-token-file reopens an existing vault, so it does not apply to --memory")
+	}
 
 	engine, err := selectEngine(opt.Local.Engine)
 	if err != nil {
@@ -388,12 +391,28 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 	}
 
 	keys := make([]string, 0)
+	savedToken := ""
 	if !opt.Local.Memory {
 		opt.Local.File = filepath.ToSlash(opt.Local.File)
 		opt.Local.Raft = filepath.ToSlash(opt.Local.Raft)
 		// Decide before ensureRaftDir: creating the directory must not make
 		// a brand-new raft vault look initialized.
-		if localDataInitialized(opt.Local.File, opt.Local.Raft) {
+		initialized := localDataInitialized(opt.Local.File, opt.Local.Raft)
+		if opt.Local.RootTokenFile != "" {
+			// A caller handing over a root token expects a vault to reopen.
+			// Initializing a new one instead would mint a different token
+			// and leave the caller's file pointing at nothing.
+			if !initialized {
+				return fmt.Errorf("--root-token-file reopens an existing vault, but %s is not initialized", cmp.Or(opt.Local.File, opt.Local.Raft))
+			}
+			// Read the token before the unseal key, so a bad file fails
+			// without consuming the key from stdin.
+			savedToken, err = readRootTokenFile(opt.Local.RootTokenFile, os.Stderr)
+			if err != nil {
+				return err
+			}
+		}
+		if initialized {
 			key, err := pr("Unseal Key", false, true)
 			if err != nil {
 				return err
@@ -602,11 +621,18 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 			die(fmt.Errorf("Raft storage did not elect a leader after unseal: %w", err))
 		}
 	}
-	token, err = resolveRootToken(token, func() (string, error) {
-		return v.NewRootToken(keys)
-	})
-	if err != nil {
-		die(fmt.Errorf("Unable to generate a new root token: %w", err))
+	if savedToken != "" {
+		// The caller already holds the root token, so sys/generate-root is
+		// never called. OpenBao disables that API by default, and Vault
+		// would mint a second root token nobody asked for.
+		token = savedToken
+	} else {
+		token, err = resolveRootToken(token, func() (string, error) {
+			return v.NewRootToken(keys)
+		})
+		if err != nil {
+			die(fmt.Errorf("Unable to generate a new root token: %w", err))
+		}
 	}
 
 	_ = os.Setenv("VAULT_TOKEN", token)
@@ -622,7 +648,12 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 		// flow already prints the seal key, and the server is loopback-only.
 		_, _ = fmt.Fprintf(os.Stderr, "@R{!! Unable to save the root token in ~/.saferc: %s}\n", err)
 		_, _ = fmt.Fprintf(os.Stderr, "@R{!! The %s server at} @C{%s} @R{is still running.}\n", engine.Title(), localVaultURL(address))
-		_, _ = fmt.Fprintf(os.Stderr, "@R{!! Its root token is} @M{%s}\n", token)
+		if savedToken != "" {
+			// The caller already has the token; there is no need to echo it.
+			_, _ = fmt.Fprintf(os.Stderr, "@R{!! Its root token is in} @C{%s}\n", opt.Local.RootTokenFile)
+		} else {
+			_, _ = fmt.Fprintf(os.Stderr, "@R{!! Its root token is} @M{%s}\n", token)
+		}
 		_, _ = fmt.Fprintf(os.Stderr, "@R{!! To reach it:} @C{safe target %s %s && safe auth token}\n", name, localVaultURL(address))
 	}
 	v, err = connectLocal(address, token)

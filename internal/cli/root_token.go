@@ -21,6 +21,17 @@ func resolveRootToken(initToken string, generate func() (string, error)) (string
 	return generate()
 }
 
+// rootTokenGenerationError explains a failed sys/generate-root. An engine
+// that has the API turned off answers "unsupported operation", which on its
+// own does not tell the operator what to do instead, so that case names
+// --root-token-file.
+func rootTokenGenerationError(engine Engine, err error) error {
+	if strings.Contains(err.Error(), "unsupported operation") {
+		return fmt.Errorf("Unable to generate a new root token: %w\n%s does not allow sys/generate-root; reopen this vault with --root-token-file <file>, where the file holds its existing root token", err, engine.Title())
+	}
+	return fmt.Errorf("Unable to generate a new root token: %w", err)
+}
+
 // readRootTokenFile reads the root token of an existing vault from the file
 // named by --root-token-file. Surrounding whitespace is trimmed, and a file
 // that holds nothing, or more than one word, is refused. A file that group

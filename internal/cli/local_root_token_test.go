@@ -280,3 +280,29 @@ func assertPortQuiet(t *testing.T, port int) {
 		time.Sleep(100 * time.Millisecond)
 	}
 }
+
+// Reopening without a token on an engine that refuses generate-root cannot
+// work, and the bare "unsupported operation" it reports does not say why.
+// safe must name the option that does work.
+func TestLocalGenerateRootUnsupportedPointsAtTokenFile(t *testing.T) {
+	installFakeLocalVault(t)
+	t.Setenv("SAFE_FAKE_VAULT_FAIL", "genroot-unsupported")
+	home := t.TempDir()
+	port := freeRaftPort(t)
+	p := startSafeLocalWith(t, home, "no-token", "local-seal-key\n",
+		"local", "--raft", initializedRaftDir(t), "--engine", "vault", "--as", "no-token",
+		"--port", fmt.Sprintf("%d", port))
+
+	err, ok := p.waitExit(30 * time.Second)
+	if !ok {
+		t.Fatalf("safe local did not exit when generate-root was refused:\n%s", p.output.String())
+	}
+	if err == nil {
+		t.Errorf("safe local exited zero when generate-root was refused:\n%s", p.output.String())
+	}
+	out := p.output.String()
+	if !strings.Contains(out, "unsupported operation") || !strings.Contains(out, "--root-token-file") {
+		t.Errorf("expected the engine's refusal and a pointer at --root-token-file, got:\n%s", out)
+	}
+	assertPortQuiet(t, port)
+}

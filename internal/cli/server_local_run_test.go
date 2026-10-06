@@ -173,6 +173,12 @@ func TestFakeLocalVaultHelper(t *testing.T) {
 					_ = f.Close()
 				}
 			}
+			if os.Getenv("SAFE_FAKE_VAULT_FAIL") == "genroot-unsupported" {
+				// What OpenBao answers since it disabled the API by default.
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				_, _ = w.Write([]byte(`{"errors":["unsupported operation"]}`))
+				return
+			}
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"errors":[]}`))
 

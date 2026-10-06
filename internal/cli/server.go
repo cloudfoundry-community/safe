@@ -664,7 +664,7 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 			return v.NewRootToken(keys)
 		})
 		if err != nil {
-			die(fmt.Errorf("Unable to generate a new root token: %w", err))
+			die(rootTokenGenerationError(engine, err))
 		}
 	}
 

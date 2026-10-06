@@ -443,6 +443,11 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 	}
 
 	signal.Ignore(syscall.SIGINT)
+	// A pane running `safe local ... 2>&1 | tee log` loses tee to the same
+	// hangup that ends safe. Left at its default, SIGPIPE would kill safe on
+	// the first line of its teardown and orphan the engine. Ignored, the
+	// write fails quietly and the teardown carries on.
+	signal.Ignore(syscall.SIGPIPE)
 
 	var srv *localServer
 	var name, previous, registeredURL string

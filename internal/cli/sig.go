@@ -10,9 +10,9 @@ import (
 )
 
 // localTeardownMu guards localTeardownFn, the hook a running `safe local`
-// installs so SIGTERM/SIGQUIT reach its own cleanup -- killing the child
-// engine, removing its temp config, and restoring the previous target --
-// instead of Signals()'s bare terminal-restore-and-exit. Only one command
+// installs so SIGTERM/SIGQUIT/SIGHUP reach its own cleanup -- killing the
+// child engine, removing its temp config, and restoring the previous target
+// -- instead of Signals()'s bare terminal-restore-and-exit. Only one command
 // runs at a time in this process, so a single package-level slot is enough.
 var (
 	localTeardownMu sync.Mutex
@@ -46,13 +46,16 @@ func Signals() {
 	}
 
 	s := make(chan os.Signal, 1)
-	signal.Notify(s, syscall.SIGTERM, syscall.SIGINT, syscall.SIGQUIT)
+	// SIGHUP is here for `tmux kill-session`, which ends a pane that way.
+	// Left to its default it would kill safe and leave a `safe local`
+	// engine running, because the engines treat SIGHUP as a config reload.
+	signal.Notify(s, syscall.SIGTERM, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGHUP)
 	for sig := range s {
 		// A running `safe local` owns its own teardown -- its child engine,
 		// temp config, and registered target need cleaning up in a way this
 		// generic handler knows nothing about. SIGINT never reaches here for
 		// it (ignored deliberately, see cmdLocal), so this only fires for
-		// SIGTERM/SIGQUIT while one is active.
+		// SIGTERM/SIGQUIT/SIGHUP while one is active.
 		if fn := localTeardown(); fn != nil {
 			fn(sig)
 			// fn is contracted to end the process itself, the same way

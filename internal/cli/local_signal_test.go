@@ -11,7 +11,9 @@ package cli
 // certificates.
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -66,6 +68,112 @@ func TestLocalTerminalSignalsTearDownTheEngine(t *testing.T) {
 			}
 		})
 	}
+}
+
+// `tmux kill-session` ends a pane with SIGHUP. The engine treats SIGHUP as a
+// config reload and keeps running, so safe must take it down; otherwise the
+// engine outlives the session holding the port and, under raft, the lock
+// on its data. In a pane running `safe local ... 2>&1 | tee log`, tee dies
+// of the same hangup, so safe's teardown must also survive writing to a
+// pipe that nobody reads any more.
+func TestLocalSIGHUPTearsDownTheEngine(t *testing.T) {
+	for _, readerGone := range []bool{false, true} {
+		name := "output read"
+		if readerGone {
+			name = "output reader gone"
+		}
+		t.Run(name, func(t *testing.T) {
+			installFakeLocalVault(t)
+			t.Setenv("SAFE_FAKE_VAULT_FAIL", "hang")
+			home := t.TempDir()
+			port := freePort(t)
+			args := []string{"local", "--memory", "--engine", "vault", "--as", "signal-sighup", "--port", fmt.Sprintf("%d", port)}
+
+			var p *localProc
+			var out *os.File
+			if readerGone {
+				p, out = startSafeLocalPiped(t, home, "signal-sighup", args...)
+			} else {
+				p = startSafeLocalWith(t, home, "signal-sighup", "", args...)
+			}
+			awaitLocalReady(t, p, 30*time.Second)
+			if out != nil {
+				// What tee does when the session hangs up.
+				_ = out.Close()
+			}
+
+			// Signal only the safe process: a real engine shrugs SIGHUP off,
+			// so whatever stops this one has to be safe.
+			if err := p.cmd.Process.Signal(syscall.SIGHUP); err != nil {
+				t.Fatalf("delivering SIGHUP: %v", err)
+			}
+			if _, ok := p.waitExit(15 * time.Second); !ok {
+				t.Fatalf("safe local did not exit after SIGHUP:\n%s", p.output.String())
+			}
+			assertPortQuiet(t, port)
+
+			if cfg, ok := readSafercAt(t, home); ok {
+				if _, found := cfg.Vaults["signal-sighup"]; found {
+					t.Errorf("SIGHUP left the temporary target in ~/.saferc")
+				}
+			}
+			leftovers, err := filepath.Glob(filepath.Join(p.tmpDir, "kazoo*"))
+			if err != nil {
+				t.Fatalf("glob: %v", err)
+			}
+			if len(leftovers) > 0 {
+				t.Errorf("%d temp config files leaked after SIGHUP: %v", len(leftovers), leftovers)
+			}
+		})
+	}
+}
+
+// startSafeLocalPiped is startSafeLocalWith, except that safe writes to a
+// pipe the test reads until "Now targeting" appears. The returned file is
+// the pipe's read end, which the test closes to play a reader that went
+// away. The output buffer keeps everything read before then.
+func startSafeLocalPiped(t *testing.T, home, name string, args ...string) (*localProc, *os.File) {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("creating the output pipe: %v", err)
+	}
+	tmpDir := t.TempDir()
+	cmd := exec.Command(safeBinary(t), args...)
+	cmd.Env = append(os.Environ(),
+		"HOME="+home, "TMPDIR="+tmpDir, "SAFE_TARGET=", "VAULT_ADDR=", "VAULT_TOKEN=")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Stdout = w
+	cmd.Stderr = w
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting safe local: %v", err)
+	}
+	_ = w.Close()
+
+	var output lockedBuffer
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, rerr := r.Read(buf)
+			if n > 0 {
+				_, _ = output.Write(buf[:n])
+			}
+			if rerr != nil {
+				return
+			}
+		}
+	}()
+	p := &localProc{name: name, cmd: cmd, output: &output, tmpDir: tmpDir, done: make(chan struct{})}
+	go func() {
+		p.waitErr = cmd.Wait()
+		close(p.done)
+	}()
+	t.Cleanup(func() {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		<-p.done
+		_ = r.Close()
+	})
+	return p, r
 }
 
 // A previously-current target carrying ca_certs used to re-arm SIGINT

@@ -64,9 +64,11 @@ func TestLocalReopensWithSavedRootToken(t *testing.T) {
 
 	home := t.TempDir()
 	tokenFile := writeTokenFile(t, "  saved-root-token\n")
+	port, clusterPort := freeRaftPorts(t)
 	p := startSafeLocalWith(t, home, "reopened", "local-seal-key\n",
 		"local", "--raft", initializedRaftDir(t), "--engine", "vault", "--as", "reopened",
-		"--port", fmt.Sprintf("%d", freeRaftPort(t)), "--root-token-file", tokenFile)
+		"--port", fmt.Sprintf("%d", port), "--cluster-port", fmt.Sprintf("%d", clusterPort),
+		"--root-token-file", tokenFile)
 
 	awaitLocalReady(t, p, 30*time.Second)
 
@@ -118,7 +120,7 @@ func TestCmdLocal_RootTokenFileRefusals(t *testing.T) {
 		c := localCLI(t)
 		dir := filepath.Join(t.TempDir(), "raft")
 		c.opt.Local.Raft = dir
-		c.opt.Local.Port = freePort(t)
+		c.opt.Local.Port, c.opt.Local.ClusterPort = freeRaftPorts(t)
 		c.opt.Local.RootTokenFile = writeTokenFile(t, "saved-root-token\n")
 
 		var err error
@@ -145,7 +147,7 @@ func TestCmdLocal_RootTokenFileRefusals(t *testing.T) {
 		t.Cleanup(func() { prompt.SetReader(nil) })
 		c := localCLI(t)
 		c.opt.Local.Raft = initializedRaftDir(t)
-		c.opt.Local.Port = freePort(t)
+		c.opt.Local.Port, c.opt.Local.ClusterPort = freeRaftPorts(t)
 		c.opt.Local.RootTokenFile = writeTokenFile(t, " \n\t\n")
 
 		err := c.cmdLocal("local")
@@ -231,11 +233,12 @@ func TestLocalRefusesUnusableRootToken(t *testing.T) {
 			t.Setenv("SAFE_FAKE_VAULT_GENROOT_LOG", genroot)
 
 			home := t.TempDir()
-			port := freeRaftPort(t)
+			port, clusterPort := freeRaftPorts(t)
 			tokenFile := writeTokenFile(t, tc.token+"\n")
 			p := startSafeLocalWith(t, home, "refused", "local-seal-key\n",
 				"local", "--raft", initializedRaftDir(t), "--engine", "vault", "--as", "refused",
-				"--port", fmt.Sprintf("%d", port), "--root-token-file", tokenFile)
+				"--port", fmt.Sprintf("%d", port), "--cluster-port", fmt.Sprintf("%d", clusterPort),
+				"--root-token-file", tokenFile)
 
 			err, ok := p.waitExit(30 * time.Second)
 			if !ok {
@@ -288,10 +291,10 @@ func TestLocalGenerateRootUnsupportedPointsAtTokenFile(t *testing.T) {
 	installFakeLocalVault(t)
 	t.Setenv("SAFE_FAKE_VAULT_FAIL", "genroot-unsupported")
 	home := t.TempDir()
-	port := freeRaftPort(t)
+	port, clusterPort := freeRaftPorts(t)
 	p := startSafeLocalWith(t, home, "no-token", "local-seal-key\n",
 		"local", "--raft", initializedRaftDir(t), "--engine", "vault", "--as", "no-token",
-		"--port", fmt.Sprintf("%d", port))
+		"--port", fmt.Sprintf("%d", port), "--cluster-port", fmt.Sprintf("%d", clusterPort))
 
 	err, ok := p.waitExit(30 * time.Second)
 	if !ok {

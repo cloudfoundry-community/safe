@@ -45,20 +45,44 @@ func freePort(t *testing.T) int {
 	return port
 }
 
-// freeRaftPort is freePort for a raft vault, whose cluster port sits one
-// above its API port by default. safe refuses to start when that port is
-// taken, so an ephemeral port whose neighbour happens to be busy would fail
-// the test for a reason it is not about.
-func freeRaftPort(t *testing.T) int {
+// freeRaftPorts reserves an API port and a cluster port for a raft vault.
+// The cluster port defaults to the API port plus one, and safe refuses to
+// start when it is taken, so a test that leaves it to the default fails
+// whenever something grabs that neighbour between the check and the launch.
+// Both ports are held open together, so they are distinct, and callers pass
+// the second one as --cluster-port instead of leaning on the default.
+func freeRaftPorts(t *testing.T) (port, clusterPort int) {
 	t.Helper()
-	for i := 0; i < 50; i++ {
-		port := freePort(t)
-		if localPortFree(port + 1) {
-			return port
+	var held []net.Listener
+	defer func() {
+		for _, ln := range held {
+			_ = ln.Close()
+		}
+	}()
+	var ports [2]int
+	for i := range ports {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("reserving a port: %v", err)
+		}
+		held = append(held, ln)
+		ports[i] = ln.Addr().(*net.TCPAddr).Port
+	}
+	return ports[0], ports[1]
+}
+
+// A raft test must hand safe both ports, so that no test depends on the
+// cluster port defaulting to the API port plus one.
+func TestFreeRaftPortsAreDistinctAndFree(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		port, clusterPort := freeRaftPorts(t)
+		if port == clusterPort {
+			t.Fatalf("API and cluster ports are both %d", port)
+		}
+		if !localPortFree(port) || !localPortFree(clusterPort) {
+			t.Fatalf("reserved ports %d and %d are not both free", port, clusterPort)
 		}
 	}
-	t.Fatal("no ephemeral port with a free neighbour for the cluster listener")
-	return 0
 }
 
 // scheduleExit closes done once, a beat after the current response, so the
@@ -433,7 +457,7 @@ func TestCmdLocal_RaftBackedLifecycleCreatesDirectory(t *testing.T) {
 	c := localCLI(t)
 	dir := filepath.Join(t.TempDir(), "raft-data")
 	c.opt.Local.Raft = dir
-	c.opt.Local.Port = freeRaftPort(t)
+	c.opt.Local.Port, c.opt.Local.ClusterPort = freeRaftPorts(t)
 
 	var err error
 	var stderr string

@@ -117,6 +117,12 @@ test-engine-lib: ## Run the engine helper unit tests (fast, offline)
 	@bash ci/scripts/t/engine_test.sh
 	@echo "$(GREEN)✓ Engine helper tests passed$(RESET)"
 
+.PHONY: test-release-lib
+test-release-lib: ## Run the release VERSION guard tests (fast, offline)
+	@echo "$(GREEN)Running release VERSION guard tests...$(RESET)"
+	@bash ci/scripts/t/release_test.sh
+	@echo "$(GREEN)✓ Release guard tests passed$(RESET)"
+
 .PHONY: test-short
 test-short: ## Run tests in short mode (no race detector)
 	@echo "$(GREEN)Running short tests...$(RESET)"
@@ -213,7 +219,7 @@ security: govulncheck gosec trivy ## Run all security scans (govulncheck, gosec,
 	@echo "$(GREEN)✓ All security scans complete$(RESET)"
 
 .PHONY: check
-check: lint vet staticcheck test test-engine-lib ## Run basic checks (lint, vet, staticcheck, tests)
+check: lint vet staticcheck test test-engine-lib test-release-lib ## Run basic checks (lint, vet, staticcheck, tests)
 	@echo "$(GREEN)✓ Basic checks passed$(RESET)"
 
 .PHONY: check-all
@@ -235,12 +241,21 @@ clean: ## Clean build artifacts and test cache
 
 ##@ Release
 
-.PHONY: release-all
-release-all: ## Build versioned binaries into release/ (requires VERSION; this is what ci/scripts/build calls)
-	@echo "$(BLUE)Building $(PROJECT) $(VERSION) release binaries...$(RESET)"
+# VERSION_GIVEN is non-empty only when VERSION came from the command line or
+# the environment, not from the dev/<branch>/<sha> default above.
+VERSION_GIVEN := $(filter-out file,$(origin VERSION))
+
+.PHONY: release-version-check
+release-version-check:
+	@test -n "$(VERSION_GIVEN)" || { \
+		echo "$(RED)ERROR: VERSION must be given explicitly, for example VERSION=1.2.3$(RESET)"; exit 1; }
 	@case "$(VERSION)" in */*) \
 		echo "$(RED)ERROR: VERSION must be a release version, not $(VERSION)$(RESET)"; exit 1;; \
 	esac
+
+.PHONY: release-all
+release-all: release-version-check ## Build versioned binaries into release/ (requires VERSION; this is what ci/scripts/build calls)
+	@echo "$(BLUE)Building $(PROJECT) $(VERSION) release binaries...$(RESET)"
 	@mkdir -p $(RELEASE_ROOT)
 	@GOOS=linux   GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(RELEASE_ROOT)/$(PROJECT)-$(VERSION)-linux-amd64 ./cmd/safe
 	@GOOS=linux   GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o $(RELEASE_ROOT)/$(PROJECT)-$(VERSION)-linux-arm64 ./cmd/safe
@@ -251,10 +266,8 @@ release-all: ## Build versioned binaries into release/ (requires VERSION; this i
 	@echo "$(GREEN)✓ Release binaries built in $(RELEASE_ROOT)/$(RESET)"
 
 .PHONY: shipit
-shipit: ## Build release artifacts (requires VERSION env var)
+shipit: release-version-check ## Build release artifacts (requires VERSION env var)
 	@echo "$(BLUE)Preparing release...$(RESET)"
-	@echo "Checking that VERSION was defined in the calling environment"
-	@test -n "$(VERSION)" || { echo "$(RED)ERROR: VERSION not set$(RESET)"; exit 1; }
 	@echo "$(GREEN)OK. VERSION=$(VERSION)$(RESET)"
 
 	@echo "$(GREEN)Compiling safe binaries...$(RESET)"
@@ -325,5 +338,5 @@ deps-tidy: ## Clean up go.mod and go.sum
 	@echo "$(GREEN)✓ Dependencies tidied$(RESET)"
 
 # Include all phony targets
-.PHONY: build linux linux-arm64 darwin darwin-arm64 windows build-all test test-short test-race test-integration test-engine-lib test-all coverage coverage-html report fmt vet lint \
+.PHONY: build linux linux-arm64 darwin darwin-arm64 windows build-all test test-short test-race test-integration test-engine-lib test-release-lib test-all coverage coverage-html report fmt vet lint \
         govulncheck gosec staticcheck trivy security check check-all clean shipit version install install-user deps deps-update deps-tidy help

@@ -2,6 +2,7 @@ package vault_test
 
 import (
 	"encoding/json"
+	"errors"
 	"sort"
 	"strings"
 	"testing"
@@ -331,7 +332,7 @@ func TestSecret_JSON(t *testing.T) {
 
 func TestSecret_YAML(t *testing.T) {
 	t.Run("empty secret produces non-empty YAML with empty map", func(t *testing.T) {
-		y := vault.NewSecret().YAML()
+		y, _ := vault.NewSecret().YAML()
 		// yaml.Marshal of empty map produces "{}\n"
 		if y == "" {
 			t.Error("YAML() returned empty string for empty secret")
@@ -340,7 +341,7 @@ func TestSecret_YAML(t *testing.T) {
 
 	t.Run("populated secret produces parseable YAML", func(t *testing.T) {
 		s := newTestSecret("alpha", "one")
-		y := s.YAML()
+		y, _ := s.YAML()
 		if !strings.Contains(y, "alpha") {
 			t.Errorf("YAML() output missing key 'alpha': %q", y)
 		}
@@ -361,8 +362,12 @@ func TestSecret_YAML(t *testing.T) {
 			"plain", "it's a secret",
 		)
 		var back map[string]string
-		if err := yamlenc.Unmarshal([]byte(s.YAML()), &back); err != nil {
-			t.Fatalf("YAML() output does not parse: %v\n%s", err, s.YAML())
+		out, err := s.YAML()
+		if err != nil {
+			t.Fatalf("YAML() failed: %v", err)
+		}
+		if err := yamlenc.Unmarshal([]byte(out), &back); err != nil {
+			t.Fatalf("YAML() output does not parse: %v\n%s", err, out)
 		}
 		for _, k := range s.Keys() {
 			if back[k] != s.Get(k) {
@@ -370,6 +375,21 @@ func TestSecret_YAML(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestSecret_YAML_ReportsMarshalFailure(t *testing.T) {
+	boom := errors.New("encoder exploded")
+	t.Cleanup(vault.SetYAMLMarshalForTest(func(any) ([]byte, error) {
+		return nil, boom
+	}))
+
+	y, err := newTestSecret("alpha", "one").YAML()
+	if !errors.Is(err, boom) {
+		t.Fatalf("YAML() error = %v; want it to wrap %v", err, boom)
+	}
+	if y != "" {
+		t.Errorf("YAML() = %q on failure; want empty string", y)
+	}
 }
 
 // --- MarshalJSON / UnmarshalJSON round-trip ---

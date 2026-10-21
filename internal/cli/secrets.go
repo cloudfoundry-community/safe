@@ -186,7 +186,11 @@ func (c *CLI) cmdGet(command string, args ...string) error {
 			}
 			_, _ = fmt.Printf("%s\n", value)
 		} else {
-			_, _ = fmt.Printf("--- # %s\n%s\n", args[0], s.YAML())
+			doc, err := s.YAML()
+			if err != nil {
+				return fmt.Errorf("%s: %w", args[0], err)
+			}
+			_, _ = fmt.Printf("--- # %s\n%s\n", args[0], doc)
 		}
 		return nil
 	}

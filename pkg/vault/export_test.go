@@ -79,3 +79,13 @@ func SetGenerateKeyForTest(fn func(spec KeySpec) (crypto.Signer, error)) (restor
 	generateKeyFn = fn
 	return func() { generateKeyFn = orig }
 }
+
+// SetYAMLMarshalForTest overrides the package's YAML encoder seam for tests
+// in vault_test, the external test package, which cannot reach the
+// unexported yamlMarshal var directly. Call the returned restore func
+// (typically via t.Cleanup) to put the real encoder back.
+func SetYAMLMarshalForTest(fn func(v any) ([]byte, error)) (restore func()) {
+	orig := yamlMarshal
+	yamlMarshal = fn
+	return func() { yamlMarshal = orig }
+}

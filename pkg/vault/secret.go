@@ -344,14 +344,18 @@ func (s *Secret) JSON() string {
 }
 
 // YAML converts a Secret to its YAML representation and returns it as a string.
-// Returns an empty string if there were any errors.
-func (s *Secret) YAML() string {
-	b, err := yamlenc.Marshal(s.data)
+// Returns an error, and no document, if the encoder fails.
+func (s *Secret) YAML() (string, error) {
+	b, err := yamlMarshal(s.data)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("unable to encode secret as YAML: %w", err)
 	}
-	return string(b)
+	return string(b), nil
 }
+
+// yamlMarshal is the encoder behind YAML(). It is a var so tests can inject
+// a failure, which the real encoder cannot produce for string maps.
+var yamlMarshal = yamlenc.Marshal
 
 // SingleValue converts a secret to a string representing the value extracted.
 // Returns an error if there are not exactly one results in the secret

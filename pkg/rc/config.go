@@ -496,8 +496,16 @@ func (c *Config) Find(alias string) (*Vault, bool, error) {
 }
 
 func (c *Config) Vault(which string) (*Vault, error) {
+	// A name handed in came from -T or from $SAFE_TARGET, which the option
+	// parser folds into one value; only the saved current target is looked
+	// up here on the caller's behalf. Remember which it was for the error.
+	noun, origin := "Current target", ""
 	if which == "" {
 		which = c.Current
+	} else if os.Getenv("SAFE_TARGET") == which {
+		noun, origin = "Target", " (from $SAFE_TARGET)"
+	} else {
+		noun, origin = "Target", " (from -T)"
 	}
 
 	if which == "" {
@@ -509,7 +517,7 @@ func (c *Config) Vault(which string) (*Vault, error) {
 		return nil, err
 	}
 	if !ok {
-		return nil, fmt.Errorf("Current target '%s' not found in ~/.saferc", which)
+		return nil, fmt.Errorf("%s '%s'%s not found in ~/.saferc", noun, which, origin)
 	}
 	return v, nil
 }

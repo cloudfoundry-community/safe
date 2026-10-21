@@ -20,10 +20,20 @@ import (
 // want, including passwords, RSAKey keys, usernames, etc.
 type Secret struct {
 	data map[string]string
+
+	// typed holds the JSON, verbatim, of each value that was not a string
+	// when a read-modify-write read it, for keys nobody has set or deleted
+	// since. data carries those same values re-marshalled as strings, which
+	// is what get, export, and the formats print. A write sends typed in
+	// their place, so a value the caller never touched goes back as the
+	// object, list, number, or boolean it was: Vault refuses a string for
+	// some typed fields, and the ones it accepts a string for, it parses
+	// into something other than what was there.
+	typed map[string]json.RawMessage
 }
 
 func NewSecret() *Secret {
-	return &Secret{make(map[string]string)}
+	return &Secret{data: make(map[string]string)}
 }
 
 func (s Secret) MarshalJSON() ([]byte, error) {
@@ -31,7 +41,25 @@ func (s Secret) MarshalJSON() ([]byte, error) {
 }
 
 func (s *Secret) UnmarshalJSON(b []byte) error {
+	s.typed = nil
 	return json.Unmarshal(b, &s.data)
+}
+
+// writeData returns what a write of s sends: data, with the verbatim JSON
+// of every untouched typed value in place of its string.
+func (s *Secret) writeData() any {
+	if len(s.typed) == 0 {
+		return s.data
+	}
+	out := make(map[string]any, len(s.data))
+	for k, v := range s.data {
+		if raw, ok := s.typed[k]; ok {
+			out[k] = raw
+			continue
+		}
+		out[k] = v
+	}
+	return out
 }
 
 // Has returns true if the Secret has defined the given key.
@@ -62,6 +90,7 @@ func (s *Secret) Set(key, value string, skipIfExists bool) error {
 		return ansi.Errorf("@R{BUG: Something tried to overwrite the} @C{%s} @R{key, but it already existed, and --no-clobber was specified}", key)
 	}
 	s.data[key] = value
+	delete(s.typed, key)
 	return nil
 }
 
@@ -72,6 +101,7 @@ func (s *Secret) Delete(key string) bool {
 		return false
 	}
 	delete(s.data, key)
+	delete(s.typed, key)
 	return true
 }
 

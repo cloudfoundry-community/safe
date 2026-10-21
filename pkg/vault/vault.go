@@ -342,12 +342,17 @@ func fillSecretFromRaw(secret *Secret, raw map[string]any, path, key string) err
 // data endpoint reported alongside the data -- which is what a
 // check-and-set write needs to name. On a v1 mount the version is
 // meaningless (vaultkv reports 1) and callers must not send it anywhere.
+//
+// The secret it returns also keeps the verbatim JSON of every value that
+// was not a string, so the write that follows sends each untouched one
+// back with its type -- see Secret.typed. The strings it shows are the
+// ones Read shows.
 func (v *Vault) readWithVersion(path string) (secret *Secret, version uint, err error) {
 	path, key, ver := ParsePath(path)
 
 	secret = NewSecret()
 
-	raw := map[string]any{}
+	raw := map[string]json.RawMessage{}
 	meta, err := v.client.Get(path, &raw, &vaultkv.KVGetOpts{Version: uint(ver)})
 	if err != nil {
 		if vaultkv.IsNotFound(err) {
@@ -356,10 +361,40 @@ func (v *Vault) readWithVersion(path string) (secret *Secret, version uint, err 
 		return secret, 0, err
 	}
 
-	if err := fillSecretFromRaw(secret, raw, path, key); err != nil {
+	if err := fillSecretKeepingTypes(secret, raw, path, key); err != nil {
 		return secret, 0, err
 	}
 	return secret, meta.Version, nil
+}
+
+// fillSecretKeepingTypes is fillSecretFromRaw for data read as raw JSON. It
+// decodes each value the way a read into map[string]any would, so the
+// strings in secret are exactly the ones Read produces, and keeps the raw
+// JSON of every value that did not decode to a string in secret.typed.
+func fillSecretKeepingTypes(secret *Secret, raw map[string]json.RawMessage, path, key string) error {
+	decoded := make(map[string]any, len(raw))
+	for k, r := range raw {
+		var val any
+		if err := json.Unmarshal(r, &val); err != nil {
+			return err
+		}
+		decoded[k] = val
+	}
+
+	if err := fillSecretFromRaw(secret, decoded, path, key); err != nil {
+		return err
+	}
+
+	for k := range secret.data {
+		if _, isString := decoded[k].(string); isString {
+			continue
+		}
+		if secret.typed == nil {
+			secret.typed = make(map[string]json.RawMessage)
+		}
+		secret.typed[k] = raw[k]
+	}
+	return nil
 }
 
 // readLatestWithMeta reads the newest live version of a secret in one
@@ -504,7 +539,7 @@ func (v *Vault) Write(path string, s *Secret) error {
 		return v.deleteIfPresent(EncodePath(path, "", 0), DeleteOpts{})
 	}
 
-	_, err := v.client.Set(path, s.data, nil)
+	_, err := v.client.Set(path, s.writeData(), nil)
 	if vaultkv.IsNotFound(err) {
 		err = NewSecretNotFoundError(path)
 	}
@@ -582,7 +617,7 @@ func (v *Vault) writeCAS(path string, s *Secret, cas *uint) (uint, error) {
 
 	defer v.invalidateVersions(path)
 
-	meta, err := v.client.Set(path, s.data, &vaultkv.KVSetOpts{CAS: cas})
+	meta, err := v.client.Set(path, s.writeData(), &vaultkv.KVSetOpts{CAS: cas})
 	if vaultkv.IsNotFound(err) {
 		err = NewSecretNotFoundError(path)
 	}

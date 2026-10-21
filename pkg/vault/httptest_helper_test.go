@@ -121,6 +121,13 @@ type fakeVault struct {
 	// each fired after a matching request has been served. Guarded by f.mu.
 	hooks []*requestHook
 
+	// endpoints holds the paths served with typed JSON values rather than
+	// the string maps above, keyed by the path that follows /v1/. They are
+	// matched before any mount, so one can stand in for an auth role as
+	// well as for a KV secret some other tool wrote. See
+	// httptest_typed_helper_test.go. Guarded by f.mu.
+	endpoints map[string]*fakeEndpoint
+
 	// t is the test that built this fakeVault, captured so holdRequests can
 	// register a Cleanup that force-releases a gate nobody ever tripped.
 	// Set once by newTestVault; never written again, so reading it from
@@ -274,6 +281,7 @@ func newFakeVault() *fakeVault {
 		mounts:    map[string]fakeMount{"secret": {typ: "kv", version: 1}},
 		forbidden: make(map[string]bool),
 		pki:       make(map[string]bool),
+		endpoints: make(map[string]*fakeEndpoint),
 
 		initialized: true,
 	}
@@ -495,6 +503,10 @@ func (f *fakeVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.handleSys(w, r)
 
 	default:
+		if e := f.endpointFor(strings.TrimPrefix(p, "/v1/")); e != nil {
+			f.serveEndpoint(w, r, e)
+			return
+		}
 		if mount, subpath, ok := f.mountFor(strings.TrimPrefix(p, "/v1/")); ok {
 			f.handleKV(w, r, mount, subpath)
 			return

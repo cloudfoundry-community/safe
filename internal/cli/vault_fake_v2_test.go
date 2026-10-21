@@ -59,6 +59,37 @@ func (f *cliFakeVault) setV2(path string, values ...map[string]string) {
 	}
 }
 
+// setV2Raw is setV2 for versions given as JSON objects whose values may be
+// of any type. The test fails at once if one is not a JSON object.
+func (f *cliFakeVault) setV2Raw(t *testing.T, path string, values ...string) {
+	t.Helper()
+	parsed := make([]map[string]json.RawMessage, len(values))
+	for i, data := range values {
+		parsed[i] = fakeJSONObject(t, data)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, body := range parsed {
+		strs, raw := splitFakeValues(body)
+		f.appendVersionLocked(path, strs).raw = raw
+	}
+}
+
+// versionRaw returns version n of a path as the JSON a read of it answers
+// with, or nil if there is no such version.
+func (f *cliFakeVault) versionRaw(path string, n uint) map[string]json.RawMessage {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	v := f.versionLocked(path, n)
+	if v == nil {
+		return nil
+	}
+	if v.raw != nil {
+		return v.raw
+	}
+	return stringsAsRaw(v.data)
+}
+
 // appendVersionLocked adds a version. Callers hold f.mu.
 func (f *cliFakeVault) appendVersionLocked(path string, kv map[string]string) *fakeVersion {
 	n := len(f.versions[path]) + 1
@@ -182,7 +213,7 @@ func (f *cliFakeVault) serveV2Data(w http.ResponseWriter, r *http.Request, path 
 	switch r.Method {
 	case http.MethodPut, http.MethodPost:
 		var body struct {
-			Data    map[string]string `json:"data"`
+			Data    map[string]json.RawMessage `json:"data"`
 			Options struct {
 				CAS *uint `json:"cas"`
 			} `json:"options"`
@@ -195,10 +226,11 @@ func (f *cliFakeVault) serveV2Data(w http.ResponseWriter, r *http.Request, path 
 		//Every write attempt is recorded, refused ones included, so a
 		// test can compare what a refused write carried against what its
 		// retry carried.
+		strs, raw := splitFakeValues(body.Data)
 		if f.dataPuts == nil {
 			f.dataPuts = map[string][]map[string]string{}
 		}
-		f.dataPuts[path] = append(f.dataPuts[path], body.Data)
+		f.dataPuts[path] = append(f.dataPuts[path], strs)
 		//A check-and-set write must name the current version exactly --
 		// 0 only creates, and Vault counts deleted and destroyed versions
 		// as current (entries are never removed from f.versions), so any
@@ -210,7 +242,8 @@ func (f *cliFakeVault) serveV2Data(w http.ResponseWriter, r *http.Request, path 
 			_, _ = w.Write([]byte(`{"errors":["check-and-set parameter did not match the current version"]}`))
 			return
 		}
-		v := f.appendVersionLocked(path, body.Data)
+		v := f.appendVersionLocked(path, strs)
+		v.raw = raw
 		writeJSON(w, map[string]any{"data": versionJSON(v, uint(len(f.versions[path])))})
 
 	case http.MethodDelete:
@@ -253,8 +286,12 @@ func (f *cliFakeVault) serveV2Data(w http.ResponseWriter, r *http.Request, path 
 			}})
 			return
 		}
+		var data any = v.data
+		if v.raw != nil {
+			data = v.raw
+		}
 		writeJSON(w, map[string]any{"data": map[string]any{
-			"data":     v.data,
+			"data":     data,
 			"metadata": versionJSON(v, number),
 		}})
 	}

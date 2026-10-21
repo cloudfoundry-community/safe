@@ -928,12 +928,20 @@ func (c *CLI) cmdExport(command string, args ...string) error {
 		secrets = secrets.Merge(theseSecrets)
 	}
 
-	var mustV2Export bool
-	//Determine if we can get away with a v1 export
+	//Use the oldest format that can hold what is being exported: v1 when
+	// every secret has one version of strings, v2 when some secret has a
+	// history, and v3 when some value is not a string at all. Only v3 can
+	// carry such a value as the JSON it was, and only v3 needs a safe that
+	// knows it to import, so the others stay readable by older binaries.
+	var mustV2Export, mustV3Export bool
 	for _, s := range secrets {
 		if len(s.Versions) > 1 {
 			mustV2Export = true
-			break
+		}
+		for _, version := range s.Versions {
+			if version.Data.HasTypedValues() {
+				mustV3Export = true
+			}
 		}
 	}
 
@@ -947,27 +955,48 @@ func (c *CLI) cmdExport(command string, args ...string) error {
 		return nil
 	}
 
-	v2Export := func() error {
-		export := exportFormat{ExportVersion: 2, Data: map[string]exportSecret{}, RequiresVersioning: map[string]bool{}}
-
+	//requiresVersioning names the mounts holding a secret with more than
+	// one version, which import checks are KV v2 before it writes anything.
+	requiresVersioning := func() map[string]bool {
+		mounts := map[string]bool{}
 		for _, secret := range secrets {
 			if len(secret.Versions) > 1 {
 				mount, _ := v.Client().MountPath(secret.Path)
-				export.RequiresVersioning[mount] = true
+				mounts[mount] = true
 			}
+		}
+		return mounts
+	}
 
-			thisSecret := exportSecret{FirstVersion: secret.Versions[0].Number}
-			//We want to omit the `first` key in the json if it's 1
-			if thisSecret.FirstVersion == 1 || opt.Export.Shallow {
-				thisSecret.FirstVersion = 0
-			}
+	//firstVersion is the number a versioned export records for the oldest
+	// version of secret. It is 0, which omits the `first` key from the
+	// JSON, when that number is 1 or the export is shallow.
+	firstVersion := func(secret vault.SecretEntry) uint {
+		first := secret.Versions[0].Number
+		if first == 1 || opt.Export.Shallow {
+			return 0
+		}
+		return first
+	}
+
+	//versionState is what a versioned export records about the state of
+	// version. A deleted version the export did not read is recorded as
+	// destroyed, since it carries no value to restore.
+	versionState := func(version vault.SecretVersion) (deleted, destroyed bool) {
+		deleted = version.State == vault.SecretStateDeleted && opt.Export.Deleted
+		destroyed = version.State == vault.SecretStateDestroyed || (version.State == vault.SecretStateDeleted && !opt.Export.Deleted)
+		return deleted, destroyed
+	}
+
+	v2Export := func() error {
+		export := exportFormat{ExportVersion: 2, Data: map[string]exportSecret{}, RequiresVersioning: requiresVersioning()}
+
+		for _, secret := range secrets {
+			thisSecret := exportSecret{FirstVersion: firstVersion(secret)}
 
 			for _, version := range secret.Versions {
-				thisVersion := exportVersion{
-					Deleted:   version.State == vault.SecretStateDeleted && opt.Export.Deleted,
-					Destroyed: version.State == vault.SecretStateDestroyed || (version.State == vault.SecretStateDeleted && !opt.Export.Deleted),
-					Value:     map[string]string{},
-				}
+				thisVersion := exportVersion{Value: map[string]string{}}
+				thisVersion.Deleted, thisVersion.Destroyed = versionState(version)
 
 				for _, key := range version.Data.Keys() {
 					thisVersion.Value[key] = version.Data.Get(key)
@@ -977,18 +1006,51 @@ func (c *CLI) cmdExport(command string, args ...string) error {
 			}
 
 			export.Data[secret.Path] = thisSecret
-
-			//Wrap export in array so that older versions of safe don't try to import this improperly.
-			toExport = []exportFormat{export}
 		}
 
+		//Wrap export in array so that older versions of safe don't try to import this improperly.
+		toExport = []exportFormat{export}
+		return nil
+	}
+
+	v3Export := func() error {
+		export := exportFormatV3{ExportVersion: 3, Data: map[string]exportSecretV3{}, RequiresVersioning: requiresVersioning()}
+
+		for _, secret := range secrets {
+			thisSecret := exportSecretV3{FirstVersion: firstVersion(secret)}
+
+			for _, version := range secret.Versions {
+				var thisVersion exportVersionV3
+				thisVersion.Deleted, thisVersion.Destroyed = versionState(version)
+
+				//An empty value is left out, the same as v2 leaves it out.
+				if !version.Data.Empty() {
+					value, err := version.Data.MarshalTypedJSON()
+					if err != nil {
+						return fmt.Errorf("could not export %s: %w", secret.Path, err)
+					}
+					thisVersion.Value = value
+				}
+
+				thisSecret.Versions = append(thisSecret.Versions, thisVersion)
+			}
+
+			export.Data[secret.Path] = thisSecret
+		}
+
+		//The array wrapper and a version number older safe does not know
+		// make it refuse the file outright rather than misread it.
+		toExport = []exportFormatV3{export}
 		return nil
 	}
 
 	var err error
-	if mustV2Export {
+	switch {
+	case mustV3Export:
+		err = v3Export()
+	case mustV2Export:
 		err = v2Export()
-	} else {
+	default:
 		err = v1Export()
 	}
 
@@ -1004,24 +1066,84 @@ func (c *CLI) cmdExport(command string, args ...string) error {
 	return nil
 }
 
-// importPair is one secret from a version-2 export, paired with the path it
+// importPair is one secret from a versioned export, paired with the path it
 // is destined for.
-type importPair struct {
+type importPair[S any] struct {
 	path   string
-	secret exportSecret
+	secret S
 }
 
-// importPairs flattens a version-2 export's secrets into pairs sorted by
+// importPairs flattens a versioned export's secrets into pairs sorted by
 // path. data.Data is a map, whose iteration order Go deliberately
 // randomizes; sorting here means cmdImport's processing order is a function
 // of the input alone, never of map internals (Declared Behavior Change 4).
-func importPairs(data map[string]exportSecret) []importPair {
-	pairs := make([]importPair, 0, len(data))
+func importPairs[S any](data map[string]S) []importPair[S] {
+	pairs := make([]importPair[S], 0, len(data))
 	for path, secret := range data {
-		pairs = append(pairs, importPair{path: path, secret: secret})
+		pairs = append(pairs, importPair[S]{path: path, secret: secret})
 	}
 	sort.Slice(pairs, func(i, j int) bool { return pairs[i].path < pairs[j].path })
 	return pairs
+}
+
+// importSecret is one secret of a v2 or v3 export with its values decoded,
+// which is what the import of either format writes from.
+type importSecret struct {
+	firstVersion uint
+	versions     []importVersion
+}
+
+type importVersion struct {
+	deleted   bool
+	destroyed bool
+	data      *vault.Secret
+}
+
+// v2ImportSecrets decodes the secrets of a v2 export, whose values are all
+// strings.
+func v2ImportSecrets(data map[string]exportSecret) map[string]importSecret {
+	out := make(map[string]importSecret, len(data))
+	for path, secret := range data {
+		s := importSecret{firstVersion: secret.FirstVersion}
+		for _, version := range secret.Versions {
+			versionData := vault.NewSecret()
+			for k, v := range version.Value {
+				_ = versionData.Set(k, v, false)
+			}
+			s.versions = append(s.versions, importVersion{
+				deleted:   version.Deleted,
+				destroyed: version.Destroyed,
+				data:      versionData,
+			})
+		}
+		out[path] = s
+	}
+	return out
+}
+
+// v3ImportSecrets decodes the secrets of a v3 export, keeping the JSON type
+// of every value so the write sends it back as that type. Every value is
+// decoded before any is written, so a malformed file writes nothing.
+func v3ImportSecrets(data map[string]exportSecretV3) (map[string]importSecret, error) {
+	out := make(map[string]importSecret, len(data))
+	for _, pair := range importPairs(data) {
+		s := importSecret{firstVersion: pair.secret.FirstVersion}
+		for i, version := range pair.secret.Versions {
+			versionData := vault.NewSecret()
+			if version.Value != nil {
+				if err := versionData.UnmarshalTypedJSON(version.Value); err != nil {
+					return nil, fmt.Errorf("version at index %d of %s: %w", i, pair.path, err)
+				}
+			}
+			s.versions = append(s.versions, importVersion{
+				deleted:   version.Deleted,
+				destroyed: version.Destroyed,
+				data:      versionData,
+			})
+		}
+		out[pair.path] = s
+	}
+	return out, nil
 }
 
 func (c *CLI) cmdImport(command string, args ...string) error {
@@ -1087,25 +1209,15 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 		return err
 	}
 
-	v2Import := func(input []byte) error {
-		var unmarshalTarget []exportFormat
-		err := json.Unmarshal(input, &unmarshalTarget)
-		if err != nil {
-			return fmt.Errorf("Could not interpret export file: %w", err)
-		}
-
-		if len(unmarshalTarget) != 1 {
-			return fmt.Errorf("Improperly formatted export file")
-		}
-
-		data := unmarshalTarget[0]
-
+	//versionedImport writes the secrets of a v2 or v3 export, whose values
+	// have already been decoded, so the two formats import the same way.
+	versionedImport := func(data map[string]importSecret, requiresVersioning map[string]bool) error {
 		if !opt.Import.Shallow {
 			//Verify that the mounts that require versioning actually support it. We
 			//can't really detect if v1 mounts exist at this stage unless we assume
 			//the token given has mount listing privileges. Not a big deal, because
 			//it will become very apparent once we start trying to put secrets in it
-			for mount, needsVersioning := range data.RequiresVersioning {
+			for mount, needsVersioning := range requiresVersioning {
 				if needsVersioning {
 					mountVersion, err := v.MountVersion(mount)
 					if err != nil {
@@ -1123,40 +1235,38 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 		//Put the secrets in the places, writing the versions in the correct order and deleting/destroying secrets that
 		// need to be deleted/destroyed. Distinct paths import concurrently at
 		// the IO width: imports are round trips, not compute.
-		pairs := importPairs(data.Data)
+		pairs := importPairs(data)
 
-		return parallel.EachLimit(context.Background(), pairs, parallel.IOLimit(), func(_ context.Context, _ int, pair importPair) error {
+		return parallel.EachLimit(context.Background(), pairs, parallel.IOLimit(), func(_ context.Context, _ int, pair importPair[importSecret]) error {
 			path, secret := pair.path, pair.secret
 			s := vault.SecretEntry{
 				Path: path,
 			}
 
-			firstVersion := secret.FirstVersion
+			firstVersion := secret.firstVersion
 			if firstVersion == 0 {
 				firstVersion = 1
 			}
 
-			if opt.Import.Shallow {
-				secret.Versions = secret.Versions[len(secret.Versions)-1:]
+			//A secret with no versions at all has no newest one to keep.
+			if opt.Import.Shallow && len(secret.versions) > 0 {
+				secret.versions = secret.versions[len(secret.versions)-1:]
 			}
-			for i := range secret.Versions {
+			for i := range secret.versions {
 				state := vault.SecretStateAlive
-				if secret.Versions[i].Destroyed {
+				if secret.versions[i].destroyed {
 					if opt.Import.IgnoreDestroyed {
 						continue
 					}
 					state = vault.SecretStateDestroyed
-				} else if secret.Versions[i].Deleted {
+				} else if secret.versions[i].deleted {
 					if opt.Import.IgnoreDeleted {
 						continue
 					}
 					state = vault.SecretStateDeleted
 				}
-				versionData := vault.NewSecret()
-				for k, v := range secret.Versions[i].Value {
-					_ = versionData.Set(k, v, false)
-				}
-				// Safe conversion: i is bounded by len(secret.Versions)
+				versionData := secret.versions[i].data
+				// Safe conversion: i is bounded by len(secret.versions)
 				// Check if adding i to firstVersion would overflow
 				if i < 0 || uint(i) > ^uint(0)-firstVersion {
 					return fmt.Errorf("version number overflow detected for secret %s", path)
@@ -1175,6 +1285,40 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 		})
 	}
 
+	v2Import := func(input []byte) error {
+		var unmarshalTarget []exportFormat
+		err := json.Unmarshal(input, &unmarshalTarget)
+		if err != nil {
+			return fmt.Errorf("Could not interpret export file: %w", err)
+		}
+
+		if len(unmarshalTarget) != 1 {
+			return fmt.Errorf("Improperly formatted export file")
+		}
+
+		data := unmarshalTarget[0]
+		return versionedImport(v2ImportSecrets(data.Data), data.RequiresVersioning)
+	}
+
+	v3Import := func(input []byte) error {
+		var unmarshalTarget []exportFormatV3
+		err := json.Unmarshal(input, &unmarshalTarget)
+		if err != nil {
+			return fmt.Errorf("Could not interpret export file: %w", err)
+		}
+
+		if len(unmarshalTarget) != 1 {
+			return fmt.Errorf("Improperly formatted export file")
+		}
+
+		data := unmarshalTarget[0]
+		secrets, err := v3ImportSecrets(data.Data)
+		if err != nil {
+			return fmt.Errorf("Could not interpret export file: %w", err)
+		}
+		return versionedImport(secrets, data.RequiresVersioning)
+	}
+
 	var fn importFunc
 	//determine which version of the export format this is
 	var typeTest any
@@ -1185,9 +1329,14 @@ func (c *CLI) cmdImport(command string, args ...string) error {
 	case []any:
 		if len(v) == 1 {
 			if meta, isMap := (v[0]).(map[string]any); isMap {
+				//Any other version, including a newer one this safe does
+				// not know, is refused below as an unknown format.
 				version, isFloat64 := meta["export_version"].(float64)
-				if isFloat64 && version == 2 {
+				switch {
+				case isFloat64 && version == 2:
 					fn = v2Import
+				case isFloat64 && version == 3:
+					fn = v3Import
 				}
 			}
 		}

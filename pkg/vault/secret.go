@@ -45,6 +45,38 @@ func (s *Secret) UnmarshalJSON(b []byte) error {
 	return json.Unmarshal(b, &s.data)
 }
 
+// HasTypedValues reports whether s holds any value that was not a JSON
+// string when it was read, and that nobody has set or deleted since.
+func (s *Secret) HasTypedValues() bool {
+	return len(s.typed) > 0
+}
+
+// MarshalTypedJSON renders s the way a write sends it: every value that was
+// read as an object, list, number, boolean, or null comes out as that JSON,
+// verbatim, and every other value as a JSON string. MarshalJSON keeps
+// rendering strings only, because everything that prints a Secret as JSON
+// goes through it; this is for the export format that carries the types.
+func (s *Secret) MarshalTypedJSON() ([]byte, error) {
+	return json.Marshal(s.writeData())
+}
+
+// UnmarshalTypedJSON is the reverse of MarshalTypedJSON. It replaces what s
+// held with the JSON object in b, whose values may be of any JSON type, so
+// that a Write of s sends each one back with the type it has in b. Get
+// returns the same string for each value that a Read of it would.
+func (s *Secret) UnmarshalTypedJSON(b []byte) error {
+	raw := map[string]json.RawMessage{}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	fresh := NewSecret()
+	if err := fillSecretKeepingTypes(fresh, raw, "", ""); err != nil {
+		return err
+	}
+	*s = *fresh
+	return nil
+}
+
 // setKeepingType stores value under key the way Set does with no clobber
 // check. When typed holds the raw JSON the value was read as, a write sends
 // that JSON instead of the string; a nil typed makes it an ordinary string.

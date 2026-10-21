@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"strconv"
@@ -1855,4 +1856,30 @@ type exportVersion struct {
 	Deleted   bool              `json:"deleted,omitempty"`
 	Destroyed bool              `json:"destroyed,omitempty"`
 	Value     map[string]string `json:"value,omitempty"`
+}
+
+// exportFormatV3 is exportFormat for an export holding some value that is
+// not a string: an object, list, number, boolean, or null, which Vault
+// keeps for a secret written by anything other than safe. It is the v2
+// shape, history and all, with each value carried as the JSON it was read
+// as. Export only writes it when some value needs it, and safe before v3
+// refuses it as an unknown format instead of importing those values as
+// strings.
+type exportFormatV3 struct {
+	ExportVersion      uint                      `json:"export_version"`
+	Data               map[string]exportSecretV3 `json:"data"`
+	RequiresVersioning map[string]bool           `json:"requires_versioning"`
+}
+
+type exportSecretV3 struct {
+	FirstVersion uint              `json:"first,omitempty"`
+	Versions     []exportVersionV3 `json:"versions"`
+}
+
+// exportVersionV3 is exportVersion with Value holding a JSON object whose
+// values may be of any JSON type.
+type exportVersionV3 struct {
+	Deleted   bool            `json:"deleted,omitempty"`
+	Destroyed bool            `json:"destroyed,omitempty"`
+	Value     json.RawMessage `json:"value,omitempty"`
 }

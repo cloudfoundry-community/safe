@@ -8,6 +8,7 @@ package cli
 // VAULT_TOKEN, which would undo the values set here.
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -32,6 +33,12 @@ type cliFakeVault struct {
 	mu sync.Mutex
 	//data is the version 1 store: path to key/value pairs.
 	data map[string]map[string]string
+	//raw holds, for a version 1 path whose data has a value that is not a
+	// string, that data as the JSON it was written with; a read serves it
+	// in place of data. Vault keeps whatever JSON it is sent, and a value
+	// of any type has to come back as that type for an export to carry it.
+	// data still holds every value, a non-string one as its JSON text.
+	raw map[string]map[string]json.RawMessage
 	//versions is the version 2 store: path to its version history, oldest
 	// first. Version N is at index N-1; entries are never removed, since a
 	// destroyed version still occupies its number.
@@ -253,7 +260,10 @@ func (f *cliFakeVault) denyDelete(path string) {
 // fakeVersion is one version of a version 2 secret. A version is alive until
 // it is deleted, which is reversible, or destroyed, which is not.
 type fakeVersion struct {
-	data      map[string]string
+	data map[string]string
+	//raw is the version's data as the JSON it was written with, set only
+	// when some value in it is not a string. See cliFakeVault.raw.
+	raw       map[string]json.RawMessage
 	createdAt time.Time
 	deletedAt *time.Time
 	destroyed bool
@@ -347,13 +357,15 @@ func (f *cliFakeVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			_, _ = fmt.Fprintf(w, `{"errors":["permission denied: %s"]}`, path)
 			return
 		}
-		var body map[string]string
+		var body map[string]json.RawMessage
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = w.Write([]byte(`{"errors":["malformed body"]}`))
 			return
 		}
-		f.data[path] = body
+		strs, raw := splitFakeValues(body)
+		f.data[path] = strs
+		f.setRawLocked(path, raw)
 		w.WriteHeader(http.StatusNoContent)
 
 	case r.Method == http.MethodDelete:
@@ -363,6 +375,7 @@ func (f *cliFakeVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		delete(f.data, path)
+		delete(f.raw, path)
 		w.WriteHeader(http.StatusNoContent)
 
 	default:
@@ -378,6 +391,10 @@ func (f *cliFakeVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"errors":[]}`))
+			return
+		}
+		if raw := f.raw[path]; raw != nil {
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": raw})
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": kv})
@@ -421,6 +438,90 @@ func (f *cliFakeVault) set(path string, kv map[string]string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.data[path] = kv
+	delete(f.raw, path)
+}
+
+// setRaw stores a secret at a literal Vault path from a JSON object whose
+// values may be of any type. The test fails at once if data is not one.
+func (f *cliFakeVault) setRaw(t *testing.T, path, data string) {
+	t.Helper()
+	strs, raw := splitFakeValues(fakeJSONObject(t, data))
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.data[path] = strs
+	f.setRawLocked(path, raw)
+}
+
+// getRaw returns the secret at a literal Vault path as the JSON a read of
+// it answers with, or nil if it is absent.
+func (f *cliFakeVault) getRaw(path string) map[string]json.RawMessage {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	kv, ok := f.data[path]
+	if !ok {
+		return nil
+	}
+	if raw := f.raw[path]; raw != nil {
+		return raw
+	}
+	return stringsAsRaw(kv)
+}
+
+// setRawLocked records raw for path, or forgets what was recorded when raw
+// is nil. Callers hold f.mu.
+func (f *cliFakeVault) setRawLocked(path string, raw map[string]json.RawMessage) {
+	if raw == nil {
+		delete(f.raw, path)
+		return
+	}
+	if f.raw == nil {
+		f.raw = map[string]map[string]json.RawMessage{}
+	}
+	f.raw[path] = raw
+}
+
+// splitFakeValues takes the data of a write and returns it as strings, a
+// non-string value as its JSON text, and, only when some value is not a
+// string, the data as it was sent.
+func splitFakeValues(body map[string]json.RawMessage) (map[string]string, map[string]json.RawMessage) {
+	strs := make(map[string]string, len(body))
+	typed := false
+	for k, v := range body {
+		//null decodes into a string without complaint, so the leading
+		// quote is what says a value is one.
+		var s string
+		if trimmed := bytes.TrimSpace(v); len(trimmed) > 0 && trimmed[0] == '"' && json.Unmarshal(trimmed, &s) == nil {
+			strs[k] = s
+			continue
+		}
+		strs[k] = string(v)
+		typed = true
+	}
+	if !typed {
+		return strs, nil
+	}
+	return strs, body
+}
+
+// stringsAsRaw renders a map of strings the way a read of it answers.
+func stringsAsRaw(kv map[string]string) map[string]json.RawMessage {
+	out := make(map[string]json.RawMessage, len(kv))
+	for k, v := range kv {
+		b, _ := json.Marshal(v)
+		out[k] = b
+	}
+	return out
+}
+
+// fakeJSONObject decodes data, failing the test at once if it is not a JSON
+// object.
+func fakeJSONObject(t *testing.T, data string) map[string]json.RawMessage {
+	t.Helper()
+	obj := map[string]json.RawMessage{}
+	if err := json.Unmarshal([]byte(data), &obj); err != nil {
+		t.Fatalf("fake seed %s is not a JSON object: %v", data, err)
+	}
+	return obj
 }
 
 // get returns the secret at a literal Vault path, or nil if it is absent.

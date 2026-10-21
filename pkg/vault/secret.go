@@ -231,11 +231,17 @@ func (s *Secret) Password(key string, length int, policy string, skipIfExists bo
 }
 
 func cryptMD5(pass string) (string, error) {
-	c := md5_crypt.New()
 	salt, err := random(16, "a-zA-Z")
 	if err != nil {
 		return "", err
 	}
+	return cryptMD5WithSalt(pass, salt)
+}
+
+// cryptMD5WithSalt hashes pass with a caller-supplied salt (everything
+// after the "$1$" prefix), so tests can pin known outputs.
+func cryptMD5WithSalt(pass, salt string) (string, error) {
+	c := md5_crypt.New()
 	md5, err := c.Generate([]byte(pass), []byte("$1$"+salt))
 	if err != nil {
 		return "", fmt.Errorf("error generating MD5 crypt for password: %w", err)
@@ -244,11 +250,17 @@ func cryptMD5(pass string) (string, error) {
 }
 
 func cryptSHA256(pass string) (string, error) {
-	c := sha256_crypt.New()
 	salt, err := random(16, "a-zA-Z")
 	if err != nil {
 		return "", err
 	}
+	return cryptSHA256WithSalt(pass, salt)
+}
+
+// cryptSHA256WithSalt hashes pass with a caller-supplied salt (everything
+// after the "$5$" prefix), so tests can pin known outputs.
+func cryptSHA256WithSalt(pass, salt string) (string, error) {
+	c := sha256_crypt.New()
 	sha, err := c.Generate([]byte(pass), []byte("$5$"+salt))
 	if err != nil {
 		return "", fmt.Errorf("error generating SHA-256 crypt for password: %w", err)
@@ -257,11 +269,17 @@ func cryptSHA256(pass string) (string, error) {
 }
 
 func cryptSHA512(pass string) (string, error) {
-	c := sha512_crypt.New()
 	salt, err := random(16, "a-zA-Z")
 	if err != nil {
 		return "", err
 	}
+	return cryptSHA512WithSalt(pass, salt)
+}
+
+// cryptSHA512WithSalt hashes pass with a caller-supplied salt (everything
+// after the "$6$" prefix), so tests can pin known outputs.
+func cryptSHA512WithSalt(pass, salt string) (string, error) {
+	c := sha512_crypt.New()
 	sha, err := c.Generate([]byte(pass), []byte("$6$"+salt))
 	if err != nil {
 		return "", fmt.Errorf("error generating SHA-512 crypt for password: %w", err)

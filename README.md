@@ -849,6 +849,16 @@ brings in the secrets a plain export would have skipped entirely.  A
 destroyed version cannot be recovered and stays a placeholder either
 way.
 
+Vault keeps whatever JSON a secret was written with, so a secret written by the `vault` CLI or by Terraform can hold an object, a list, a number, a boolean, or null, where `safe` itself only ever writes strings. When any secret in the export holds a value like that, `safe export` writes the version 3 format instead. It keeps versions the way `-a` does, and it carries each such value as the JSON it was, so that `safe import` writes it back with the same type. A small version 3 file looks like this:
+
+```
+[{"export_version":3,
+  "data":{"secret/app":{"versions":[{"value":{"hosts":["a","b"],"password":"s3cret","port":8443,"tls":true}}]}},
+  "requires_versioning":{}}]
+```
+
+A version of `safe` that predates the version 3 format refuses such a file with `Unknown export file format - aborting`, rather than importing those values as strings. An export holding only strings is written exactly as it always was, in the original format or, when `-a` exports more than one version of a secret, the version 2 format.
+
 ### import <export.file
 
 Read an export (as produced by the `export` subcommand) from
@@ -856,6 +866,8 @@ standard input, and write all of the secrets contained
 therein to the same paths inside the targeted Vault.  Trees
 will be imported in an additive nature, so existing credentials
 in the same subtree as imported credentials will be left intact.
+
+`safe import` reads all three export formats and works out which one it has from the file itself. It refuses anything else, including a format version it does not know, before it writes anything. A value that the export carried as an object, list, number, boolean, or null is written back as that type.
 
 If you've got an export saved in a file _on-disk_, you can feed
 it to `safe import` using your shell's redirection facilities:

@@ -1070,6 +1070,11 @@ compatible with pre-1.0.0 versions of safe (and newer versions).
 incompatible with versions of safe prior to v1.0.0
 -d (--deleted) will cause safe to undelete, read, and then redelete deleted secrets in order to encode them in the
 backup. Without this, deleted versions will be ignored.
+
+If any exported secret holds a value that is not a string (an object, list, number, boolean, or null, which the vault
+CLI and Terraform can write), the export uses the V3 format instead. V3 keeps versions the way V2 does and carries
+each such value as its JSON, so that import writes it back with the same type. A safe that predates V3 refuses the
+file as an unknown format rather than importing those values as strings. An export of strings alone is unchanged.
 `}, c.cmdExport)
 
 	r.Dispatch("import", &Help{
@@ -1077,8 +1082,12 @@ backup. Without this, deleted versions will be ignored.
 		Usage:   "safe import <backup/file.json",
 		Type:    DestructiveCommand,
 		Description: `
+Import reads any of the formats safe export writes (V1, V2, or V3) and tells them apart from the file itself. It
+refuses anything else, including a format version it does not know, before it writes anything. Values in a V3 file
+are written back with their JSON types.
+
 -I (--ignore-destroyed) will keep destroyed versions from being replicated in the import by
-rting garbage data and then destroying it (which is originally done to preserve version numbering).
+inserting garbage data and then destroying it (which is originally done to preserve version numbering).
 -i (--ignore-deleted) will ignore deleted versions from being written during the import.
 -s (--shallow) will write only the latest version for each secret.
 `}, c.cmdImport)

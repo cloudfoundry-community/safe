@@ -1,17 +1,25 @@
-# New Features
+# Bug Fixes
 
-* **`safe local --raft <dir>` keeps a local vault on integrated raft storage.** OpenBao 2.7 dropped the file storage backend, so a persistent `safe local --file` vault no longer starts under `bao`. With `--raft`, safe runs a single-node raft store in the directory you name, creates that directory with mode 0700 when it is missing, and waits for the node to become active after unseal before it mounts `secret/`. The node ID is always `safe-local`, and we treat that value as a stable contract, because a raft store remembers it.
+* **`safe set`, `ask`, and `paste` no longer fail on Vault CE 1.21.3 and later, and they no longer change the type of values they did not touch.** Those Vault versions return `alias_metadata: {}` on every auth role that uses the shared token fields. These commands update a path by reading it and writing every key back, and that read turned each value that was not a string into its JSON text. Vault refuses the string `"{}"` for `alias_metadata`, so a `set` on any such role failed with `invalid key pair "{}"`, even though `vault write` on the same path worked. The same read also changed fields that Vault does accept as strings, so a `token_policies` list of `["a"]` came back as one policy named `["a"]`.
 
-* **`safe local --raft` gains `--cluster-port`.** A raft node also listens on a cluster port, which defaults to the API port plus one. Pass `--cluster-port` to choose it yourself, for example when several local vaults run side by side. safe checks that the cluster port is free before it starts the engine and stops with a message that names the port, because a single raft node would otherwise carry on without its cluster listener and mention the problem only in its own log. The option is refused without `--raft` and when it matches `--port`.
+* **`safe rm path:key`, `cp`, `mv`, and `revert` had the same problem, and they are fixed too.** Removing one key sent the keys it kept back as strings, so `alias_metadata` failed the same way. Copying or moving one key did that to the destination's untouched values, and the copied value itself landed as a string even when it was an object or a list. Copying a whole secret took a different route, through the tree walk, and it now writes the raw JSON on KV v1 and on KV v2. A key that is copied or moved keeps the type it had at its source.
 
-* **`safe local` can reopen a vault with a root token you saved, through `--root-token-file <path>`.** safe reads the token from the file before it starts the engine, so the token never appears on a command line or in the engine's environment. After unseal, safe checks the token with the server and accepts it only if it carries the root policy, and it never asks the server to generate a new root token when the saved one is valid. A rejected token stops safe with `The root token in <file> was rejected by <engine>`, and a token without the root policy stops it with `The root token in <file> is not a root token`. Both messages are stable, so scripts can match on them. safe warns when the file grants any access to its group or to other users, and it refuses the option with `--memory` or with storage that is not initialized yet.
+* **KV secrets written by other tools keep their objects, lists, numbers, and booleans.** Before this release, the next `safe set` turned each of those values into a string, and a large integer also lost its low digits on the way through a float. All of these commands now send untouched values back with their JSON type, and a key that you set yourself still goes out as the string you gave. What `get`, `export`, and the formats display does not change, because the secret still holds the same strings.
 
-# Behavior Changes
+* **`safe get` now reports a YAML encoding failure instead of printing an empty document.** Before, a failed encode looked the same as a secret with nothing in it, and the command exited cleanly. It now fails with a message that names the path.
 
-* **`safe local` now stops its engine when it receives SIGHUP.** Closing the terminal or killing the tmux session that ran `safe local` used to end safe without stopping the engine. The engine reads SIGHUP as a request to reload its configuration, so it kept running and held the port and the data directory. safe now tears the engine down and removes its target, as it already did for Ctrl-C and SIGTERM.
+* **The unknown-target error now says where the name came from.** A missing target used to read `Current target 'X' not found in ~/.saferc` even when `X` came from `-T` or from `$SAFE_TARGET`, which sent people looking for a problem in their saved selection. The message now reads `Target 'X' (from -T)` or `Target 'X' (from $SAFE_TARGET)` for a name you handed in, and it keeps the old wording for the saved current target. A name that equals `$SAFE_TARGET` is reported as coming from the environment, because the option parser folds the two into one value.
 
-* **`safe local` ignores SIGPIPE.** When its output runs through a pipe such as `tee` and the reader goes away first, safe used to die on the next write and leave the engine running. It now finishes the teardown regardless.
+* **`make shipit` now refuses a defaulted or slashed `VERSION`.** The Makefile defaults `VERSION` to `dev/<branch>/<sha>`, so a run without it compiled every binary and only then failed, because the default contains a slash. The release targets now fail at the start unless `VERSION` came from the command line or the environment and contains no slash.
 
-# OpenBao and sys/generate-root
+# Known Gaps
 
-OpenBao disables the `sys/generate-root` API by default, starting in 2.5.3, and answers it with `unsupported operation`. Without `--root-token-file`, reopening a `--file` or `--raft` vault generates a new root token through that API, so under OpenBao a reopen needs `--root-token-file`. When the API is refused, safe now says so and points at `--root-token-file`. If the root token is lost, only `--engine vault` can still generate a new one.
+* **`safe export` and `safe import` still turn non-string values into strings.** The typed write-back covers the commands above but not these two, so an export and import round trip can still change the type of an object, list, number, or boolean. A later release will address that.
+
+# Dependencies
+
+* `safe` now builds with Go 1.27.3, and we updated `golang.org/x/crypto`, `golang.org/x/net`, and `golang.org/x/term` to their current releases.
+
+# Internal
+
+* We made a flaky `safe local` raft test deterministic and recorded our keep decisions for six modules that modrot flags as stale, and neither change affects the product.

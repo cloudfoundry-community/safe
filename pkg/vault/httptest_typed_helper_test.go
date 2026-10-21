@@ -43,6 +43,10 @@ type fakeEndpoint struct {
 	data    map[string]json.RawMessage
 	version uint // KV v2 only: the current version
 	writes  []map[string]json.RawMessage
+
+	// metaPath is, for a KV v2 endpoint only, the path whose version
+	// history in f.v2data the metadata endpoint serves for it.
+	metaPath string
 }
 
 // typedEndpoint serves path (what follows /v1/) as an endpoint of the given
@@ -54,13 +58,22 @@ func (f *fakeVault) typedEndpoint(t *testing.T, path string, kind endpointKind, 
 	if err := json.Unmarshal([]byte(data), &seed); err != nil {
 		t.Fatalf("typedEndpoint(%s): seed is not a JSON object: %v", path, err)
 	}
+	path = strings.Trim(path, "/")
 	e := &fakeEndpoint{kind: kind, data: seed}
-	if kind == endpointKV2 {
-		e.version = 1
-	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.endpoints[strings.Trim(path, "/")] = e
+	if kind == endpointKV2 {
+		mount, sub, ok := strings.Cut(path, "/data/")
+		if !ok {
+			t.Fatalf("typedEndpoint(%s): a KV v2 endpoint is a <mount>/data/<path> path", path)
+		}
+		//The version history lives with the string-valued v2 secrets, so
+		// the metadata endpoint answers for this one too. Its versions hold
+		// no data; reads of the data come here.
+		e.metaPath = mount + "/" + sub
+		e.version = f.appendV2Locked(e.metaPath, nil)
+	}
+	f.endpoints[path] = e
 }
 
 // endpointWrites returns the data each accepted write to path carried,
@@ -87,6 +100,13 @@ func (f *fakeVault) endpointFor(path string) *fakeEndpoint {
 func (f *fakeVault) serveEndpoint(w http.ResponseWriter, r *http.Request, e *fakeEndpoint) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
+	//An endpoint is a leaf, so a listing of it finds nothing, the way a
+	// listing of any secret does.
+	if r.Method == "LIST" || r.URL.Query().Get("list") == "true" {
+		jsonErr(w, http.StatusNotFound, "")
+		return
+	}
 
 	switch r.Method {
 	case http.MethodGet:
@@ -148,7 +168,7 @@ func (f *fakeVault) serveEndpoint(w http.ResponseWriter, r *http.Request, e *fak
 		}
 
 		if e.kind == endpointKV2 {
-			e.version++
+			e.version = f.appendV2Locked(e.metaPath, nil)
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"data": v2VersionJSON(&fakeV2Version{}, e.version),

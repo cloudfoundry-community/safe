@@ -45,6 +45,27 @@ func (s *Secret) UnmarshalJSON(b []byte) error {
 	return json.Unmarshal(b, &s.data)
 }
 
+// setKeepingType stores value under key the way Set does with no clobber
+// check. When typed holds the raw JSON the value was read as, a write sends
+// that JSON instead of the string; a nil typed makes it an ordinary string.
+func (s *Secret) setKeepingType(key, value string, typed json.RawMessage) {
+	s.data[key] = value
+	if typed == nil {
+		delete(s.typed, key)
+		return
+	}
+	if s.typed == nil {
+		s.typed = make(map[string]json.RawMessage)
+	}
+	s.typed[key] = typed
+}
+
+// copyKey sets dstKey in s to the value src holds under srcKey, keeping the
+// JSON type src read it with.
+func (s *Secret) copyKey(dstKey string, src *Secret, srcKey string) {
+	s.setKeepingType(dstKey, src.data[srcKey], src.typed[srcKey])
+}
+
 // writeData returns what a write of s sends: data, with the verbatim JSON
 // of every untouched typed value in place of its string.
 func (s *Secret) writeData() any {

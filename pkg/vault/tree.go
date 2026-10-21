@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime"
@@ -119,6 +120,10 @@ type secretTree struct {
 	Version      uint
 	Deleted      bool
 	Destroyed    bool
+	// Typed is, on a key node whose value was not a string, the raw JSON it
+	// was read as. Value holds the string safe shows for it; a copy writes
+	// Typed, so the value lands with its type. See Secret.typed.
+	Typed json.RawMessage
 	// fetched marks a version node whose data the walk has already read (by
 	// workGetLatest, in one request); getWorkType assigns it no further work.
 	fetched bool
@@ -297,7 +302,7 @@ func (t secretTree) convertToSecrets() Secrets {
 				}
 
 				for _, key := range version.Branches {
-					_ = thisVersion.Data.Set(key.Basename(), key.Value, false)
+					thisVersion.Data.setKeepingType(key.Basename(), key.Value, key.Typed)
 				}
 
 				thisEntry.Versions = append(thisEntry.Versions, thisVersion)
@@ -589,11 +594,11 @@ func (s SecretEntry) Copy(v *Vault, dst string, opts TreeCopyOpts) error {
 	}
 
 	for _, version := range s.Versions {
-		var toWrite map[string]string
+		var toWrite any
 		if version.State == SecretStateDestroyed {
 			toWrite = map[string]string{"TO_DESTROY": "TO_DESTROY"}
 		} else {
-			toWrite = version.Data.data
+			toWrite = version.Data.writeData()
 		}
 
 		setMeta, err := v.Client().Set(dst, toWrite, nil)
@@ -965,6 +970,7 @@ func (w *treeWorker) workGet(t secretTree) ([]secretTree, error) {
 			Name:    EncodePath(path, key, 0),
 			Type:    treeTypeKey,
 			Value:   string(s.data[key]),
+			Typed:   s.typed[key],
 			Version: version,
 			Deleted: t.Deleted,
 		})
@@ -1036,6 +1042,7 @@ func (w *treeWorker) workGetLatest(t secretTree) ([]secretTree, error) {
 			Name:    EncodePath(t.Name, key, 0),
 			Type:    treeTypeKey,
 			Value:   string(s.data[key]),
+			Typed:   s.typed[key],
 			Version: meta.Version,
 		})
 	}

@@ -292,21 +292,13 @@ func (v *Vault) Curl(method string, path string, body []byte) (*http.Response, e
 // both reported through err, as SecretNotFound and KeyNotFound respectively,
 // alongside an empty Secret; every Secret method dereferences its receiver,
 // so a caller that tolerates a not-found error can still use the value.
+//
+// The Secret keeps the raw JSON of every value that was not a string, the
+// same as the read behind Update, so a caller that writes it back -- rm of
+// one key, cp and mv of one key, revert -- sends the values it did not
+// change with their types. See Secret.typed.
 func (v *Vault) Read(path string) (secret *Secret, err error) {
-	path, key, version := ParsePath(path)
-
-	secret = NewSecret()
-
-	raw := map[string]any{}
-	_, err = v.client.Get(path, &raw, &vaultkv.KVGetOpts{Version: uint(version)})
-	if err != nil {
-		if vaultkv.IsNotFound(err) {
-			err = v.notFoundReading(path, version)
-		}
-		return
-	}
-
-	err = fillSecretFromRaw(secret, raw, path, key)
+	secret, _, err = v.readWithVersion(path)
 	return
 }
 
@@ -337,16 +329,14 @@ func fillSecretFromRaw(secret *Secret, raw map[string]any, path, key string) err
 	return nil
 }
 
-// readWithVersion is Read for a read-modify-write: the same path parsing,
-// the same not-found translation, but it also returns the KV version the
-// data endpoint reported alongside the data -- which is what a
-// check-and-set write needs to name. On a v1 mount the version is
-// meaningless (vaultkv reports 1) and callers must not send it anywhere.
+// readWithVersion is Read that also returns the KV version the data
+// endpoint reported alongside the data -- which is what a check-and-set
+// write needs to name. On a v1 mount the version is meaningless (vaultkv
+// reports 1) and callers must not send it anywhere.
 //
 // The secret it returns also keeps the verbatim JSON of every value that
-// was not a string, so the write that follows sends each untouched one
-// back with its type -- see Secret.typed. The strings it shows are the
-// ones Read shows.
+// was not a string, so a write that follows sends each untouched one back
+// with its type -- see Secret.typed.
 func (v *Vault) readWithVersion(path string) (secret *Secret, version uint, err error) {
 	path, key, ver := ParsePath(path)
 
@@ -369,7 +359,7 @@ func (v *Vault) readWithVersion(path string) (secret *Secret, version uint, err 
 
 // fillSecretKeepingTypes is fillSecretFromRaw for data read as raw JSON. It
 // decodes each value the way a read into map[string]any would, so the
-// strings in secret are exactly the ones Read produces, and keeps the raw
+// strings in secret are the ones safe has always shown, and keeps the raw
 // JSON of every value that did not decode to a string in secret.typed.
 func fillSecretKeepingTypes(secret *Secret, raw map[string]json.RawMessage, path, key string) error {
 	decoded := make(map[string]any, len(raw))
@@ -408,21 +398,13 @@ func fillSecretKeepingTypes(secret *Secret, raw map[string]json.RawMessage, path
 func (v *Vault) readLatestWithMeta(path string) (*Secret, vaultkv.KVVersion, error) {
 	path = Canonicalize(path)
 	secret := NewSecret()
-	raw := map[string]any{}
+	raw := map[string]json.RawMessage{}
 	meta, err := v.client.Get(path, &raw, nil)
 	if err != nil {
 		return secret, meta, err
 	}
-	for k, val := range raw {
-		if s, ok := val.(string); ok {
-			secret.data[k] = s
-			continue
-		}
-		b, merr := json.Marshal(val)
-		if merr != nil {
-			return secret, meta, merr
-		}
-		secret.data[k] = string(b)
+	if err := fillSecretKeepingTypes(secret, raw, path, ""); err != nil {
+		return secret, meta, err
 	}
 	return secret, meta, nil
 }
@@ -1455,7 +1437,7 @@ func (v *Vault) Copy(oldpath, newpath string, opts MoveCopyOpts) error {
 		}
 
 		toWrite = append(toWrite, dstOrig)
-		_ = toWrite[0].Set(dstKey, srcSecret.Get(srcKey), false)
+		toWrite[0].copyKey(dstKey, srcSecret, srcKey)
 	} else {
 		if dstKey != "" {
 			return fmt.Errorf("cannot move full secret `%s` into specific key `%s`", oldpath, newpath)

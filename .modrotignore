@@ -1,0 +1,12 @@
+# 2026-10-21 keep: latest pseudo-version, no maintained successor, small socks5 server used by the proxy path
+github.com/armon/go-socks5
+# 2026-10-21 keep: latest pseudo-version, no successor, owned by our upstream community org
+github.com/cloudfoundry-community/goutils
+# 2026-10-21 keep: latest pseudo-version, no successor, tiny ANSI helper
+github.com/jhunt/go-ansi
+# 2026-10-21 keep: latest pseudo-version, no successor, drives the CLI parsing
+github.com/jhunt/go-cli
+# 2026-10-21 keep: latest pseudo-version, no successor, environment variable loader
+github.com/jhunt/go-envirotron
+# 2026-10-21 keep: latest v1.5.0, repo not archived, no resolvable /v2 module; only crypt hashers are used
+github.com/tredoe/osutil

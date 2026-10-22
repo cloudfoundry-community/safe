@@ -393,7 +393,7 @@ exit 0
 `)
 	c := localCLI(t)
 	c.opt.Local.Memory = true
-	c.opt.Local.Port = 8219
+	c.opt.Local.Port = freePort(t)
 
 	err := c.cmdLocal("local")
 	if err == nil {
@@ -425,7 +425,7 @@ exit 1
 		t.Fatalf("writing fake vault: %v", err)
 	}
 
-	cmd := exec.Command(safeBinary(t), "local", "--memory", "--port", "8219")
+	cmd := exec.Command(safeBinary(t), "local", "--memory", "--port", fmt.Sprint(freePort(t)))
 	cmd.Env = append(os.Environ(),
 		"HOME="+t.TempDir(),
 		"SAFE_TARGET=", "VAULT_ADDR=", "VAULT_TOKEN=",

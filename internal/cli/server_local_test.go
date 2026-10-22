@@ -165,7 +165,7 @@ func TestCmdLocal_MissingVaultBinaryErrors(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	c := localCLI(t)
 	c.opt.Local.Memory = true
-	c.opt.Local.Port = 8219
+	c.opt.Local.Port = freePort(t)
 
 	err := c.cmdLocal("local")
 	if err == nil {
@@ -181,7 +181,7 @@ func TestCmdLocal_MalformedConfigPairErrors(t *testing.T) {
 	installFakeVaultVersionOnly(t, "Vault v1.15.4")
 	c := localCLI(t)
 	c.opt.Local.Memory = true
-	c.opt.Local.Port = 8219
+	c.opt.Local.Port = freePort(t)
 	c.opt.Local.Config = []string{"not-a-pair"}
 
 	err := c.cmdLocal("local")
@@ -202,7 +202,7 @@ func TestCmdLocal_ListenerOverrideEnablingTLSIsRefused(t *testing.T) {
 	installFakeVaultVersionOnly(t, "Vault v1.15.4")
 	c := localCLI(t)
 	c.opt.Local.Memory = true
-	c.opt.Local.Port = 8219
+	c.opt.Local.Port = freePort(t)
 	c.opt.Local.Listener = []string{"tls_disable=0"}
 
 	err := c.cmdLocal("local")
@@ -221,7 +221,7 @@ func TestCmdLocal_MalformedListenerPairErrorsWithOldVault(t *testing.T) {
 	installFakeVaultVersionOnly(t, "Vault v0.7.3")
 	c := localCLI(t)
 	c.opt.Local.File = filepath.Join(t.TempDir(), "does-not-exist.db")
-	c.opt.Local.Port = 8219
+	c.opt.Local.Port = freePort(t)
 	c.opt.Local.Listener = []string{"=no-key"}
 
 	err := c.cmdLocal("local")

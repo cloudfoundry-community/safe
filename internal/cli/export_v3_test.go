@@ -216,6 +216,7 @@ func TestExportOfTypedValuesOnKVv1IsV3(t *testing.T) {
 	fv.setRaw(t, "secret/x/typed", typedCLISecret)
 	fv.set("secret/x/plain", map[string]string{"k": "v"})
 	c := newTestCLI(t)
+	c.opt.Export.Typed = true
 
 	got := exportOutput(t, c, "secret/x")
 	if got != goldenV3KV1 {
@@ -260,6 +261,7 @@ func TestExportOfTypedHistoryOnKVv2IsV3AndImportsBack(t *testing.T) {
 	c := newTestCLI(t)
 	c.opt.Export.All = true
 	c.opt.Export.Deleted = true
+	c.opt.Export.Typed = true
 
 	got := exportOutput(t, c, "secret/x")
 	if got != goldenV3KV2 {
@@ -282,22 +284,66 @@ func TestExportOfTypedHistoryOnKVv2IsV3AndImportsBack(t *testing.T) {
 	}
 }
 
-// An export of the latest versions only carries no history, so a typed
-// value in an older version does not make it a version 3 file.
-func TestExportOfLatestStringsOverTypedHistoryStaysV1(t *testing.T) {
+// Without --typed an export is the file safe has always written, whatever
+// the data holds. A typed value goes out as the JSON text safe get shows.
+func TestExportOfTypedValuesWithoutTypedIsV1(t *testing.T) {
+	isolateHome(t)
+	fv := newCLIFake(t)
+	fv.setRaw(t, "secret/x/typed", `{"pid": 11485, "obj": {"a": 1}, "s": "str"}`)
+	c := newTestCLI(t)
+
+	want := `{"secret/x/typed":{"obj":"{\"a\":1}","pid":"11485","s":"str"}}` + "\n"
+	if got := exportOutput(t, c, "secret/x"); got != want {
+		t.Errorf("export =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestExportOfTypedHistoryWithoutTypedIsV2(t *testing.T) {
+	isolateHome(t)
+	fv := newCLIFakeV2(t)
+	fv.setV2Raw(t, "secret/x/typed", `{"n": 1}`, `{"pid": 11485, "s": "x"}`)
+	c := newTestCLI(t)
+	c.opt.Export.All = true
+
+	want := `[{"export_version":2,"data":{"secret/x/typed":{"versions":[{"value":{"n":"1"}},{"value":{"pid":"11485","s":"x"}}]}},"requires_versioning":{"secret":true}}]` + "\n"
+	if got := exportOutput(t, c, "secret/x"); got != want {
+		t.Errorf("export =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// --typed writes version 3 even when every value is a string, so a caller
+// always gets the one shape. The file holds one version per secret unless
+// -a asks for the history.
+func TestExportTypedOfStringsIsV3(t *testing.T) {
+	isolateHome(t)
+	stringFixtureV1(t)
+	c := newTestCLI(t)
+	c.opt.Export.Typed = true
+
+	want := `[{"export_version":3,"data":{"secret/x/a":{"versions":[{"value":{"html":"\u003ca\u0026b\u003e","k":"v"}}]},"secret/x/b/c":{"versions":[{"value":{"true":"false","x":"1"}}]}},"requires_versioning":{}}]` + "\n"
+	if got := exportOutput(t, c, "secret/x"); got != want {
+		t.Errorf("export =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// With --typed, -a keeps the history and a latest-only export leaves the
+// older typed versions out.
+func TestExportTypedOverHistory(t *testing.T) {
 	isolateHome(t)
 	fv := newCLIFakeV2(t)
 	fv.setV2Raw(t, "secret/x/typed", `{"n": 1}`, `{"n": "2"}`)
 	c := newTestCLI(t)
+	c.opt.Export.Typed = true
 
-	if got, want := exportOutput(t, c, "secret/x"), `{"secret/x/typed":{"n":"2"}}`+"\n"; got != want {
-		t.Errorf("export = %s, want %s", got, want)
+	want := `[{"export_version":3,"data":{"secret/x/typed":{"first":2,"versions":[{"value":{"n":"2"}}]}},"requires_versioning":{}}]` + "\n"
+	if got := exportOutput(t, c, "secret/x"); got != want {
+		t.Errorf("export --typed =\n%s\nwant\n%s", got, want)
 	}
 
 	c.opt.Export.All = true
-	got := exportOutput(t, c, "secret/x")
-	if !strings.HasPrefix(got, `[{"export_version":3,`) {
-		t.Errorf("export --all = %s, want a version 3 file", got)
+	want = `[{"export_version":3,"data":{"secret/x/typed":{"versions":[{"value":{"n":1}},{"value":{"n":"2"}}]}},"requires_versioning":{"secret":true}}]` + "\n"
+	if got := exportOutput(t, c, "secret/x"); got != want {
+		t.Errorf("export --typed -a =\n%s\nwant\n%s", got, want)
 	}
 }
 
@@ -309,6 +355,7 @@ func TestImportShallowOfV3KeepsTypes(t *testing.T) {
 	c := newTestCLI(t)
 	c.opt.Export.All = true
 	c.opt.Export.Deleted = true
+	c.opt.Export.Typed = true
 	file := exportOutput(t, c, "secret/x")
 
 	restored := newCLIFakeV2(t)

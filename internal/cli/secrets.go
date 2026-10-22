@@ -928,20 +928,17 @@ func (c *CLI) cmdExport(command string, args ...string) error {
 		secrets = secrets.Merge(theseSecrets)
 	}
 
-	//Use the oldest format that can hold what is being exported: v1 when
-	// every secret has one version of strings, v2 when some secret has a
-	// history, and v3 when some value is not a string at all. Only v3 can
-	// carry such a value as the JSON it was, and only v3 needs a safe that
-	// knows it to import, so the others stay readable by older binaries.
-	var mustV2Export, mustV3Export bool
+	//Write the oldest format that can hold what is being exported: v1 when
+	// every secret has one version, and v2 when some secret has a history.
+	// Both carry every value as a string, with a typed value flattened to
+	// the JSON text safe get shows, which is what Genesis and other
+	// consumers of the v1 file parse. v3 is written only on --typed, and
+	// then always, since only v3 carries a value as the JSON it was and
+	// only a safe that knows v3 can import it.
+	var mustV2Export bool
 	for _, s := range secrets {
 		if len(s.Versions) > 1 {
 			mustV2Export = true
-		}
-		for _, version := range s.Versions {
-			if version.Data.HasTypedValues() {
-				mustV3Export = true
-			}
 		}
 	}
 
@@ -1046,7 +1043,7 @@ func (c *CLI) cmdExport(command string, args ...string) error {
 
 	var err error
 	switch {
-	case mustV3Export:
+	case opt.Export.Typed:
 		err = v3Export()
 	case mustV2Export:
 		err = v2Export()

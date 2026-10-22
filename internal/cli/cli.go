@@ -340,6 +340,7 @@ type Options struct {
 	Export struct {
 		All     bool `cli:"-a, --all"`
 		Deleted bool `cli:"-d, --deleted"`
+		Typed   bool `cli:"--typed"`
 		//These do nothing but are kept for backwards-compat
 		OnlyAlive bool `cli:"-o, --only-alive"`
 		Shallow   bool `cli:"-s, --shallow"`
@@ -1061,7 +1062,7 @@ redeleting them.
 
 	r.Dispatch("export", &Help{
 		Summary: "Export one or more subtrees for migration / backup purposes",
-		Usage:   "safe export [-ad] PATH [PATH ...]",
+		Usage:   "safe export [-ad] [--typed] PATH [PATH ...]",
 		Type:    NonDestructiveCommand,
 		Description: `
 Normally, the export will get only the latest version of each secret, and encode it in a format that is backwards-
@@ -1071,10 +1072,10 @@ incompatible with versions of safe prior to v1.0.0
 -d (--deleted) will cause safe to undelete, read, and then redelete deleted secrets in order to encode them in the
 backup. Without this, deleted versions will be ignored.
 
-If any exported secret holds a value that is not a string (an object, list, number, boolean, or null, which the vault
-CLI and Terraform can write), the export uses the V3 format instead. V3 keeps versions the way V2 does and carries
-each such value as its JSON, so that import writes it back with the same type. A safe that predates V3 refuses the
-file as an unknown format rather than importing those values as strings. An export of strings alone is unchanged.
+--typed writes the V3 format, always, even when every value is a string. V3 keeps versions the way V2 does and carries
+each value as its JSON, so that import writes back an object, list, number, boolean, or null (which the vault CLI and
+Terraform can write) with the same type. Without --typed, such a value is flattened to the JSON text safe get shows,
+and the export is V1 or V2 as above. V3 is written only with --typed, and a safe older than v1.26.0 cannot import it.
 `}, c.cmdExport)
 
 	r.Dispatch("import", &Help{
@@ -1871,9 +1872,8 @@ type exportVersion struct {
 // not a string: an object, list, number, boolean, or null, which Vault
 // keeps for a secret written by anything other than safe. It is the v2
 // shape, history and all, with each value carried as the JSON it was read
-// as. Export only writes it when some value needs it, and safe before v3
-// refuses it as an unknown format instead of importing those values as
-// strings.
+// as. Export writes it only with --typed, and safe before v3 refuses it as
+// an unknown format instead of importing those values as strings.
 type exportFormatV3 struct {
 	ExportVersion      uint                      `json:"export_version"`
 	Data               map[string]exportSecretV3 `json:"data"`

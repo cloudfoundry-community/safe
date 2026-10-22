@@ -63,7 +63,9 @@ func TestGenerateKeysDrawsOneIndependentKeyPerCertificate(t *testing.T) {
 func TestGenerateKeysFetchFailureAbandonsTheBatch(t *testing.T) {
 	release := make(chan struct{})
 	stubDone := make(chan struct{}, 2)
+	stubStarted := make(chan struct{}, 2)
 	restore := vault.SetGenerateKeyForTest(func(spec vault.KeySpec) (crypto.Signer, error) {
+		stubStarted <- struct{}{}
 		<-release
 		stubDone <- struct{}{}
 		return nil, errors.New("keygen finished after abandonment")
@@ -89,6 +91,17 @@ func TestGenerateKeysFetchFailureAbandonsTheBatch(t *testing.T) {
 	default:
 	}
 
+	// Release only once both draws are in flight. The batch dispatches in a
+	// background goroutine, and a draw that fails fast cancels the fan-out,
+	// so releasing before the second draw has started can leave it never
+	// dispatched and the wait below with nothing to hear.
+	for i := 0; i < 2; i++ {
+		select {
+		case <-stubStarted:
+		case <-time.After(10 * time.Second):
+			t.Fatal("a draw never started")
+		}
+	}
 	close(release)
 	for i := 0; i < 2; i++ {
 		select {

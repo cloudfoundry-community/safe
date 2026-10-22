@@ -849,7 +849,7 @@ brings in the secrets a plain export would have skipped entirely.  A
 destroyed version cannot be recovered and stays a placeholder either
 way.
 
-Vault keeps whatever JSON a secret was written with, so a secret written by the `vault` CLI or by Terraform can hold an object, a list, a number, a boolean, or null, where `safe` itself only ever writes strings. When any secret in the export holds a value like that, `safe export` writes the version 3 format instead. It keeps versions the way `-a` does, and it carries each such value as the JSON it was, so that `safe import` writes it back with the same type. A small version 3 file looks like this:
+Vault keeps whatever JSON a secret was written with, so a secret written by the `vault` CLI or by Terraform can hold an object, a list, a number, a boolean, or null, where `safe` itself only ever writes strings. By default `safe export` flattens such a value to the JSON text `safe get` shows, so the file stays in the original format or, with `-a`, the version 2 format, and every value in it is a string. `safe export --typed` writes the version 3 format instead, always, even when every value is a string. It keeps versions the way `-a` does, and it carries each value as the JSON it was, so that `safe import` writes it back with the same type. `-a` and `-s` work with `--typed` as they do otherwise. `safe import` reads all three formats. A small version 3 file looks like this:
 
 ```
 [{"export_version":3,
@@ -857,7 +857,7 @@ Vault keeps whatever JSON a secret was written with, so a secret written by the 
   "requires_versioning":{}}]
 ```
 
-A version of `safe` that predates the version 3 format refuses such a file with `Unknown export file format - aborting`, rather than importing those values as strings. An export holding only strings is written exactly as it always was, in the original format or, when `-a` exports more than one version of a secret, the version 2 format.
+Version 3 is written only with `--typed`, and a `safe` older than v1.26.0 cannot import it. It refuses the file with `Unknown export file format - aborting`, rather than importing those values as strings.
 
 ### import <export.file
 

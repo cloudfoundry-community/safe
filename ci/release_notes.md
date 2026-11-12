@@ -1,5 +1,3 @@
-# Bug Fixes
+# Dependencies
 
-* **`safe export` again writes the same file it wrote before v1.26.0, and the typed format now needs `--typed`.** In v1.26.0, export switched to the version 3 format on its own as soon as any exported value was not a string. Tools that read the version 1 file broke the moment something typed appeared under a path they export, even when they only wanted the string keys. Genesis hit this through its BOSH network-claim lock, which stores the lock holder's pid as a JSON number under the director's exodus path, so a deploy that exported that path failed whenever another deploy held the lock. `safe export` now writes the version 1 file again, or the version 2 file when `-a` brings in a secret's history, and it writes every value that is not a string as its JSON text, the way v1.25.1 and `safe get` show it. The output matches v1.25.1 byte for byte.
-
-* **`safe export --typed` writes the version 3 file.** It always writes version 3, even when every value is a string, so a script that asks for it gets one predictable shape. It's the format to use for a backup that has to keep objects, lists, numbers, booleans, and null intact through `safe import`. Import still reads version 1, 2, and 3 files, and a safe older than v1.26.0 still refuses a version 3 file.
+* `safe` now builds with Go 1.27.4, and we updated `golang.org/x/crypto`, `golang.org/x/net`, `golang.org/x/term`, and `github.com/gofrs/flock` to their current releases. This release doesn't change how any command behaves.

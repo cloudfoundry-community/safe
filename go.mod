@@ -7,26 +7,26 @@ require (
 	github.com/cloudfoundry-community/goutils v0.0.0-20230124234059-1add95a6ecd7
 	github.com/cloudfoundry-community/vaultkv v0.7.2
 	github.com/goccy/go-yaml v1.19.2
-	github.com/gofrs/flock v0.13.1
+	github.com/gofrs/flock v0.13.2
 	github.com/google/uuid v1.6.0
 	github.com/jhunt/go-ansi v0.0.0-20181127194324-5fd839f108b6
 	github.com/jhunt/go-cli v0.0.0-20210225050846-3732873ce073
 	github.com/jhunt/go-envirotron v0.0.0-20191007155228-c8f2a184ad0f
 	github.com/mattn/go-isatty v0.0.24
 	github.com/tredoe/osutil v1.5.0
-	golang.org/x/crypto v0.58.0
-	golang.org/x/net v0.61.0
-	golang.org/x/term v0.47.0
+	golang.org/x/crypto v0.59.0
+	golang.org/x/net v0.62.0
+	golang.org/x/term v0.48.0
 )
 
 require (
-	github.com/hashicorp/cap v0.14.0 // indirect
+	github.com/hashicorp/cap v0.15.0 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
 	github.com/hashicorp/go-secure-stdlib/base62 v0.1.2 // indirect
 	github.com/hashicorp/go-uuid v1.0.4 // indirect
 	github.com/jhunt/go-snapshot v0.0.0-20171017043618-9ad8f5ee37a2 // indirect
-	golang.org/x/sys v0.49.0 // indirect
-	golang.org/x/text v0.43.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )

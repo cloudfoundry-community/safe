@@ -687,3 +687,40 @@ func readFile(t *testing.T, path string) string {
 	}
 	return string(b)
 }
+
+func TestConfigAddTargetLeavesCurrentAlone(t *testing.T) {
+	t.Run("an existing current stays put", func(t *testing.T) {
+		c := Config{Current: "alpha", Vaults: map[string]*Vault{"alpha": {URL: "https://alpha"}}}
+		if err := c.AddTarget("beta", Vault{URL: "https://beta"}); err != nil {
+			t.Fatalf("AddTarget: %v", err)
+		}
+		if c.Current != "alpha" {
+			t.Errorf("current = %q, want alpha", c.Current)
+		}
+		if c.Vaults["beta"] == nil || c.Vaults["beta"].URL != "https://beta" {
+			t.Errorf("beta was not registered: %+v", c.Vaults["beta"])
+		}
+	})
+
+	t.Run("an empty current stays empty and a nil map is initialized", func(t *testing.T) {
+		var c Config
+		if err := c.AddTarget("beta", Vault{URL: "https://beta"}); err != nil {
+			t.Fatalf("AddTarget: %v", err)
+		}
+		if c.Current != "" {
+			t.Errorf("current = %q, want empty", c.Current)
+		}
+	})
+
+	t.Run("the token is kept when the URL matches and dropped when it does not", func(t *testing.T) {
+		c := Config{Vaults: map[string]*Vault{"beta": {URL: "https://beta", Token: "tok"}}}
+		_ = c.AddTarget("beta", Vault{URL: "https://beta"})
+		if got := c.Vaults["beta"].Token; got != "tok" {
+			t.Errorf("token = %q, want it kept", got)
+		}
+		_ = c.AddTarget("beta", Vault{URL: "https://elsewhere"})
+		if got := c.Vaults["beta"].Token; got != "" {
+			t.Errorf("token = %q, want it dropped", got)
+		}
+	})
+}

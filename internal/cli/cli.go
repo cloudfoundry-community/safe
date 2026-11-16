@@ -318,6 +318,7 @@ type Options struct {
 		Strongbox   bool     `cli:"-s, --strongbox, --no-strongbox"`
 		CACerts     []string `cli:"--ca-cert"`
 		Namespace   string   `cli:"-n, --namespace"`
+		KeepCurrent bool     `cli:"--keep-current"`
 
 		Delete struct{} `cli:"delete, rm"`
 	} `cli:"target"`
@@ -514,8 +515,12 @@ for this target.
 PEM-encoded certificate. The given certificate will be trusted as the signing
 certificate to the certificate served by the Vault server. This flag can be
 provided multiple times to provide multiple CA certificates.
+
+--keep-current adds or updates the target without making it the current one,
+and leaves the current target exactly as it was. It applies only to
+safe target <name> <url>.
 `,
-		Usage: "safe [-k] [--[no]-strongbox] [-n] [--ca-cert] target [URL] [ALIAS] | safe target -i",
+		Usage: "safe [-k] [--[no]-strongbox] [-n] [--ca-cert] [--keep-current] target [URL] [ALIAS] | safe target -i",
 		Type:  AdministrativeCommand,
 	}, c.cmdTarget)
 

@@ -388,11 +388,21 @@ func (c *Config) SetCurrent(name string, reskip bool) error {
 }
 
 func (c *Config) SetTarget(alias string, config Vault) error {
+	if err := c.AddTarget(alias, config); err != nil {
+		return err
+	}
+	c.Current = alias
+	return nil
+}
+
+// AddTarget registers or updates a target exactly as SetTarget does, keeping
+// the stored token when the URL is unchanged, but leaves the current target
+// as it was, including when nothing is current.
+func (c *Config) AddTarget(alias string, config Vault) error {
 	if c.Vaults == nil {
 		c.Vaults = make(map[string]*Vault)
 	}
 
-	c.Current = alias
 	if existingAlias, found := c.Vaults[alias]; found {
 		if config.URL == existingAlias.URL {
 			config.Token = existingAlias.Token

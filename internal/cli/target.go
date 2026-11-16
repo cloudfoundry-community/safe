@@ -140,6 +140,10 @@ func (c *CLI) cmdTarget(command string, args ...string) error {
 	opt := c.opt
 	r := c.r
 
+	if opt.Target.KeepCurrent && (opt.Target.Interactive || len(args) != 2) {
+		return fmt.Errorf("--keep-current only applies to `safe target <name> <url>'")
+	}
+
 	var cfg rc.Config
 	if !opt.Target.Interactive && len(args) == 0 {
 		var err error
@@ -313,14 +317,24 @@ func (c *CLI) cmdTarget(command string, args ...string) error {
 		// read state inside Update for what is persisted. SetTarget's keep-
 		// the-token-when-the-URL-matches check runs against the fresh state,
 		// where the answer is current.
-		err = cfg.SetTarget(alias, newTarget)
+		set := (*rc.Config).SetTarget
+		if opt.Target.KeepCurrent {
+			set = (*rc.Config).AddTarget
+		}
+		err = set(&cfg, alias, newTarget)
 		if err != nil {
 			return err
 		}
 		if err := rc.Update(func(c *rc.Config) error {
-			return c.SetTarget(alias, newTarget)
+			return set(c, alias, newTarget)
 		}); err != nil {
 			return err
+		}
+		if opt.Target.KeepCurrent {
+			if !opt.Quiet {
+				_, _ = fmt.Fprintf(os.Stderr, "Added target @C{%s} at @C{%s}\n", alias, url)
+			}
+			return nil
 		}
 		if !opt.Quiet {
 			printTarget()

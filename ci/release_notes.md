@@ -1,3 +1,7 @@
-# Dependencies
+# New Features
 
-* `safe` now builds with Go 1.27.4, and we updated `golang.org/x/crypto`, `golang.org/x/net`, `golang.org/x/term`, and `github.com/gofrs/flock` to their current releases. This release doesn't change how any command behaves.
+* **`safe target <name> <url> --keep-current` adds or updates a target without selecting it.** Until now, adding a target always made it the current one, so a tool that only wanted to register a Vault moved the operator's default target as a side effect. With `--keep-current`, the current target in `~/.saferc` stays exactly as it was, including when nothing is current, and the stored token is still kept when the URL hasn't changed. The confirmation reads "Added target" instead of the usual current-target report. safe refuses the flag with `safe target <name>`, with `safe target -i`, and with no arguments, because none of those forms add a target.
+
+* **`safe local --keep-current` registers its temporary Vault without selecting it.** The local Vault still goes into `~/.saferc` under its name, with its root token, so `safe -T <name> ...` reaches it right away. Your current target never moves, which also means a `safe local` run that gets killed can no longer leave the wrong target selected. On shutdown, safe removes only its own entry, as it does today. If someone selected the local target by hand during the run, safe still puts the previous target back, so `current` never points at a deleted entry. Pass `--as <name>` if a script needs to know the name in advance.
+
+Both options are listed in `safe help target` and `safe help local`, so a script can check for them before relying on them.

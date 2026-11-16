@@ -611,10 +611,14 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 		if _, found := c.Vaults[name]; found {
 			return fmt.Errorf("You already have '%s' as a Vault target", name)
 		}
-		return c.SetTarget(name, rc.Vault{
+		entry := rc.Vault{
 			URL:        localVaultURL(address),
 			SkipVerify: false,
-		})
+		}
+		if opt.Local.KeepCurrent {
+			return c.AddTarget(name, entry)
+		}
+		return c.SetTarget(name, entry)
 	}); err != nil {
 		// Nothing irreversible has happened yet: kill the server rather
 		// than leave one running that no config file points at.
@@ -712,7 +716,11 @@ func (c *CLI) cmdLocal(command string, args ...string) error {
 	_ = v.Write("secret/handshake", s)
 
 	if !opt.Quiet {
-		_, _ = fmt.Fprintf(os.Stderr, "Now targeting (temporary) @Y{%s} at @C{%s}\n", name, localVaultURL(address))
+		if opt.Local.KeepCurrent {
+			_, _ = fmt.Fprintf(os.Stderr, "Registered the temporary target @Y{%s} at @C{%s}; it is not selected, and your current target is unchanged\n", name, localVaultURL(address))
+		} else {
+			_, _ = fmt.Fprintf(os.Stderr, "Now targeting (temporary) @Y{%s} at @C{%s}\n", name, localVaultURL(address))
+		}
 		if opt.Local.Memory {
 			_, _ = fmt.Fprintf(os.Stderr, "@R{This %s server is MEMORY-BACKED!}\n", engine.Title())
 			_, _ = fmt.Fprintf(os.Stderr, "If you want to @Y{retain your secrets} be sure to @C{safe export}.\n")

@@ -261,6 +261,7 @@ type Options struct {
 		Config        []string `cli:"-c, --config"`
 		Listener      []string `cli:"-l, --listener"`
 		Engine        string   `cli:"-e, --engine"`
+		KeepCurrent   bool     `cli:"--keep-current"`
 	} `cli:"local"`
 
 	Init struct {
@@ -558,7 +559,7 @@ The following options are recognized:
 
 	r.Dispatch("local", &Help{
 		Summary: "Run a local vault",
-		Usage:   "safe local (--memory|--file path/to/dir|--raft path/to/dir) [--as name] [--port port] [--cluster-port port] [--root-token-file path] [--engine vault|bao] [--config key=value ...] [--listener key=value ...]",
+		Usage:   "safe local (--memory|--file path/to/dir|--raft path/to/dir) [--as name] [--port port] [--cluster-port port] [--root-token-file path] [--keep-current] [--engine vault|bao] [--config key=value ...] [--listener key=value ...]",
 		Description: `
 Spins up a new Vault instance.
 
@@ -569,6 +570,10 @@ flag.
 The new Vault will be initialized with a single seal key, targeted with
 a catchy name, authenticated by the new root token, and populated with a
 secret/handshake!
+
+With --keep-current the new Vault is registered under its name in ~/.saferc,
+with its root token, but is not selected, so your current target never changes
+and stays as it was when the local Vault shuts down.
 
 If you just need a transient Vault for testing or experimentation, and
 don't particularly care about the contents of the Vault, specify the
